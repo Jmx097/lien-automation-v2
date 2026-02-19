@@ -34,6 +34,9 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   });
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
+  page.setDefaultNavigationTimeout(60000);
+  page.setDefaultTimeout(60000);
+
 
   const outputDir = config.output_dir ?? "./downloads";
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
@@ -50,7 +53,8 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
 
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
-        waitUntil: "networkidle"
+        waitUntil: "domcontentloaded"
+	timeout: 60000
       })
     );
 
@@ -79,7 +83,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     // Submit
     log({ stage: "submit_search" });
     await page.getByRole("button", { name: "Search" }).click();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
     await humanDelay();
 
     // ── Check result count ─────────────────────────────────────────────────
@@ -104,7 +108,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     // ── PHASE 2: Pagination + row loop ─────────────────────────────────────
     if (startPage > 1) {
       await page.getByRole("button", { name: String(startPage) }).click();
-      await page.waitForLoadState("networkidle");
+      await page.waitForLoadState("domcontentloaded");
     }
 
     let currentPage = startPage;
@@ -149,7 +153,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
 
       if (nextVisible && totalCollected < maxRecords) {
         await nextBtn.click();
-        await page.waitForLoadState("networkidle");
+        await page.waitForLoadState("domcontentloaded");
         await humanDelay();
         currentPage++;
         startRow = 0;
