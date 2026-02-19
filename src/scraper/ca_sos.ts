@@ -1,4 +1,5 @@
-import { chromium, Page, Locator } from "playwright";
+import { chromium as playwrightChromium, Page, Locator } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import path from "path";
 import fs from "fs";
 import { limiter } from "../utils/rateLimit";
@@ -24,12 +25,71 @@ export class TooManyResultsError extends Error {
   }
 }
 
+// Screenshot helper
+async function screenshot(page: Page, label: string): Promise<void> {
+  try {
+    const base = process.env.NODE_ENV === "production" ? "/app" : ".";
+    const filepath = path.join(base, `debug-${label}-${Date.now()}.png`);
+    await page.screenshot({ path: filepath, fullPage: true });
+    log({ stage: "screenshot_saved", path: filepath, label });
+  } catch (_) {}
+}
+
+// Safe text helper
+async function safeText(locator: Locator): Promise<string> {
+  try {
+    return (await locator.textContent({ timeout: 3000 }))?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// Multi-strategy field extractor
+async function getField(page: Page, label: string): Promise<string> {
+  const strategies = [
+    async () => {
+      const dt = page.locator(`dt:has-text("${label}")`).first();
+      if (await dt.isVisible({ timeout: 2000 }).catch(() => false)) {
+        return (await dt.locator("+ dd").textContent({ timeout: 2000 }))?.trim() ?? "";
+      }
+      return "";
+    },
+    async () => {
+      const el = page.locator(`*:has-text("${label}")`).last();
+      const parent = el.locator("..");
+      const children = parent.locator("*");
+      const count = await children.count().catch(() => 0);
+      for (let i = 0; i < count - 1; i++) {
+        const text = await safeText(children.nth(i));
+        if (text.includes(label)) {
+          return safeText(children.nth(i + 1));
+        }
+      }
+      return "";
+    }
+  ];
+  for (const strategy of strategies) {
+    try {
+      const result = await strategy();
+      if (result) return result;
+    } catch {}
+  }
+  return "";
+}
+
 export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
-  const browser = await chromium.launch({
+  playwrightChromium.use(StealthPlugin());
+
+  const browser = await playwrightChromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
   });
-  const context = await browser.newContext({ acceptDownloads: true });
+
+  const context = await browser.newContext({ 
+    acceptDownloads: true,
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+  });
+  
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(90000);
   page.setDefaultTimeout(90000);
@@ -40,12 +100,10 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   const records: LienRecord[] = [];
   let totalCollected = 0;
   const maxRecords = config.max_records ?? 1000;
-  let { page: startPage, row_index: startRow } =
-    config.resume_cursor ?? { page: 1, row_index: 0 };
+  let { page: startPage, row_index: startRow } = config.resume_cursor ?? { page: 1, row_index: 0 };
 
   try {
-    log({ stage: "navigate" });
-
+    log({ stage: "navigate", url: "https://bizfileonline.sos.ca.gov/search/ucc" });
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
         waitUntil: "networkidle",
@@ -53,7 +111,6 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
       })
     );
 
-    // Use exact aria-label as seen in the live DOM
     const searchInput = page.getByLabel("Search by name or file number");
     await searchInput.waitFor({ state: "visible", timeout: 90000 });
     await humanDelay();
@@ -62,26 +119,21 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await searchInput.fill("Internal Revenue Service");
     await humanDelay();
 
-    // Open Advanced Search panel
     const advancedBtn = page.getByRole("button", { name: /Advanced/i });
     await advancedBtn.waitFor({ state: "visible" });
     await advancedBtn.click();
 
-    // Wait for File Type select to appear
     const fileTypeSelect = page.getByLabel("File Type");
     await fileTypeSelect.waitFor({ state: "visible" });
-    await humanDelay();
-
     await fileTypeSelect.selectOption({ label: "Federal Tax Lien" });
     await humanDelay();
 
-    // Fill date range using exact aria-labels from live DOM
-    const dateStart = page.getByLabel("File Date: Start");
-    const dateEnd = page.getByLabel("File Date: End");
-    await dateStart.fill(config.date_start);
+    const dateStartInput = page.getByLabel("File Date: Start");
+    const dateEndInput = page.getByLabel("File Date: End");
+    await dateStartInput.fill(config.date_start);
     await humanDelay();
-    await dateEnd.fill(config.date_end);
-    await dateEnd.press("Tab");
+    await dateEndInput.fill(config.date_end);
+    await dateEndInput.press("Tab");
     await humanDelay();
 
     log({ stage: "submit_search" });
@@ -89,23 +141,17 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await page.waitForLoadState("networkidle");
     await humanDelay();
 
-    // Wait for results count text
     const resultLocator = page.locator("text=/Results:\\s*\\d+/");
     await resultLocator.waitFor({ state: "visible", timeout: 30000 });
     const resultText = (await resultLocator.textContent()) ?? "";
     const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0");
-
     log({ stage: "results_found", total: totalCount });
 
     if (totalCount > 1000) {
-      throw new TooManyResultsError(
-        `Search returned ${totalCount} results. Halve the date range and retry.`
-      );
+      throw new TooManyResultsError(`Search returned ${totalCount} results. Splitting range.`);
     }
-    if (totalCount === 0) {
-      log({ stage: "no_results" });
-      return [];
-    }
+
+    if (totalCount === 0) return [];
 
     if (startPage > 1) {
       await page.getByRole("button", { name: String(startPage) }).click();
@@ -120,161 +166,118 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
       const rowCount = await rows.count();
       const rowStart = currentPage === startPage ? startRow : 0;
 
-      log({ stage: "page_start", currentPage, rowCount });
-
       for (let i = rowStart; i < rowCount; i++) {
-        if (totalCollected >= maxRecords) { hasNextPage = false; break; }
-
-        const record = await processRow(page, rows.nth(i), i, currentPage, outputDir);
-        if (record) {
-          records.push(record);
-          totalCollected++;
-          log({ stage: "record_collected", total: totalCollected, file_number: record.file_number, error: record.error });
+        if (totalCollected >= maxRecords) {
+          hasNextPage = false;
+          break;
+        }
+        try {
+          const record = await processRow(page, rows.nth(i), i, currentPage, outputDir);
+          if (record) {
+            records.push(record);
+            totalCollected++;
+            log({ stage: "record_collected", total: totalCollected, file_number: record.file_number });
+          }
+        } catch (err) {
+          log({ stage: "row_error", error: String(err) });
         }
       }
 
       const nextBtn = page.getByRole("button", { name: "Next Page" });
-      const nextVisible = await nextBtn.isVisible().catch(() => false);
-      if (nextVisible && totalCollected < maxRecords) {
+      if (await nextBtn.isVisible() && totalCollected < maxRecords) {
         await nextBtn.click();
         await page.waitForLoadState("networkidle");
         await humanDelay();
         currentPage++;
-        startRow = 0;
       } else {
         hasNextPage = false;
       }
     }
 
-    log({ stage: "scrape_done", total_collected: totalCollected });
     return records;
-
   } catch (err) {
-    log({ stage: "error", error: String(err) });
-    try {
-      await page.screenshot({ path: "/app/error-screenshot.png", fullPage: true });
-      log({ stage: "screenshot_saved", path: "/app/error-screenshot.png" });
-    } catch (_) {}
+    await screenshot(page, "fatal-error");
     throw err;
   } finally {
     await browser.close();
   }
 }
 
-async function processRow(
-  page: Page,
-  row: Locator,
-  rowIndex: number,
-  pageNum: number,
-  outputDir: string
-): Promise<LienRecord | null> {
-
+async function processRow(page: Page, row: Locator, rowIndex: number, pageNum: number, outputDir: string): Promise<LienRecord | null> {
   const cells = row.locator("td");
-  const ucc_type    = (await cells.nth(0).textContent())?.trim() ?? "";
-  const file_number = (await cells.nth(2).textContent())?.trim() ?? "";
-  const status      = (await cells.nth(4).textContent())?.trim() ?? "";
-  const filing_date = (await cells.nth(5).textContent())?.trim() ?? "";
-  const lapse_date  = (await cells.nth(6).textContent())?.trim() ?? "";
+  const ucc_type = await safeText(cells.nth(0));
+  const file_number = await safeText(cells.nth(2));
+  const status = await safeText(cells.nth(4));
+  const filing_date = await safeText(cells.nth(5));
+  const lapse_date = await safeText(cells.nth(6));
 
   if (!file_number) return null;
 
   const chevron = row.locator("button").first();
   let panelOpened = false;
-
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await chevron.click();
-      await page
-        .locator('[class*="detail"], [class*="panel"], [class*="side"]')
-        .filter({ hasText: file_number })
-        .waitFor({ state: "visible", timeout: 8000 });
+      await page.locator('[class*="detail"]').filter({ hasText: file_number }).waitFor({ state: "visible", timeout: 8000 });
       panelOpened = true;
       break;
-    } catch {
-      if (attempt === 0) await humanDelay();
-    }
+    } catch { await humanDelay(); }
   }
 
-  if (!panelOpened) {
-    log({ stage: "panel_failed", file_number, pageNum, rowIndex });
-    return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, error: "panel_failed" });
-  }
+  if (!panelOpened) return buildRecord({ file_number, error: "panel_failed" });
 
-  const getField = async (label: string) => {
-    try {
-      return (await page.locator(`text=${label}`).locator("..").locator("+ *").textContent()) ?? "";
-    } catch { return ""; }
-  };
-
-  const debtor_name           = (await getField("Debtor Name")).trim();
-  const debtor_address        = (await getField("Debtor Address")).trim();
-  const secured_party_name    = (await getField("Secured Party Name")).trim();
-  const secured_party_address = (await getField("Secured Party Address")).trim();
+  const debtor_name = await getField(page, "Debtor Name");
+  const debtor_address = await getField(page, "Debtor Address");
+  const secured_party_name = await getField(page, "Secured Party Name");
+  const secured_party_address = await getField(page, "Secured Party Address");
 
   const historyBtn = page.getByRole("button", { name: /View History/i });
   let historyOpened = false;
-
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await historyBtn.click();
       await page.getByRole("dialog", { name: "History" }).waitFor({ state: "visible", timeout: 8000 });
       historyOpened = true;
       break;
-    } catch {
-      if (attempt === 0) await humanDelay();
-    }
+    } catch { await humanDelay(); }
   }
 
-  if (!historyOpened) {
-    log({ stage: "history_failed", file_number });
-    await closePanel(page);
-    return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, debtor_name, debtor_address, secured_party_name, secured_party_address, error: "history_failed" });
-  }
-
-  const modal = page.getByRole("dialog", { name: "History" });
-  const document_type = ((await modal.locator("text=Document Type").locator("..").locator("+ *").textContent().catch(() => "")) ?? "").trim();
-
+  let document_type = "";
   let pdf_filename = "";
-  const downloadLink = modal.getByRole("link", { name: /Download/i });
-  const linkExists = await downloadLink.isVisible().catch(() => false);
 
-  if (linkExists) {
-    try {
-      const safeDate = filing_date.replace(/\//g, "");
-      pdf_filename = `${file_number}_${safeDate}.pdf`;
-      const [download] = await Promise.all([
-        page.waitForEvent("download", { timeout: 30000 }),
-        downloadLink.click()
-      ]);
-      await download.saveAs(path.join(outputDir, pdf_filename));
-      log({ stage: "pdf_downloaded", file_number, pdf_filename });
-    } catch (err) {
-      log({ stage: "pdf_download_failed", file_number, error: String(err) });
-      pdf_filename = "";
+  if (historyOpened) {
+    const modal = page.getByRole("dialog", { name: "History" });
+    document_type = await getField(page, "Document Type");
+    const downloadLink = modal.getByRole("link", { name: /Download/i });
+    if (await downloadLink.isVisible().catch(() => false)) {
+      try {
+        const safeDate = filing_date.replace(/\//g, "");
+        pdf_filename = `${file_number}_${safeDate}.pdf`;
+        const [download] = await Promise.all([
+          page.waitForEvent("download", { timeout: 30000 }),
+          downloadLink.click()
+        ]);
+        await download.saveAs(path.join(outputDir, pdf_filename));
+      } catch (err) {
+        log({ stage: "pdf_fail", error: String(err) });
+      }
     }
-  } else {
-    log({ stage: "no_download_available", file_number });
-  }
-
-  try {
-    await modal.getByRole("button", { name: /close|×/i }).click();
-    await modal.waitFor({ state: "hidden", timeout: 5000 });
-  } catch {
     await page.keyboard.press("Escape");
   }
 
   await closePanel(page);
-
-  return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, debtor_name, debtor_address, secured_party_name, secured_party_address, document_type, pdf_filename, processed: true });
+  return buildRecord({
+    ucc_type, file_number, status, filing_date, lapse_date,
+    debtor_name, debtor_address, secured_party_name, secured_party_address,
+    document_type, pdf_filename, processed: true
+  });
 }
 
 async function closePanel(page: Page) {
   try {
     await page.locator('[aria-label="Close"], button:has-text("×")').last().click();
     await page.waitForTimeout(300);
-  } catch {
-    await page.keyboard.press("Escape");
-  }
+  } catch { await page.keyboard.press("Escape"); }
 }
 
 function buildRecord(fields: Partial<LienRecord> & { file_number: string }): LienRecord {
