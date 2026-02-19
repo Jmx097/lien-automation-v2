@@ -53,7 +53,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
 
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
-        waitUntil: "domcontentloaded"
+        waitUntil: "domcontentloaded",
 	timeout: 60000
       })
     );
