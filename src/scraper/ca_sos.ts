@@ -3,13 +3,12 @@ import path from "path";
 import fs from "fs";
 import { limiter } from "../utils/rateLimit";
 import { humanDelay } from "../utils/delay";
-import { withRetry } from "../utils/retry";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 
 export interface ScrapeConfig {
-  date_start: string;       // "MM/DD/YYYY"
-  date_end: string;         // "MM/DD/YYYY"
+  date_start: string;
+  date_end: string;
   max_records?: number;
   output_dir?: string;
   resume_cursor?: {
@@ -25,8 +24,6 @@ export class TooManyResultsError extends Error {
   }
 }
 
-// ─── MAIN EXPORT ────────────────────────────────────────────────────────────
-
 export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   const browser = await chromium.launch({
     headless: true,
@@ -36,7 +33,6 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(60000);
   page.setDefaultTimeout(60000);
-
 
   const outputDir = config.output_dir ?? "./downloads";
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
@@ -48,51 +44,46 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     config.resume_cursor ?? { page: 1, row_index: 0 };
 
   try {
-    // ── PHASE 1: Navigate + configure search ───────────────────────────────
     log({ stage: "navigate" });
 
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
         waitUntil: "domcontentloaded",
-	timeout: 60000
+        timeout: 60000
       })
     );
 
-    await page.locator("input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input").first().waitFor({
-  state: "visible",
-  timeout: 60000
-});
+    const searchInput = page.locator(
+      "input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input"
+    ).first();
+
+    await searchInput.waitFor({ state: "visible", timeout: 60000 });
     await humanDelay();
 
     log({ stage: "fill_search" });
-    await page.locator("input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input").first().fill("Internal Revenue Service");
+    await searchInput.fill("Internal Revenue Service");
     await humanDelay();
 
-    // Open Advanced Search panel
     await page.getByRole("button", { name: /Advanced/i }).click();
     await page.getByLabel("File Type").waitFor({ state: "visible" });
     await humanDelay();
 
-    // Set File Type = Federal Tax Lien
     await page.getByLabel("File Type").selectOption({ label: "Federal Tax Lien" });
     await humanDelay();
 
-    // Set date range
     await page.getByLabel("File Date: Start").fill(config.date_start);
     await page.getByLabel("File Date: End").fill(config.date_end);
     await page.getByLabel("File Date: End").press("Tab");
     await humanDelay();
 
-    // Submit
     log({ stage: "submit_search" });
     await page.getByRole("button", { name: "Search" }).click();
     await page.waitForLoadState("domcontentloaded");
     await humanDelay();
 
-    // ── Check result count ─────────────────────────────────────────────────
     const resultLocator = page.locator("text=/Results:\\s*\\d+/");
     await resultLocator.waitFor({ state: "visible", timeout: 15000 });
-    const resultText = await resultLocator.textContent() ?? "";
+    const resultText = (await resultLocator.textContent()) ?? "";
     const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0");
 
     log({ stage: "results_found", total: totalCount });
@@ -102,13 +93,11 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
         `Search returned ${totalCount} results. Halve the date range and retry.`
       );
     }
-
     if (totalCount === 0) {
       log({ stage: "no_results" });
       return [];
     }
 
-    // ── PHASE 2: Pagination + row loop ─────────────────────────────────────
     if (startPage > 1) {
       await page.getByRole("button", { name: String(startPage) }).click();
       await page.waitForLoadState("domcontentloaded");
@@ -125,35 +114,18 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
       log({ stage: "page_start", currentPage, rowCount });
 
       for (let i = rowStart; i < rowCount; i++) {
-        if (totalCollected >= maxRecords) {
-          hasNextPage = false;
-          break;
-        }
+        if (totalCollected >= maxRecords) { hasNextPage = false; break; }
 
-        const record = await processRow(
-          page,
-          rows.nth(i),
-          i,
-          currentPage,
-          outputDir
-        );
-
+        const record = await processRow(page, rows.nth(i), i, currentPage, outputDir);
         if (record) {
           records.push(record);
           totalCollected++;
-          log({
-            stage: "record_collected",
-            total: totalCollected,
-            file_number: record.file_number,
-            error: record.error
-          });
+          log({ stage: "record_collected", total: totalCollected, file_number: record.file_number, error: record.error });
         }
       }
 
-      // Paginate
       const nextBtn = page.getByRole("button", { name: "Next Page" });
       const nextVisible = await nextBtn.isVisible().catch(() => false);
-
       if (nextVisible && totalCollected < maxRecords) {
         await nextBtn.click();
         await page.waitForLoadState("domcontentloaded");
@@ -169,18 +141,16 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     return records;
 
   } catch (err) {
-  log({ stage: "error", error: String(err) });
-  try {
-    await page.screenshot({ path: "/app/error-screenshot.png", fullPage: true });
-    log({ stage: "screenshot_saved", path: "/app/error-screenshot.png" });
-  } catch {}
-  throw err;
+    log({ stage: "error", error: String(err) });
+    try {
+      await page.screenshot({ path: "/app/error-screenshot.png", fullPage: true });
+      log({ stage: "screenshot_saved", path: "/app/error-screenshot.png" });
+    } catch (_) {}
+    throw err;
+  } finally {
+    await browser.close();
+  }
 }
-
-
-
-
-// ─── ROW PROCESSOR ──────────────────────────────────────────────────────────
 
 async function processRow(
   page: Page,
@@ -190,7 +160,6 @@ async function processRow(
   outputDir: string
 ): Promise<LienRecord | null> {
 
-  // 1. Read table cells
   const cells = row.locator("td");
   const ucc_type    = (await cells.nth(0).textContent())?.trim() ?? "";
   const file_number = (await cells.nth(2).textContent())?.trim() ?? "";
@@ -200,7 +169,6 @@ async function processRow(
 
   if (!file_number) return null;
 
-  // 2. Open detail panel
   const chevron = row.locator("button").first();
   let panelOpened = false;
 
@@ -220,40 +188,27 @@ async function processRow(
 
   if (!panelOpened) {
     log({ stage: "panel_failed", file_number, pageNum, rowIndex });
-    return buildRecord({
-      ucc_type, file_number, status, filing_date, lapse_date,
-      error: "panel_failed"
-    });
+    return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, error: "panel_failed" });
   }
 
-  // 3. Read detail panel fields
   const getField = async (label: string) => {
     try {
-      return await page
-        .locator(`text=${label}`)
-        .locator("..")
-        .locator("+ *")
-        .textContent() ?? "";
-    } catch {
-      return "";
-    }
+      return (await page.locator(`text=${label}`).locator("..").locator("+ *").textContent()) ?? "";
+    } catch { return ""; }
   };
 
-  const debtor_name          = (await getField("Debtor Name")).trim();
-  const debtor_address       = (await getField("Debtor Address")).trim();
-  const secured_party_name   = (await getField("Secured Party Name")).trim();
+  const debtor_name           = (await getField("Debtor Name")).trim();
+  const debtor_address        = (await getField("Debtor Address")).trim();
+  const secured_party_name    = (await getField("Secured Party Name")).trim();
   const secured_party_address = (await getField("Secured Party Address")).trim();
 
-  // 4. Open History modal
   const historyBtn = page.getByRole("button", { name: /View History/i });
   let historyOpened = false;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await historyBtn.click();
-      await page
-        .getByRole("dialog", { name: "History" })
-        .waitFor({ state: "visible", timeout: 8000 });
+      await page.getByRole("dialog", { name: "History" }).waitFor({ state: "visible", timeout: 8000 });
       historyOpened = true;
       break;
     } catch {
@@ -264,23 +219,12 @@ async function processRow(
   if (!historyOpened) {
     log({ stage: "history_failed", file_number });
     await closePanel(page);
-    return buildRecord({
-      ucc_type, file_number, status, filing_date, lapse_date,
-      debtor_name, debtor_address, secured_party_name, secured_party_address,
-      error: "history_failed"
-    });
+    return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, debtor_name, debtor_address, secured_party_name, secured_party_address, error: "history_failed" });
   }
 
-  // 5. Read history modal
   const modal = page.getByRole("dialog", { name: "History" });
-  const document_type = (await modal
-    .locator("text=Document Type")
-    .locator("..")
-    .locator("+ *")
-    .textContent()
-    .catch(() => ""))?.trim() ?? "";
+  const document_type = ((await modal.locator("text=Document Type").locator("..").locator("+ *").textContent().catch(() => "")) ?? "").trim();
 
-  // 6. Download PDF
   let pdf_filename = "";
   const downloadLink = modal.getByRole("link", { name: /Download/i });
   const linkExists = await downloadLink.isVisible().catch(() => false);
@@ -289,12 +233,10 @@ async function processRow(
     try {
       const safeDate = filing_date.replace(/\//g, "");
       pdf_filename = `${file_number}_${safeDate}.pdf`;
-
       const [download] = await Promise.all([
         page.waitForEvent("download", { timeout: 30000 }),
         downloadLink.click()
       ]);
-
       await download.saveAs(path.join(outputDir, pdf_filename));
       log({ stage: "pdf_downloaded", file_number, pdf_filename });
     } catch (err) {
@@ -305,7 +247,6 @@ async function processRow(
     log({ stage: "no_download_available", file_number });
   }
 
-  // 7. Close modal
   try {
     await modal.getByRole("button", { name: /close|×/i }).click();
     await modal.waitFor({ state: "hidden", timeout: 5000 });
@@ -313,26 +254,14 @@ async function processRow(
     await page.keyboard.press("Escape");
   }
 
-  // 8. Close detail panel
   await closePanel(page);
 
-  return buildRecord({
-    ucc_type, file_number, status, filing_date, lapse_date,
-    debtor_name, debtor_address,
-    secured_party_name, secured_party_address,
-    document_type, pdf_filename,
-    processed: true
-  });
+  return buildRecord({ ucc_type, file_number, status, filing_date, lapse_date, debtor_name, debtor_address, secured_party_name, secured_party_address, document_type, pdf_filename, processed: true });
 }
-
-// ─── HELPERS ────────────────────────────────────────────────────────────────
 
 async function closePanel(page: Page) {
   try {
-    await page
-      .locator('[aria-label="Close"], button:has-text("×")')
-      .last()
-      .click();
+    await page.locator('[aria-label="Close"], button:has-text("×")').last().click();
     await page.waitForTimeout(300);
   } catch {
     await page.keyboard.press("Escape");
