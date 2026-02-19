@@ -58,11 +58,14 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
       })
     );
 
-    await page.getByLabel("Search by name or file number").waitFor({ state: "visible" });
+    await page.locator("input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input").first().waitFor({
+  state: "visible",
+  timeout: 60000
+});
     await humanDelay();
 
     log({ stage: "fill_search" });
-    await page.getByLabel("Search by name or file number").fill("Internal Revenue Service");
+    await page.locator("input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input").first().fill("Internal Revenue Service");
     await humanDelay();
 
     // Open Advanced Search panel
@@ -166,12 +169,16 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     return records;
 
   } catch (err) {
-    log({ stage: "error", error: String(err) });
-    throw err;
-  } finally {
-    await browser.close();
-  }
+  log({ stage: "error", error: String(err) });
+  try {
+    await page.screenshot({ path: "/app/error-screenshot.png", fullPage: true });
+    log({ stage: "screenshot_saved", path: "/app/error-screenshot.png" });
+  } catch {}
+  throw err;
 }
+
+
+
 
 // ─── ROW PROCESSOR ──────────────────────────────────────────────────────────
 
