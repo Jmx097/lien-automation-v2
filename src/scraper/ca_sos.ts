@@ -31,8 +31,8 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   });
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
-  page.setDefaultNavigationTimeout(60000);
-  page.setDefaultTimeout(60000);
+  page.setDefaultNavigationTimeout(90000);
+  page.setDefaultTimeout(90000);
 
   const outputDir = config.output_dir ?? "./downloads";
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
@@ -48,41 +48,50 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
 
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
-        waitUntil: "domcontentloaded",
-        timeout: 60000
+        waitUntil: "networkidle",
+        timeout: 90000
       })
     );
 
-    const searchInput = page.locator(
-      "input[placeholder*='name or file'], input[aria-label*='name or file'], input[type='search'], .search-input input"
-    ).first();
-
-    await searchInput.waitFor({ state: "visible", timeout: 60000 });
+    // Use exact aria-label as seen in the live DOM
+    const searchInput = page.getByLabel("Search by name or file number");
+    await searchInput.waitFor({ state: "visible", timeout: 90000 });
     await humanDelay();
 
     log({ stage: "fill_search" });
     await searchInput.fill("Internal Revenue Service");
     await humanDelay();
 
-    await page.getByRole("button", { name: /Advanced/i }).click();
-    await page.getByLabel("File Type").waitFor({ state: "visible" });
+    // Open Advanced Search panel
+    const advancedBtn = page.getByRole("button", { name: /Advanced/i });
+    await advancedBtn.waitFor({ state: "visible" });
+    await advancedBtn.click();
+
+    // Wait for File Type select to appear
+    const fileTypeSelect = page.getByLabel("File Type");
+    await fileTypeSelect.waitFor({ state: "visible" });
     await humanDelay();
 
-    await page.getByLabel("File Type").selectOption({ label: "Federal Tax Lien" });
+    await fileTypeSelect.selectOption({ label: "Federal Tax Lien" });
     await humanDelay();
 
-    await page.getByLabel("File Date: Start").fill(config.date_start);
-    await page.getByLabel("File Date: End").fill(config.date_end);
-    await page.getByLabel("File Date: End").press("Tab");
+    // Fill date range using exact aria-labels from live DOM
+    const dateStart = page.getByLabel("File Date: Start");
+    const dateEnd = page.getByLabel("File Date: End");
+    await dateStart.fill(config.date_start);
+    await humanDelay();
+    await dateEnd.fill(config.date_end);
+    await dateEnd.press("Tab");
     await humanDelay();
 
     log({ stage: "submit_search" });
     await page.getByRole("button", { name: "Search" }).click();
-    await page.waitForLoadState("domcontentloaded");
+    await page.waitForLoadState("networkidle");
     await humanDelay();
 
+    // Wait for results count text
     const resultLocator = page.locator("text=/Results:\\s*\\d+/");
-    await resultLocator.waitFor({ state: "visible", timeout: 15000 });
+    await resultLocator.waitFor({ state: "visible", timeout: 30000 });
     const resultText = (await resultLocator.textContent()) ?? "";
     const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0");
 
@@ -100,7 +109,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
 
     if (startPage > 1) {
       await page.getByRole("button", { name: String(startPage) }).click();
-      await page.waitForLoadState("domcontentloaded");
+      await page.waitForLoadState("networkidle");
     }
 
     let currentPage = startPage;
@@ -128,7 +137,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
       const nextVisible = await nextBtn.isVisible().catch(() => false);
       if (nextVisible && totalCollected < maxRecords) {
         await nextBtn.click();
-        await page.waitForLoadState("domcontentloaded");
+        await page.waitForLoadState("networkidle");
         await humanDelay();
         currentPage++;
         startRow = 0;
