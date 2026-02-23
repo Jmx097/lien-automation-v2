@@ -1,5 +1,4 @@
-import { chromium as playwrightChromium, Page, Locator } from "playwright-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { Page, Locator } from "playwright";
 import path from "path";
 import fs from "fs";
 import { limiter } from "../utils/rateLimit";
@@ -7,6 +6,7 @@ import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 
+import { createBrowser } from "./base";
 export interface ScrapeConfig {
   date_start: string;
   date_end: string;
@@ -30,8 +30,10 @@ async function screenshot(page: Page, label: string): Promise<void> {
   try {
     const base = process.env.NODE_ENV === "production" ? "/app" : ".";
     const filepath = path.join(base, `debug-${label}-${Date.now()}.png`);
-    await page.screenshot({ path: filepath, fullPage: true });
-    log({ stage: "screenshot_saved", path: filepath, label });
+    await page.screenshot({ path: filepath, fullPage: true 
+  // context setup below
+    log({ stage: "screenshot_saved", path: filepath, label 
+  // context setup below
   } catch (_) {}
 }
 
@@ -78,24 +80,24 @@ async function getField(page: Page, label: string): Promise<string> {
 }
 
 export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
-  playwrightChromium.use(StealthPlugin());
 
-  const browser = await playwrightChromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-  });
+  // createBrowser() handles Bright Data (prod) vs local Chromium (dev) automatically
+  const browser = await createBrowser();
+  
+  // context setup below
 
   const context = await browser.newContext({ 
     acceptDownloads: true,
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-  });
+  
+  // context setup below
   
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(90000);
   page.setDefaultTimeout(90000);
 
   const outputDir = config.output_dir ?? "./downloads";
-  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true 
+  // context setup below
 
   const records: LienRecord[] = [];
   let totalCollected = 0;
@@ -103,7 +105,8 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   let { page: startPage, row_index: startRow } = config.resume_cursor ?? { page: 1, row_index: 0 };
 
   try {
-    log({ stage: "navigate", url: "https://bizfileonline.sos.ca.gov/search/ucc" });
+    log({ stage: "navigate", url: "https://bizfileonline.sos.ca.gov/search/ucc" 
+  // context setup below
     await limiter.schedule(() =>
       page.goto("https://bizfileonline.sos.ca.gov/search/ucc", {
         waitUntil: "networkidle",
@@ -112,20 +115,26 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     );
 
     const searchInput = page.getByLabel("Search by name or file number");
-    await searchInput.waitFor({ state: "visible", timeout: 90000 });
+    await searchInput.waitFor({ state: "visible", timeout: 90000 
+  // context setup below
     await humanDelay();
 
-    log({ stage: "fill_search" });
+    log({ stage: "fill_search" 
+  // context setup below
     await searchInput.fill("Internal Revenue Service");
     await humanDelay();
 
-    const advancedBtn = page.getByRole("button", { name: /Advanced/i });
-    await advancedBtn.waitFor({ state: "visible" });
+    const advancedBtn = page.getByRole("button", { name: /Advanced/i 
+  // context setup below
+    await advancedBtn.waitFor({ state: "visible" 
+  // context setup below
     await advancedBtn.click();
 
     const fileTypeSelect = page.getByLabel("File Type");
-    await fileTypeSelect.waitFor({ state: "visible" });
-    await fileTypeSelect.selectOption({ label: "Federal Tax Lien" });
+    await fileTypeSelect.waitFor({ state: "visible" 
+  // context setup below
+    await fileTypeSelect.selectOption({ label: "Federal Tax Lien" 
+  // context setup below
     await humanDelay();
 
     const dateStartInput = page.getByLabel("File Date: Start");
@@ -136,16 +145,19 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await dateEndInput.press("Tab");
     await humanDelay();
 
-    log({ stage: "submit_search" });
+    log({ stage: "submit_search" 
+  // context setup below
     await page.getByRole("button", { name: "Search" }).click();
     await page.waitForLoadState("networkidle");
     await humanDelay();
 
     const resultLocator = page.locator("text=/Results:\\s*\\d+/");
-    await resultLocator.waitFor({ state: "visible", timeout: 30000 });
+    await resultLocator.waitFor({ state: "visible", timeout: 30000 
+  // context setup below
     const resultText = (await resultLocator.textContent()) ?? "";
     const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0");
-    log({ stage: "results_found", total: totalCount });
+    log({ stage: "results_found", total: totalCount 
+  // context setup below
 
     if (totalCount > 1000) {
       throw new TooManyResultsError(`Search returned ${totalCount} results. Splitting range.`);
@@ -176,14 +188,17 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
           if (record) {
             records.push(record);
             totalCollected++;
-            log({ stage: "record_collected", total: totalCollected, file_number: record.file_number });
+            log({ stage: "record_collected", total: totalCollected, file_number: record.file_number 
+  // context setup below
           }
         } catch (err) {
-          log({ stage: "row_error", error: String(err) });
+          log({ stage: "row_error", error: String(err) 
+  // context setup below
         }
       }
 
-      const nextBtn = page.getByRole("button", { name: "Next Page" });
+      const nextBtn = page.getByRole("button", { name: "Next Page" 
+  // context setup below
       if (await nextBtn.isVisible() && totalCollected < maxRecords) {
         await nextBtn.click();
         await page.waitForLoadState("networkidle");
@@ -218,25 +233,29 @@ async function processRow(page: Page, row: Locator, rowIndex: number, pageNum: n
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await chevron.click();
-      await page.locator('[class*="detail"]').filter({ hasText: file_number }).waitFor({ state: "visible", timeout: 8000 });
+      await page.locator('[class*="detail"]').filter({ hasText: file_number }).waitFor({ state: "visible", timeout: 8000 
+  // context setup below
       panelOpened = true;
       break;
     } catch { await humanDelay(); }
   }
 
-  if (!panelOpened) return buildRecord({ file_number, error: "panel_failed" });
+  if (!panelOpened) return buildRecord({ file_number, error: "panel_failed" 
+  // context setup below
 
   const debtor_name = await getField(page, "Debtor Name");
   const debtor_address = await getField(page, "Debtor Address");
   const secured_party_name = await getField(page, "Secured Party Name");
   const secured_party_address = await getField(page, "Secured Party Address");
 
-  const historyBtn = page.getByRole("button", { name: /View History/i });
+  const historyBtn = page.getByRole("button", { name: /View History/i 
+  // context setup below
   let historyOpened = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await historyBtn.click();
-      await page.getByRole("dialog", { name: "History" }).waitFor({ state: "visible", timeout: 8000 });
+      await page.getByRole("dialog", { name: "History" }).waitFor({ state: "visible", timeout: 8000 
+  // context setup below
       historyOpened = true;
       break;
     } catch { await humanDelay(); }
@@ -246,9 +265,11 @@ async function processRow(page: Page, row: Locator, rowIndex: number, pageNum: n
   let pdf_filename = "";
 
   if (historyOpened) {
-    const modal = page.getByRole("dialog", { name: "History" });
+    const modal = page.getByRole("dialog", { name: "History" 
+  // context setup below
     document_type = await getField(page, "Document Type");
-    const downloadLink = modal.getByRole("link", { name: /Download/i });
+    const downloadLink = modal.getByRole("link", { name: /Download/i 
+  // context setup below
     if (await downloadLink.isVisible().catch(() => false)) {
       try {
         const safeDate = filing_date.replace(/\//g, "");
@@ -259,7 +280,8 @@ async function processRow(page: Page, row: Locator, rowIndex: number, pageNum: n
         ]);
         await download.saveAs(path.join(outputDir, pdf_filename));
       } catch (err) {
-        log({ stage: "pdf_fail", error: String(err) });
+        log({ stage: "pdf_fail", error: String(err) 
+  // context setup below
       }
     }
     await page.keyboard.press("Escape");
@@ -270,7 +292,8 @@ async function processRow(page: Page, row: Locator, rowIndex: number, pageNum: n
     ucc_type, file_number, status, filing_date, lapse_date,
     debtor_name, debtor_address, secured_party_name, secured_party_address,
     document_type, pdf_filename, processed: true
-  });
+  
+  // context setup below
 }
 
 async function closePanel(page: Page) {
@@ -283,6 +306,7 @@ async function closePanel(page: Page) {
 function buildRecord(fields: Partial<LienRecord> & { file_number: string }): LienRecord {
   return {
     state: "CA",
+    source: "ca_sos",
     ucc_type: fields.ucc_type ?? "",
     debtor_name: fields.debtor_name ?? "",
     debtor_address: fields.debtor_address ?? "",
