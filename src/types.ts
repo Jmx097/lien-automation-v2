@@ -1,5 +1,7 @@
 export interface LienRecord {
-  state: "CA";
+  state: string;        // e.g. "CA" | "NY" | "IL"
+  source: string;       // e.g. "ca_sos" | "nyc_acris" | "cook_county"
+  county?: string;      // county-level sites e.g. "Cook"
   ucc_type: string;
   debtor_name: string;
   debtor_address: string;
