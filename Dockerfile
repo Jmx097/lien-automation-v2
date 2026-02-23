@@ -1,5 +1,7 @@
 # Use the official Playwright image — has Chromium + all system deps pre-installed
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+FROM node:20-alpine
+# Using Alpine instead of Playwright image (~150MB vs ~1.5GB)
+# Browser runs remotely via Bright Data Scraping Browser in production
 
 WORKDIR /app
 
