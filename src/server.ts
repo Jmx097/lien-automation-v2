@@ -1,5 +1,5 @@
 import express from "express";
-import { scrapeCASOS } from "./scraper/ca_sos";
+import { scrapers } from "./scraper/index";
 import { pushToSheets } from "./sheets/push";
 import { log } from "./utils/logger";
 
@@ -14,7 +14,7 @@ app.post("/scrape", async (req, res) => {
 
     if (!site || site !== "ca_sos") {
       return res.status(400).json({
-        error: "MVP supports only site: ca_sos"
+        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
       });
     }
 
@@ -26,7 +26,7 @@ app.post("/scrape", async (req, res) => {
 
     log({ stage: "scrape_start", site, date_start, date_end });
 
-    const results = await scrapeCASOS({
+    const results = await scraper({
       date_start,
       date_end,
       max_records
@@ -57,6 +57,24 @@ app.post("/scrape", async (req, res) => {
       error: err.message
     });
   }
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "healthy", uptime: process.uptime() });
+});
+
+app.post("/scrape-all", async (req, res) => {
+  const { date_start, date_end, max_records } = req.body;
+  const results: any[] = [];
+  for (const [site, scraper] of Object.entries(scrapers)) {
+    try {
+      const records = await (scraper as Function)({ date_start, date_end, max_records });
+      results.push({ site, success: true, records: records.length });
+    } catch (err: any) {
+      results.push({ site, success: false, error: err.message });
+    }
+  }
+  return res.json({ results });
 });
 
 app.listen(8080, () => {
