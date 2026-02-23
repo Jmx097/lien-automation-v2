@@ -12,7 +12,9 @@ app.post("/scrape", async (req, res) => {
   try {
     const { site, date_start, date_end, max_records } = req.body;
 
-    if (!site || site !== "ca_sos") {
+    const scraper = scrapers[site];
+
+    if (!site || !scraper) {
       return res.status(400).json({
         error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
       });
