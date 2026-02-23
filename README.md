@@ -59,6 +59,7 @@ Required environment variables:
 
 - `SHEETS_KEY`: Google service account credentials (JSON string)
 - `SHEET_ID`: Target Google Sheets spreadsheet ID
+- `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
 
 ## Data Schema
 
@@ -95,3 +96,5 @@ The server runs on port 8080 by default.
 - Human-like delays are implemented between actions to mimic natural browsing patterns.
 - Only California SOS (`ca_sos`) is supported in the current version.
 - On `TooManyResultsError`, halve the date range and retry.
+- The scraper uses Bright Data Scraping Browser via the `SBR_CDP_URL` connection string for remote Playwright sessions.
+- `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)

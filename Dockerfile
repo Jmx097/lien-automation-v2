@@ -9,10 +9,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy the rest of the source
 COPY . .
+
+# Increase Node heap for the TypeScript compile step
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 
 # Compile TypeScript → dist/
 RUN npm run build

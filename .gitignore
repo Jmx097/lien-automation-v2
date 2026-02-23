@@ -1,1 +1,5 @@
 node_modules/
+.env
+dist/
+build.log
+src/scraper/ca_sos_orig.ts

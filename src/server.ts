@@ -2,6 +2,15 @@ import express from "express";
 import { scrapers } from "./scraper/index";
 import { pushToSheets } from "./sheets/push";
 import { log } from "./utils/logger";
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+if (!process.env.SBR_CDP_URL) {
+  console.error('Missing SBR_CDP_URL environment variable for Bright Data Scraping Browser');
+  process.exit(1);
+}
+
 
 const app = express();
 app.use(express.json());
@@ -12,7 +21,7 @@ app.post("/scrape", async (req, res) => {
   try {
     const { site, date_start, date_end, max_records } = req.body;
 
-    const scraper = scrapers[site];
+    const scraper = (scrapers as any)[site];
 
     if (!site || !scraper) {
       return res.status(400).json({

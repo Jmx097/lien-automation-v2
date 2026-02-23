@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  lien-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lien-automation
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
