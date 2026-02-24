@@ -7,7 +7,6 @@ import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 
-import { createBrowser } from "./base";
 export interface ScrapeConfig {
   date_start: string;
   date_end: string;
@@ -337,18 +336,16 @@ function buildRecord(
 }
 }
 
-async function createBrowser() {
-  const url = process.env.SBR_CDP_URL;
-  if (!url) {
-    throw new Error("SBR_CDP_URL is not set");
-  }
   return await chromium.connect(url);
-}
+
+  return await chromium.connect(url);
+
+
 
 async function createBrowser() {
   const url = process.env.SBR_CDP_URL;
   if (!url) {
     throw new Error("SBR_CDP_URL is not set");
   }
-  return await chromium.connect(url);
+  return chromium.connect(url);
 }
