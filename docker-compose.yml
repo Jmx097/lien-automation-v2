@@ -13,3 +13,8 @@ services:
       - .env
     environment:
       - PORT=8080
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=512
+    volumes:
+      - ./data:/app/data
+    command: ["node", "dist/server.js"]

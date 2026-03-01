@@ -6,6 +6,7 @@ import { limiter } from "../utils/rateLimit";
 import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
+import crypto from 'crypto';
 
 export interface ScrapeConfig {
   date_start: string;
@@ -25,8 +26,7 @@ export class TooManyResultsError extends Error {
   }
 }
 
-// Screenshot helper
-async function screenshot(page: Page, label: string): Promise<void> {
+// Helper: safe text extraction
 async function safeText(locator: Locator): Promise<string> {
   try {
     return (await locator.textContent({ timeout: 3000 }))?.trim() ?? "";
@@ -34,6 +34,7 @@ async function safeText(locator: Locator): Promise<string> {
     return "";
   }
 }
+
 // Multi-strategy field extractor
 async function getField(page: Page | Locator, label: string): Promise<string> {
   const strategies = [
@@ -67,8 +68,7 @@ async function getField(page: Page | Locator, label: string): Promise<string> {
   return "";
 }
 
-async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
-  // createBrowser() handles Bright Data (prod) vs local Chromium (dev)
+export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   const browser = await createBrowser();
 
   const context = await browser.newContext({
@@ -117,8 +117,8 @@ async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await fileTypeSelect.selectOption({ label: "Federal Tax Lien" });
     await humanDelay();
 
-    const dateStartInput = page.getByLabel("File Date: Start");
-    const dateEndInput = page.getByLabel("File Date: End");
+    const dateStartInput = page.getByRole("textbox", { name: "File Date: Start" });
+    const dateEndInput = page.getByRole("textbox", { name: "File Date: End" });
     await dateStartInput.fill(config.date_start);
     await humanDelay();
     await dateEndInput.fill(config.date_end);
@@ -202,6 +202,7 @@ async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await browser.close();
   }
 }
+
 async function processRow(
   page: Page,
   row: Locator,
@@ -332,20 +333,16 @@ function buildRecord(
     document_type: fields.document_type ?? "",
     pdf_filename: fields.pdf_filename ?? "",
     error: fields.error,
+    state: fields.state ?? "",
+    source: fields.source ?? "ca_sos",
+    processed: fields.processed ?? false,
   };
 }
-}
-
-  return await chromium.connect(url);
-
-  return await chromium.connect(url);
-
-
 
 async function createBrowser() {
   const url = process.env.SBR_CDP_URL;
   if (!url) {
     throw new Error("SBR_CDP_URL is not set");
   }
-  return chromium.connect(url);
+  return chromium.connectOverCDP(url);
 }

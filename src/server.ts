@@ -3,9 +3,16 @@ import { scrapers } from "./scraper/index";
 import { pushToSheets } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
+import { SQLiteQueueStore } from "./queue/sqlite";
 
 dotenv.config();
 
+if (!process.env.SBR_CDP_URL) {
+  console.error('Missing SBR_CDP_URL environment variable for Bright Data Scraping Browser');
+  process.exit(1);
+}
+
+const queue = new SQLiteQueueStore();
 const app = express();
 app.use(express.json());
 
@@ -15,39 +22,26 @@ app.post("/scrape", async (req, res) => {
   try {
     const { site, date_start, date_end, max_records } = req.body;
 
-    // Env guard (non-fatal)
-    if (!process.env.SBR_CDP_URL) {
-      return res.status(500).json({ success: false, error: "Scraping disabled: missing SBR_CDP_URL" });
-    }
-
-    // Site validation
     const scraper = (scrapers as any)[site];
+
     if (!site || !scraper) {
       return res.status(400).json({
         error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
       });
     }
 
-    // Date validation (MM/DD/YYYY, max 30 days)
     if (!date_start || !date_end) {
-      return res.status(400).json({ error: "date_start and date_end required" });
-    }
-    const dateStart = new Date(date_start);
-    const dateEnd = new Date(date_end);
-    if (isNaN(dateStart.getTime()) || isNaN(dateEnd.getTime()) || dateEnd <= dateStart ||
-        (dateEnd.getTime() - dateStart.getTime()) > 30 * 24 * 60 * 60 * 1000) {
-      return res.status(400).json({ error: "Invalid date range (MM/DD/YYYY format, max 30 days)" });
+      return res.status(400).json({
+        error: "date_start and date_end required"
+      });
     }
 
-    // Records bound
-    const boundedMax = (max_records && max_records > 0) ? Math.min(max_records, 5000) : 1000;
-
-    log({ stage: "scrape_start", site, date_start, date_end, max_records: boundedMax });
+    log({ stage: "scrape_start", site, date_start, date_end });
 
     const results = await scraper({
       date_start,
       date_end,
-      max_records: boundedMax
+      max_records
     });
 
     const sheetResult = await pushToSheets(results);
@@ -72,7 +66,64 @@ app.post("/scrape", async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      error: err.message || 'Internal error'
+      error: err.message
+    });
+  }
+});
+
+app.post("/enqueue", async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const { site, date_start, date_end, max_records } = req.body;
+
+    const scraper = (scrapers as any)[site];
+
+    if (!site || !scraper) {
+      return res.status(400).json({
+        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
+      });
+    }
+
+    if (!date_start || !date_end) {
+      return res.status(400).json({
+        error: "date_start and date_end required"
+      });
+    }
+
+    log({ stage: "enqueue_start", site, date_start, date_end });
+
+    const results = await scraper({
+      date_start,
+      date_end,
+      max_records
+    });
+
+    await queue.insertMany(results);
+
+    const pending = await queue.getPendingCount();
+    const duration = (Date.now() - startTime) / 1000;
+
+    log({
+      stage: "enqueue_complete",
+      duration_seconds: duration,
+      records_enqueued: results.length,
+      total_pending: pending
+    });
+
+    return res.json({
+      success: true,
+      records_enqueued: results.length,
+      total_pending: pending,
+      duration_seconds: duration
+    });
+
+  } catch (err: any) {
+    log({ stage: "enqueue_error", error: String(err) });
+
+    return res.status(500).json({
+      success: false,
+      error: err.message
     });
   }
 });
@@ -97,4 +148,56 @@ app.post("/scrape-all", async (req, res) => {
 
 app.listen(8080, () => {
   console.log("Server running on port 8080");
+});
+
+app.post("/scrape-enhanced", async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const { site, date_start, date_end, max_records } = req.body;
+
+    const scraper = (scrapers as any)[site];
+
+    if (!site || !scraper) {
+      return res.status(400).json({
+        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
+      });
+    }
+
+    if (!date_start || !date_end) {
+      return res.status(400).json({
+        error: "date_start and date_end required"
+      });
+    }
+
+    log({ stage: "scrape_enhanced_start", site, date_start, date_end });
+
+    const results = await scraper({
+      date_start,
+      date_end,
+      max_records
+    });
+
+    const duration = (Date.now() - startTime) / 1000;
+
+    log({
+      stage: "scrape_enhanced_complete",
+      duration_seconds: duration,
+      records: results.length
+    });
+
+    return res.json({
+      success: true,
+      records_processed: results.length,
+      duration_seconds: duration
+    });
+
+  } catch (err: any) {
+    log({ stage: "scrape_enhanced_error", error: String(err) });
+
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
 });

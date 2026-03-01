@@ -7,13 +7,16 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "worker": "ts-node src/worker/index.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/pdf-parse": "^1.1.5",
+    "better-sqlite3": "^12.6.2",
     "bottleneck": "^2.19.5",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",

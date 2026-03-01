@@ -6,6 +6,7 @@ import { limiter } from "../utils/rateLimit";
 import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
+import crypto from 'crypto';
 
 export interface ScrapeConfig {
   date_start: string;

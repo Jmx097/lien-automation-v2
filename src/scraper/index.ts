@@ -1,5 +1,5 @@
-const { scrapeCASOS } = require("./ca_sos");
+const { scrapeCASOS_Enhanced } = require("./ca_sos_enhanced");
 
 export const scrapers = {
-  ca_sos: scrapeCASOS,
+  ca_sos: scrapeCASOS_Enhanced,
 };
