@@ -20,6 +20,8 @@ curl -fsS http://127.0.0.1:8080/version
 
 You can also run `bash scripts/verify-runtime-version.sh` to enforce this check in one command.
 
+`npm run doctor` maps to `scripts/doctor.sh` (tooling/script preflight) and `npm run test:smoke` maps to `scripts/smoke-health.sh` (live `/health` check after starting `npm run dev`).
+
 ---
 
 ## Fast path (exact commands)
@@ -66,7 +68,7 @@ git pull --rebase
 npm run
 ```
 
-You should then see `doctor`, `test:types`, and `test:smoke`.
+You should then see `doctor`, `test:types`, and `test:smoke` (`scripts/doctor.sh` and `scripts/smoke-health.sh` are the backing scripts).
 
 ---
 
