@@ -3,6 +3,7 @@ import path from 'path';
 import { Page } from 'playwright';
 import { log } from '../utils/logger';
 
+
 function sanitizeForLog(filePath: string): string {
   return filePath.replace(/[^a-zA-Z0-9_./-]/g, '_');
 }

@@ -6,9 +6,9 @@ import { limiter } from "../utils/rateLimit";
 import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
-import { selectFileType } from "./selectors/fileType";
-import { captureFileTypeSelectionFailureDebug } from "./file_type_debug";
 import crypto from 'crypto';
+import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
+import { selectFileType } from './selectors/fileType';
 
 export interface ScrapeConfig {
   date_start: string;
@@ -114,7 +114,14 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await advancedBtn.waitFor({ state: "visible" });
     await advancedBtn.click();
 
-    await selectFileType(page, { onFailure: () => captureFileTypeSelectionFailureDebug(page) });
+    const fileTypeSelected = await selectFileType(page, {
+      log,
+      onFailure: () => captureFileTypeSelectionFailureDebug(page),
+    });
+
+    if (!fileTypeSelected) {
+      throw new Error("Could not find/select File Type control after opening Advanced search.");
+    }
     await humanDelay();
 
     const dateStartInput = page.getByRole("textbox", { name: "File Date: Start" });

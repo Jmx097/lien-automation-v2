@@ -1,14 +1,14 @@
 import { chromium, Page } from 'playwright';
 import { LienRecord } from '../types';
 import { log } from '../utils/logger';
-import { selectFileType } from './selectors/fileType';
-import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { SQLiteQueueStore } from '../queue/sqlite';
 import { pushToSheets } from '../sheets/push';
 import fs from 'fs';
 import path from 'path';
 import * as pdfParse from 'pdf-parse';
 import crypto from 'crypto';
+import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
+import { selectFileType } from './selectors/fileType';
 
 const SBR_CDP_URL = process.env.SBR_CDP_URL!;
 
@@ -182,7 +182,14 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     await advancedBtn.click();
     await humanDelay();
 
-    await selectFileType(page, { onFailure: () => captureFileTypeSelectionFailureDebug(page) });
+    const fileTypeSelected = await selectFileType(page, {
+      log,
+      onFailure: () => captureFileTypeSelectionFailureDebug(page),
+    });
+
+    if (!fileTypeSelected) {
+      throw new Error('Could not find/select File Type control after opening Advanced search.');
+    }
     await humanDelay();
 
     const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });
