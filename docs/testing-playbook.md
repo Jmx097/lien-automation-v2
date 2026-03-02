@@ -1,5 +1,27 @@
 # Testing Playbook
 
+## Preflight: verify runtime commit before scrape tests
+
+Before any scrape test, `curl /version` must match your local `git rev-parse --short HEAD`.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+LOCAL_SHA=$(git rev-parse --short HEAD)
+RUNTIME_SHA=$(curl -fsS http://127.0.0.1:8080/version | node -e 'process.stdin.once("data", d => console.log(JSON.parse(d).git_sha ?? "unknown"))')
+echo "local=$LOCAL_SHA runtime=$RUNTIME_SHA"
+```
+
+If SHAs mismatch, force rebuild and re-check version before proceeding:
+
+```bash
+docker compose down && docker compose build --no-cache && docker compose up -d
+curl -fsS http://127.0.0.1:8080/version
+```
+
+You can also run `bash scripts/verify-runtime-version.sh` to enforce this check in one command.
+
+---
+
 ## Fast path (exact commands)
 
 Run this from the repo root.
