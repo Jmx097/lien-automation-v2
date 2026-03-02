@@ -132,6 +132,15 @@ app.get("/health", (_req, res) => {
   res.json({ status: "healthy", uptime: process.uptime() });
 });
 
+app.get("/version", (_req, res) => {
+  res.json({
+    status: "ok",
+    git_sha: process.env.GIT_SHA ?? "unknown",
+    app_version: process.env.npm_package_version ?? "unknown",
+    node_version: process.version
+  });
+});
+
 app.post("/scrape-all", async (req, res) => {
   const { date_start, date_end, max_records } = req.body;
   const results: any[] = [];

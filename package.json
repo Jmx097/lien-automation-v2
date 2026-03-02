@@ -7,8 +7,11 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "worker": "ts-node src/worker/index.ts"
+    "test": "npm run test:types",
+    "worker": "ts-node src/worker/index.ts",
+    "test:types": "tsc --noEmit",
+    "test:smoke": "bash scripts/smoke-health.sh",
+    "doctor": "bash scripts/doctor.sh"
   },
   "keywords": [],
   "author": "",
@@ -31,5 +34,8 @@
     "@types/node": "^25.2.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.16.0"
   }
 }
