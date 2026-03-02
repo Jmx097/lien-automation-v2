@@ -10,12 +10,19 @@ import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 
-const SBR_CDP_URL = process.env.SBR_CDP_URL!;
+function getSbrCdpUrl(): string {
+  const v = process.env.SBR_CDP_URL;
+  if (!v) {
+    throw new Error("Missing SBR_CDP_URL environment variable (Bright Data Scraping Browser Playwright CDP URL).");
+  }
+  return v;
+}
 
 interface ScrapeOptions {
   date_start: string;
   date_end: string;
   max_records?: number;
+  skip_sheet_writes?: boolean;
 }
 
 function humanDelay() {
@@ -27,6 +34,7 @@ function computeFingerprint(source: string, fileNumber: string, filingDate: stri
 }
 
 function getRandomSessionCDP(): string {
+  const SBR_CDP_URL = getSbrCdpUrl();
   const sessionId = `session_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
   const separator = SBR_CDP_URL.includes('?') ? '&' : '?';
   return `${SBR_CDP_URL}${separator}session=${sessionId}`;
@@ -150,7 +158,7 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
 }
 
 export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<LienRecord[]> {
-  const { date_start, date_end, max_records = 10 } = options;
+  const { date_start, date_end, max_records = 10, skip_sheet_writes = false } = options;
   const queue = new SQLiteQueueStore();
   const processedRecords: LienRecord[] = [];
 
@@ -207,25 +215,49 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
     const resultLocator = page.locator('text=/Results:\\s*\\d+/');
     await resultLocator.waitFor({ state: 'visible', timeout: 30000 });
+    const resultText = (await resultLocator.textContent().catch(() => "")) ?? "";
+    const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0", 10);
 
-    const rowCount = await page.locator('.div-table-row').count();
-    const toProcess = Math.min(rowCount, max_records);
+    log({ stage: 'scraper_results_total', total: totalCount });
 
-    log({ stage: 'scraper_results_found', count: rowCount, processing: toProcess });
+    let hasNextPage = true;
+    while (hasNextPage && processedRecords.length < max_records) {
+      const rowCount = await page.locator('.div-table-row').count();
+      const remaining = max_records - processedRecords.length;
+      const toProcess = Math.min(rowCount, remaining);
 
-    for (let i = 0; i < toProcess; i++) {
-      const record = await processDetailRow(page, i);
-      
-      if (record) {
-        await pushToSheets([record]);
-        log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
+      log({ stage: 'scraper_results_found', count: rowCount, processing: toProcess });
+
+      for (let i = 0; i < toProcess; i++) {
+        const record = await processDetailRow(page, i);
         
-        await queue.insertMany([record]);
+        if (record) {
+          if (!skip_sheet_writes) {
+            await pushToSheets([record]);
+            log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
+          }
+          
+          await queue.insertMany([record]);
+          
+          processedRecords.push(record);
+        }
         
-        processedRecords.push(record);
+        await humanDelay();
       }
-      
-      await humanDelay();
+
+      if (processedRecords.length >= max_records) break;
+
+      const nextBtn = page.getByRole('button', { name: /^Next$/i });
+      const canNext =
+        (await nextBtn.isVisible().catch(() => false)) &&
+        (await nextBtn.isEnabled().catch(() => false));
+      if (canNext) {
+        await nextBtn.click();
+        await page.waitForLoadState('networkidle');
+        await humanDelay();
+      } else {
+        hasNextPage = false;
+      }
     }
 
     log({ stage: 'scraper_complete', processed: processedRecords.length });

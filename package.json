@@ -12,7 +12,8 @@
     "test:types": "tsc --noEmit",
     "test:smoke": "bash scripts/smoke-health.sh",
     "doctor": "bash scripts/doctor.sh",
-    "test:selector-smoke": "ts-node src/tests/selector-smoke.ts"
+    "test:selector-smoke": "ts-node src/tests/selector-smoke.ts",
+    "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts"
   },
   "keywords": [],
   "author": "",

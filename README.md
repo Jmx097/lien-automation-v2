@@ -150,6 +150,28 @@ Example one-week 2026 test request:
 curl -sS -X POST http://127.0.0.1:8080/scrape   -H 'Content-Type: application/json'   -d '{"site":"ca_sos","date_start":"01/05/2026","date_end":"01/11/2026","max_records":25}'
 ```
 
+## 2026 Range Test (writes to a new Sheet tab)
+
+If you want a reproducible CA SOS scrape that **creates a new tab** in the same spreadsheet for that run (tab name includes **California + date range + Pacific timestamp**), use:
+
+```bash
+npm run test:ca-sos-range
+```
+
+Defaults:
+
+- **DATE_START**: `02/02/2026`
+- **DATE_END**: `03/02/2026`
+- **MAX_RECORDS**: `25` (set `MAX_RECORDS=0` to remove the cap)
+
+Example:
+
+```bash
+DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_RECORDS=25 npm run test:ca-sos-range
+```
+
+This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
+
 ## Preflight: runtime version must match local commit
 
 Before running any scrape test, verify the running container version matches your local commit SHA.

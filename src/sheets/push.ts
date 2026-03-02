@@ -7,6 +7,31 @@ const LIABILITY_TYPE = "IRS";
 
 type BusinessFlag = "Business" | "Personal";
 
+const INVALID_SHEET_TITLE_CHARS_REGEX = /[\\/?*\[\]:]/g;
+
+function getPacificTimestampForTab(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const yyyy = get("year");
+  const mm = get("month");
+  const dd = get("day");
+  const hh = get("hour");
+  const min = get("minute");
+  const ss = get("second");
+
+  return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+}
+
 function classifyBusinessPersonal(name: string): BusinessFlag {
   const upper = name.toUpperCase();
   const businessKeywords = [
@@ -72,22 +97,83 @@ function parseAddress(raw: string, stateFallback: string): {
   return { street, city, state, zip };
 }
 
-export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: number }> {
-  if (!process.env.SHEETS_KEY) {
-    throw new Error("Missing SHEETS_KEY environment variable");
-  }
-  if (!process.env.SHEET_ID) {
-    throw new Error("Missing SHEET_ID environment variable");
-  }
+function getRequiredEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing ${name} environment variable`);
+  return v;
+}
 
+function getSheetsClient() {
   const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.SHEETS_KEY),
+    credentials: JSON.parse(getRequiredEnv("SHEETS_KEY")),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
-  const sheets = google.sheets({ version: "v4", auth });
+  return google.sheets({ version: "v4", auth });
+}
 
-  const values = rows.map((r) => {
+function sanitizeSheetTitle(input: string): string {
+  // Sheets restrictions: cannot contain \ / ? * [ ] :
+  // We'll also strip leading/trailing whitespace and apostrophes to keep A1 ranges simple.
+  const trimmed = input.trim();
+  const noInvalid = trimmed.replace(INVALID_SHEET_TITLE_CHARS_REGEX, "-");
+  const noApostrophes = noInvalid.replace(/'/g, "");
+  const collapsed = noApostrophes.replace(/\s+/g, " ");
+  // Sheet titles max out at 100 chars.
+  return collapsed.slice(0, 100);
+}
+
+export function formatRunTabName(
+  label: string,
+  dateStart: string,
+  dateEnd: string,
+  runStartedAt: Date
+): string {
+  const safeLabel = (label || "Run").trim().replace(/\s+/g, "_");
+  const start = (dateStart || "").trim().replace(/\//g, "-");
+  const end = (dateEnd || "").trim().replace(/\//g, "-");
+  const ts = getPacificTimestampForTab(runStartedAt);
+  const raw = `${safeLabel}_${start}_to_${end}_${ts}_Pacific`;
+  return sanitizeSheetTitle(raw);
+}
+
+async function listSheetTitles(sheets: ReturnType<typeof google.sheets>, spreadsheetId: string): Promise<string[]> {
+  const res = await sheets.spreadsheets.get({ spreadsheetId });
+  const titles =
+    res.data.sheets
+      ?.map((s) => s.properties?.title)
+      .filter((t): t is string => typeof t === "string") ?? [];
+  return titles;
+}
+
+async function ensureSheetTabExists(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  requestedTitle: string
+): Promise<string> {
+  const baseTitle = sanitizeSheetTitle(requestedTitle) || "Run";
+  const existing = new Set(await listSheetTitles(sheets, spreadsheetId));
+
+  if (existing.has(baseTitle)) return baseTitle;
+
+  let title = baseTitle;
+  for (let i = 2; existing.has(title) && i < 1000; i++) {
+    const suffix = `_${i}`;
+    title = baseTitle.length + suffix.length <= 100 ? `${baseTitle}${suffix}` : `${baseTitle.slice(0, 100 - suffix.length)}${suffix}`;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [{ addSheet: { properties: { title } } }],
+    },
+  });
+
+  return title;
+}
+
+function buildRowValues(rows: LienRecord[]) {
+  return rows.map((r) => {
     const businessPersonal = classifyBusinessPersonal(r.debtor_name);
     const nameParts =
       businessPersonal === "Personal"
@@ -113,6 +199,18 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
       addrParts.zip,           // Zip (first 5)
     ];
   });
+}
+
+export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: number }> {
+  if (!process.env.SHEETS_KEY) {
+    throw new Error("Missing SHEETS_KEY environment variable");
+  }
+  if (!process.env.SHEET_ID) {
+    throw new Error("Missing SHEET_ID environment variable");
+  }
+
+  const sheets = getSheetsClient();
+  const values = buildRowValues(rows);
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.SHEET_ID,
@@ -122,4 +220,27 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
   });
 
   return { uploaded: rows.length };
+}
+
+export async function pushToSheetsForTab(
+  rows: LienRecord[],
+  requestedTabTitle: string
+): Promise<{ uploaded: number; tab_title: string }> {
+  const spreadsheetId = getRequiredEnv("SHEET_ID");
+  const sheets = getSheetsClient();
+
+  const tabTitle = await ensureSheetTabExists(sheets, spreadsheetId, requestedTabTitle);
+  const values = buildRowValues(rows);
+
+  // Always quote the title so spaces are safe in A1 notation.
+  const range = `'${tabTitle}'!A2`;
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values },
+  });
+
+  return { uploaded: rows.length, tab_title: tabTitle };
 }
