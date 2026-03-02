@@ -346,10 +346,25 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     log({ stage: 'scraper_results_found', count: rowCount, processing: toProcess });
 
     let consecutiveFailures = 0;
-    for (let i = 0; i < toProcess; i++) {
+    let newRecordCount = 0;
+    for (let i = 0; i < rowCount; i++) {
+      if (newRecordCount >= max_records) break;
+
       if (page.isClosed()) {
         log({ stage: 'scraper_page_closed', row: i });
         break;
+      }
+
+      const cells = page.locator('.div-table-row').nth(i).locator('.div-table-cell .cell');
+      const peekFileNumber = (await cells.nth(2).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+      const peekFilingDate = (await cells.nth(5).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+
+      if (peekFileNumber && peekFilingDate) {
+        const fp = computeFingerprint('ca_sos', peekFileNumber, peekFilingDate);
+        if (queue.hasFingerprint(fp)) {
+          log({ stage: 'scraper_skip_duplicate', row: i, file_number: peekFileNumber });
+          continue;
+        }
       }
 
       const record = await processDetailRow(page, i);
@@ -360,8 +375,8 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
 
         await queue.insertMany([record]);
-
         processedRecords.push(record);
+        newRecordCount++;
       } else {
         consecutiveFailures++;
         if (consecutiveFailures >= 3) {

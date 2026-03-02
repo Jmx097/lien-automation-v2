@@ -4,6 +4,7 @@ import { pushToSheets } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
+import { startScheduler, runScheduledScrape, getRunHistory, getNextRuns } from "./scheduler";
 
 dotenv.config();
 
@@ -159,6 +160,22 @@ app.post("/scrape-all", async (req, res) => {
   return res.json({ results });
 });
 
+app.get("/schedule", (_req, res) => {
+  res.json({
+    next_runs: getNextRuns(),
+    history: getRunHistory(),
+  });
+});
+
+app.post("/schedule/run", async (_req, res) => {
+  try {
+    const result = await runScheduledScrape();
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(8080, () => {
   log({
     stage: "startup",
@@ -166,6 +183,8 @@ app.listen(8080, () => {
     ...runtimeVersion
   });
   console.log("Server running on port 8080");
+
+  startScheduler();
 });
 
 app.post("/scrape-enhanced", async (req, res) => {

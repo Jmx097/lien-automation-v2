@@ -19,4 +19,5 @@ export interface QueueStore {
   markDone(ids: number[]): Promise<void>;
   markFailed(ids: number[], backoffMs: number): Promise<void>;
   getPendingCount(): Promise<number>;
+  hasFingerprint(fingerprint: string): boolean;
 }

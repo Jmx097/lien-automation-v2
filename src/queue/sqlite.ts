@@ -96,4 +96,9 @@ export class SQLiteQueueStore implements QueueStore {
     const row: any = this.db.prepare("SELECT COUNT(*) as count FROM queue_jobs WHERE status IN ('queued', 'processing')").get();
     return row.count;
   }
+
+  hasFingerprint(fingerprint: string): boolean {
+    const row: any = this.db.prepare("SELECT 1 FROM queue_jobs WHERE fingerprint = ?").get(fingerprint);
+    return !!row;
+  }
 }
