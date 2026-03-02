@@ -1,6 +1,10 @@
 import { Page } from 'playwright';
 import { log } from '../../utils/logger';
 
+interface SelectFileTypeOptions {
+  onFailure?: () => Promise<void>;
+}
+
 type StrategyName = 'locator_label' | 'locator_combobox' | 'locator_select' | 'dom_fallback';
 
 const STRATEGY_TIMEOUT_MS = 2500;
@@ -89,7 +93,7 @@ async function tryDomFallback(page: Page): Promise<boolean> {
   return false;
 }
 
-export async function selectFileType(page: Page): Promise<void> {
+export async function selectFileType(page: Page, options: SelectFileTypeOptions = {}): Promise<void> {
   const strategies: Array<Exclude<StrategyName, 'dom_fallback'>> = ['locator_label', 'locator_combobox', 'locator_select'];
 
   for (const strategy of strategies) {
@@ -97,6 +101,10 @@ export async function selectFileType(page: Page): Promise<void> {
   }
 
   if (await tryDomFallback(page)) return;
+
+  if (options.onFailure) {
+    await options.onFailure();
+  }
 
   throw new Error(
     'Could not find/select File Type control after trying strategies: locator_label, locator_combobox, locator_select, dom_fallback.'

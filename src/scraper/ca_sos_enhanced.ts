@@ -2,6 +2,7 @@ import { chromium, Page } from 'playwright';
 import { LienRecord } from '../types';
 import { log } from '../utils/logger';
 import { selectFileType } from './selectors/fileType';
+import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { SQLiteQueueStore } from '../queue/sqlite';
 import { pushToSheets } from '../sheets/push';
 import fs from 'fs';
@@ -181,7 +182,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     await advancedBtn.click();
     await humanDelay();
 
-    await selectFileType(page);
+    await selectFileType(page, { onFailure: () => captureFileTypeSelectionFailureDebug(page) });
     await humanDelay();
 
     const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });

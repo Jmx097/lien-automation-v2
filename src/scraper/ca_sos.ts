@@ -7,6 +7,7 @@ import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 import { selectFileType } from "./selectors/fileType";
+import { captureFileTypeSelectionFailureDebug } from "./file_type_debug";
 import crypto from 'crypto';
 
 export interface ScrapeConfig {
@@ -113,7 +114,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await advancedBtn.waitFor({ state: "visible" });
     await advancedBtn.click();
 
-    await selectFileType(page);
+    await selectFileType(page, { onFailure: () => captureFileTypeSelectionFailureDebug(page) });
     await humanDelay();
 
     const dateStartInput = page.getByRole("textbox", { name: "File Date: Start" });

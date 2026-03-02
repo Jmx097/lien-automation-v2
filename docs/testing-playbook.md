@@ -246,3 +246,45 @@ npm run
 
 - `sh: 1: tsc: not found`  
   `node_modules` not installed; run `npm install` again after Node 22 is active.
+
+---
+
+## Retrieving file-type failure debug artifacts
+
+When CA SOS file-type selection fails, the scraper now writes two artifacts to `./debug/`:
+
+- `file-type-failure-<timestamp>.png` (full-page screenshot)
+- `file-type-failure-<timestamp>.html` (HTML snapshot)
+
+It also logs a sanitized artifact pointer line with the relative paths.
+
+Local retrieval:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+ls -lah debug/file-type-failure-*
+```
+
+If running in Docker, mount the repo (or at minimum `./debug`) so artifacts are persisted on the host:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./:/workspace/lien-automation-v2
+```
+
+Or map only the debug directory:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./debug:/workspace/lien-automation-v2/debug
+```
+
+Then retrieve on host:
+
+```bash
+ls -lah ./debug/file-type-failure-*
+```
