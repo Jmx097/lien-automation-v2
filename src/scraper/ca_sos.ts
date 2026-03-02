@@ -7,6 +7,7 @@ import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 import crypto from 'crypto';
+import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 
 export interface ScrapeConfig {
   date_start: string;
@@ -175,6 +176,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     }
 
     if (!fileTypeSelected) {
+      await captureFileTypeSelectionFailureDebug(page);
       throw new Error("Could not find/select File Type control after opening Advanced search.");
     }
     await humanDelay();

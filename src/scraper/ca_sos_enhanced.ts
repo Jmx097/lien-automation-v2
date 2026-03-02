@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import * as pdfParse from 'pdf-parse';
 import crypto from 'crypto';
+import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 
 const SBR_CDP_URL = process.env.SBR_CDP_URL!;
 
@@ -243,6 +244,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     }
 
     if (!fileTypeSelected) {
+      await captureFileTypeSelectionFailureDebug(page);
       throw new Error('Could not find/select File Type control after opening Advanced search.');
     }
     await humanDelay();
