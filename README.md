@@ -98,3 +98,50 @@ The server runs on port 8080 by default.
 - On `TooManyResultsError`, halve the date range and retry.
 - The scraper uses Bright Data Scraping Browser via the `SBR_CDP_URL` connection string for remote Playwright sessions.
 - `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
+
+
+## Setup Troubleshooting (stale clone symptom)
+
+If `npm run` only shows:
+
+- `test -> echo "Error: no test specified" && exit 1`
+
+and does not show `doctor`, `test:types`, and `test:smoke`, your local checkout is behind. Sync your branch and verify scripts:
+
+```bash
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+git fetch --all --prune
+git checkout work || true
+git pull --rebase
+npm run
+```
+
+
+## Run Logging + 2026 Week Test Example
+
+Track server logs to a file while still seeing output:
+
+```bash
+mkdir -p logs
+npm run dev 2>&1 | tee logs/server-$(date +%F-%H%M%S).log
+```
+
+Example one-week 2026 test request:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/scrape   -H 'Content-Type: application/json'   -d '{"site":"ca_sos","date_start":"01/05/2026","date_end":"01/11/2026","max_records":25}'
+```
+
+## Verify Running Build Version
+
+Set and pass the current Git SHA into Docker Compose, then verify via the API:
+
+```bash
+export GIT_SHA=$(git rev-parse --short HEAD)
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+curl -sS http://127.0.0.1:8080/version
+```
+
+Expected response includes the same `git_sha` you exported.
