@@ -8,7 +8,7 @@ import path from 'path';
 import * as pdfParse from 'pdf-parse';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
-import { selectFederalTaxLienFileType } from './file_type_selector';
+import { selectFileType } from './file_type_selector';
 
 const SBR_CDP_URL = process.env.SBR_CDP_URL!;
 
@@ -182,10 +182,12 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     await advancedBtn.click();
     await humanDelay();
 
-    const fileTypeSelected = await selectFederalTaxLienFileType(page, log);
+    const fileTypeSelected = await selectFileType(page, {
+      log,
+      onFailure: () => captureFileTypeSelectionFailureDebug(page),
+    });
 
     if (!fileTypeSelected) {
-      await captureFileTypeSelectionFailureDebug(page);
       throw new Error('Could not find/select File Type control after opening Advanced search.');
     }
     await humanDelay();

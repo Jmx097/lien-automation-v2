@@ -8,7 +8,7 @@ import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
-import { selectFederalTaxLienFileType } from './file_type_selector';
+import { selectFileType } from './file_type_selector';
 
 export interface ScrapeConfig {
   date_start: string;
@@ -114,10 +114,12 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await advancedBtn.waitFor({ state: "visible" });
     await advancedBtn.click();
 
-    const fileTypeSelected = await selectFederalTaxLienFileType(page, log);
+    const fileTypeSelected = await selectFileType(page, {
+      log,
+      onFailure: () => captureFileTypeSelectionFailureDebug(page),
+    });
 
     if (!fileTypeSelected) {
-      await captureFileTypeSelectionFailureDebug(page);
       throw new Error("Could not find/select File Type control after opening Advanced search.");
     }
     await humanDelay();
