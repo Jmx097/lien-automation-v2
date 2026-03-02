@@ -37,49 +37,63 @@ export async function scrapeCASOSDetail(fileNumber: string): Promise<DetailResul
     await page.getByRole('button', { name: /search/i }).click();
     
     await page.waitForSelector('.div-table-row', { timeout: 30000 });
-    
-    // Click into first result row
+
     const firstRow = page.locator('.div-table-row').first();
-    await firstRow.locator('.interactive-button').click();
-    
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Extract basic info from detail page
-    const debtorName = await page.locator('text=/Debtor Name/i').locator('..').locator('following-sibling::*').first().textContent() || '';
-    const debtorAddress = await page.locator('text=/Debtor Address/i').locator('..').locator('following-sibling::*').first().textContent() || '';
-    const securedPartyName = await page.locator('text=/Secured Party Name/i').locator('..').locator('following-sibling::*').first().textContent() || '';
-    const securedPartyAddress = await page.locator('text=/Secured Party Address/i').locator('..').locator('following-sibling::*').first().textContent() || '';
-    
+    await firstRow.locator('.interactive-cell-button').first().click();
+
+    const drawer = page.locator('div.drawer.show');
+    await drawer.waitFor({ state: 'visible', timeout: 15000 });
+
+    const getField = async (label: string) => {
+      const row = drawer.locator('table.details-list tr.detail').filter({
+        has: page.locator(`td.label:has-text("${label}")`)
+      });
+      return (await row.locator('td.value').textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+    };
+
+    const debtorName = await getField('Debtor Name');
+    const debtorAddress = await getField('Debtor Address');
+    const securedPartyName = await getField('Secured Party Name');
+    const securedPartyAddress = await getField('Secured Party Address');
+
     log({ stage: 'detail_extracted_basic', file_number: fileNumber });
-    
-    // Click "View History" button
-    await page.getByRole('button', { name: /view history/i }).click();
-    await page.waitForLoadState('domcontentloaded');
-    
-    // Look for Download button/link in history view
-    const downloadButton = page.locator('button:has-text("Download"), a:has-text("Download")').first();
-    
+
     let pdfPath: string | undefined;
-    
-    if (await downloadButton.isVisible({ timeout: 5000 })) {
-      const downloadDir = path.join(process.cwd(), 'data/downloads');
-      if (!fs.existsSync(downloadDir)) {
-        fs.mkdirSync(downloadDir, { recursive: true });
+
+    const historyBtn = drawer.locator('button[aria-label="View History"]');
+    if (await historyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await historyBtn.click();
+      await page.waitForTimeout(3000);
+
+      const downloadLink = page.getByRole('link', { name: /Download/i }).first();
+      if (await downloadLink.isVisible({ timeout: 5000 }).catch(() => false)) {
+        const downloadDir = path.join(process.cwd(), 'data/downloads');
+        if (!fs.existsSync(downloadDir)) {
+          fs.mkdirSync(downloadDir, { recursive: true });
+        }
+
+        const [download] = await Promise.all([
+          page.waitForEvent('download', { timeout: 15000 }),
+          downloadLink.click()
+        ]);
+
+        pdfPath = path.join(downloadDir, `${fileNumber}.pdf`);
+        await download.saveAs(pdfPath);
+        log({ stage: 'detail_pdf_downloaded', file_number: fileNumber, path: pdfPath });
+      } else {
+        log({ stage: 'detail_no_download', file_number: fileNumber });
       }
-      
-      const [download] = await Promise.all([
-        page.waitForEvent('download', { timeout: 15000 }),
-        downloadButton.click()
-      ]);
-      
-      pdfPath = path.join(downloadDir, `${fileNumber}.pdf`);
-      await download.saveAs(pdfPath);
-      
-      log({ stage: 'detail_pdf_downloaded', file_number: fileNumber, path: pdfPath });
-    } else {
-      log({ stage: 'detail_no_download', file_number: fileNumber });
+
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
     }
-    
+
+    const closeBtn = drawer.locator('button.close-button');
+    if (await closeBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await closeBtn.click();
+      await page.waitForTimeout(1000);
+    }
+
     await page.close();
     
     return {

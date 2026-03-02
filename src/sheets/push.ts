@@ -80,8 +80,11 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
     throw new Error("Missing SHEET_ID environment variable");
   }
 
+  const rawKey = process.env.SHEETS_KEY!;
+  const sanitizedKey = rawKey.replace(/^'+|'+$/g, '');
+
   const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.SHEETS_KEY),
+    credentials: JSON.parse(sanitizedKey),
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
@@ -99,8 +102,8 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
     return [
       SITE_ID_CA_SOS,          // Site Id
       r.filing_date,           // LienOrReceiveDate (results-table / recorder date)
-      "",                      // Amount (from PDF Total/Unpaid Balance - phase 2)
-      "Lien",                  // LeadType (this scraper is liens only)
+      r.amount ?? "",          // Amount (from PDF Total, dollars only)
+      r.lead_type ?? "Lien",   // LeadType (from PDF header: "Lien" or "Release")
       LEAD_SOURCE,             // LeadSource (always 777)
       LIABILITY_TYPE,          // LiabilityType (IRS for this site)
       businessPersonal,        // BusinessPersonal
