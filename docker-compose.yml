@@ -13,6 +13,7 @@ services:
       - PORT=8080
       - NODE_ENV=production
       - NODE_OPTIONS=--max-old-space-size=512
+      # Operators: export GIT_SHA=$(git rev-parse --short HEAD) before docker compose build
       - GIT_SHA=${GIT_SHA:-unknown}
     volumes:
       - ./data:/app/data

@@ -132,6 +132,25 @@ Example one-week 2026 test request:
 curl -sS -X POST http://127.0.0.1:8080/scrape   -H 'Content-Type: application/json'   -d '{"site":"ca_sos","date_start":"01/05/2026","date_end":"01/11/2026","max_records":25}'
 ```
 
+## Preflight: runtime version must match local commit
+
+Before running any scrape test, verify the running container version matches your local commit SHA.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+LOCAL_SHA=$(git rev-parse --short HEAD)
+RUNTIME_SHA=$(curl -fsS http://127.0.0.1:8080/version | node -e 'process.stdin.once("data", d => console.log(JSON.parse(d).git_sha ?? "unknown"))')
+echo "local=$LOCAL_SHA runtime=$RUNTIME_SHA"
+```
+
+`curl /version` **must** report the same SHA as `git rev-parse --short HEAD` before any scrape test.
+
+If SHAs do not match, force a rebuild:
+
+```bash
+docker compose down && docker compose build --no-cache && docker compose up -d
+```
+
 ## Verify Running Build Version
 
 Set and pass the current Git SHA into Docker Compose, then verify via the API:
@@ -144,4 +163,4 @@ docker compose up -d
 curl -sS http://127.0.0.1:8080/version
 ```
 
-Expected response includes the same `git_sha` you exported.
+Expected response includes the same `git_sha` you exported. Operators should always run `export GIT_SHA=$(git rev-parse --short HEAD)` before `docker compose build`.

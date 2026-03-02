@@ -16,6 +16,12 @@ const queue = new SQLiteQueueStore();
 const app = express();
 app.use(express.json());
 
+const runtimeVersion = {
+  git_sha: process.env.GIT_SHA ?? "unknown",
+  app_version: process.env.npm_package_version ?? "unknown",
+  node_version: process.version
+};
+
 app.post("/scrape", async (req, res) => {
   const startTime = Date.now();
 
@@ -135,9 +141,7 @@ app.get("/health", (_req, res) => {
 app.get("/version", (_req, res) => {
   res.json({
     status: "ok",
-    git_sha: process.env.GIT_SHA ?? "unknown",
-    app_version: process.env.npm_package_version ?? "unknown",
-    node_version: process.version
+    ...runtimeVersion
   });
 });
 
@@ -156,6 +160,11 @@ app.post("/scrape-all", async (req, res) => {
 });
 
 app.listen(8080, () => {
+  log({
+    stage: "startup",
+    port: 8080,
+    ...runtimeVersion
+  });
   console.log("Server running on port 8080");
 });
 
