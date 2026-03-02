@@ -2,6 +2,11 @@ import { Page } from "playwright";
 
 type Logger = (payload: Record<string, unknown>) => void;
 
+interface SelectFileTypeOptions {
+  log?: Logger;
+  onFailure?: () => Promise<void> | void;
+}
+
 const normalize = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
 
 export function selectFederalTaxLienFromDocument(doc: Document, valueToSelect = "Federal Tax Lien"): boolean {
@@ -93,4 +98,17 @@ export async function selectFederalTaxLienFileType(page: Page, log?: Logger): Pr
   }
 
   return fileTypeSelected;
+}
+
+export async function selectFileType(
+  page: Page,
+  { log, onFailure }: SelectFileTypeOptions = {},
+): Promise<boolean> {
+  const selected = await selectFederalTaxLienFileType(page, log);
+
+  if (!selected) {
+    await onFailure?.();
+  }
+
+  return selected;
 }
