@@ -40,5 +40,7 @@ All documented in `package.json` scripts:
 
 - `npm run test:smoke` sets `SBR_CDP_URL` to a dummy value internally, so it works without external credentials.
 - Actual scraping (`/scrape`, `/enqueue`) requires real `SBR_CDP_URL`, `SHEETS_KEY`, and `SHEET_ID` env vars.
+- `SHEETS_KEY` must be a raw JSON string (the service account key), **not** wrapped in extra quotes. If the env var value starts with `'` or `"` around the JSON object, `pushToSheets` will throw a JSON parse error.
 - The SQLite DB at `data/db/lien-queue.db` is auto-created by `init-db.js`; server startup instantiates `SQLiteQueueStore` which expects the file to exist.
 - `npm run build` outputs to `dist/`. The dev server uses `ts-node` directly (no build step needed for dev).
+- Scrape requests can take several minutes due to Bright Data browser session setup and per-row detail scraping (~30s timeout per row).
