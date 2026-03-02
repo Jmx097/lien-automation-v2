@@ -8,7 +8,7 @@ import path from 'path';
 import * as pdfParse from 'pdf-parse';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
-import { selectFileType } from './file_type_selector';
+import { selectFileType } from './selectors/fileType';
 
 const SBR_CDP_URL = process.env.SBR_CDP_URL!;
 

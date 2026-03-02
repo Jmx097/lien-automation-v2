@@ -8,7 +8,7 @@ import { log } from "../utils/logger";
 import { LienRecord } from "../types";
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
-import { selectFileType } from './file_type_selector';
+import { selectFileType } from './selectors/fileType';
 
 export interface ScrapeConfig {
   date_start: string;
