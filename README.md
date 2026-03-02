@@ -100,6 +100,20 @@ The server runs on port 8080 by default.
 - `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
 
 
+## Test Commands
+
+Use the local selector resilience harness and runtime smoke independently:
+
+```bash
+npm run test:types
+npm run test:selector-smoke
+npm run test:smoke
+```
+
+- `test:selector-smoke` runs a non-production Playwright fixture test for file-type selector variants (combobox, labeled select, and DOM fallback) with no external dependencies.
+- `test:smoke` (`scripts/smoke-health.sh`) is kept separate so runtime/network flakiness does not fail selector resilience checks.
+- `npm test` runs `test:types` + `test:selector-smoke` companion checks.
+
 ## Setup Troubleshooting (stale clone symptom)
 
 If `npm run` only shows:

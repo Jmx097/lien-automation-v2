@@ -7,11 +7,12 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
-    "test": "npm run test:types",
+    "test": "npm run test:types && npm run test:selector-smoke",
     "worker": "ts-node src/worker/index.ts",
     "test:types": "tsc --noEmit",
     "test:smoke": "bash scripts/smoke-health.sh",
-    "doctor": "bash scripts/doctor.sh"
+    "doctor": "bash scripts/doctor.sh",
+    "test:selector-smoke": "ts-node src/tests/selector-smoke.ts"
   },
   "keywords": [],
   "author": "",
@@ -31,7 +32,9 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/jsdom": "^28.0.0",
     "@types/node": "^25.2.3",
+    "jsdom": "^28.1.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
