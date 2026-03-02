@@ -8,6 +8,7 @@ import path from 'path';
 import * as pdfParse from 'pdf-parse';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
+import { selectFederalTaxLienFileType } from './file_type_selector';
 
 const SBR_CDP_URL = process.env.SBR_CDP_URL!;
 
@@ -181,67 +182,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     await advancedBtn.click();
     await humanDelay();
 
-    const fileTypeSelectCandidates = [
-      page.getByLabel(/file type/i),
-      page.getByRole('combobox', { name: /file type/i }),
-      page.locator('select[aria-label*="File Type" i]'),
-      page.locator('select[name*="fileType" i], select[id*="fileType" i]')
-    ];
-
-    let fileTypeSelected = false;
-    for (const candidate of fileTypeSelectCandidates) {
-      if ((await candidate.count()) === 0) continue;
-
-      const control = candidate.first();
-      try {
-        await control.waitFor({ state: 'visible', timeout: 3000 });
-        await control.selectOption({ label: 'Federal Tax Lien' });
-        fileTypeSelected = true;
-        log({ stage: 'file_type_selected', method: 'locator' });
-        break;
-      } catch {
-        // try next selector variant
-      }
-    }
-
-    if (!fileTypeSelected) {
-      fileTypeSelected = await page.evaluate(() => {
-        const normalized = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
-        const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
-
-        const byNameOrId = selects.find((sel) => {
-          const id = normalized(sel.id);
-          const name = normalized(sel.name);
-          return id.includes('filetype') || id.includes('file_type') || name.includes('filetype') || name.includes('file_type');
-        });
-
-        const withLabel = selects.find((sel) => {
-          const id = sel.id;
-          if (!id) return false;
-          const label = document.querySelector(`label[for="${id}"]`);
-          return normalized(label?.textContent).includes('file type');
-        });
-
-        const fallback = byNameOrId ?? withLabel ?? selects.find((sel) => {
-          const text = normalized(sel.getAttribute('aria-label'));
-          return text.includes('file type');
-        });
-
-        if (!fallback) return false;
-
-        const option = Array.from(fallback.options).find((opt) => normalized(opt.text).includes('federal tax lien'));
-        if (!option) return false;
-
-        fallback.value = option.value;
-        fallback.dispatchEvent(new Event('input', { bubbles: true }));
-        fallback.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      });
-
-      if (fileTypeSelected) {
-        log({ stage: 'file_type_selected', method: 'dom_fallback' });
-      }
-    }
+    const fileTypeSelected = await selectFederalTaxLienFileType(page, log);
 
     if (!fileTypeSelected) {
       await captureFileTypeSelectionFailureDebug(page);
