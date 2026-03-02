@@ -112,9 +112,73 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
     await advancedBtn.waitFor({ state: "visible" });
     await advancedBtn.click();
 
-    const fileTypeSelect = page.getByLabel("File Type");
-    await fileTypeSelect.waitFor({ state: "visible" });
-    await fileTypeSelect.selectOption({ label: "Federal Tax Lien" });
+    const fileTypeSelectCandidates = [
+      { method: "label", locator: page.getByLabel(/file type/i) },
+      { method: "aria_label_select", locator: page.locator('select[aria-label*="File Type" i]') },
+      { method: "name_or_id_select", locator: page.locator('select[name*="fileType" i], select[id*="fileType" i]') },
+      { method: "combobox_role", locator: page.getByRole("combobox", { name: /file type/i }) },
+    ];
+
+    let fileTypeSelected = false;
+    for (const candidate of fileTypeSelectCandidates) {
+      if ((await candidate.locator.count()) === 0) {
+        continue;
+      }
+
+      const control = candidate.locator.first();
+      try {
+        await control.waitFor({ state: "visible", timeout: 2000 });
+        await control.selectOption({ label: "Federal Tax Lien" }, { timeout: 2000 });
+        fileTypeSelected = true;
+        log({ stage: "file_type_selected", method: candidate.method });
+        break;
+      } catch (err: any) {
+        log({ stage: "file_type_candidate_failed", method: candidate.method, error: err?.message ?? String(err) });
+      }
+    }
+
+    if (!fileTypeSelected) {
+      fileTypeSelected = await page.evaluate(() => {
+        const normalized = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
+        const selects = Array.from(document.querySelectorAll("select")) as HTMLSelectElement[];
+
+        const byNameOrId = selects.find((sel) => {
+          const id = normalized(sel.id);
+          const name = normalized(sel.name);
+          return id.includes("filetype") || id.includes("file_type") || name.includes("filetype") || name.includes("file_type");
+        });
+
+        const withLabel = selects.find((sel) => {
+          const id = sel.id;
+          if (!id) return false;
+          const label = document.querySelector(`label[for="${id}"]`);
+          return normalized(label?.textContent).includes("file type");
+        });
+
+        const fallback = byNameOrId ?? withLabel ?? selects.find((sel) => {
+          const text = normalized(sel.getAttribute("aria-label"));
+          return text.includes("file type");
+        });
+
+        if (!fallback) return false;
+
+        const option = Array.from(fallback.options).find((opt) => normalized(opt.text).includes("federal tax lien"));
+        if (!option) return false;
+
+        fallback.value = option.value;
+        fallback.dispatchEvent(new Event("input", { bubbles: true }));
+        fallback.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      });
+
+      if (fileTypeSelected) {
+        log({ stage: "file_type_selected", method: "dom_fallback" });
+      }
+    }
+
+    if (!fileTypeSelected) {
+      throw new Error("Could not find/select File Type control after opening Advanced search.");
+    }
     await humanDelay();
 
     const dateStartInput = page.getByRole("textbox", { name: "File Date: Start" });
