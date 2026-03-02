@@ -40,7 +40,11 @@ All documented in `package.json` scripts:
 
 - `npm run test:smoke` sets `SBR_CDP_URL` to a dummy value internally, so it works without external credentials.
 - Actual scraping (`/scrape`, `/enqueue`) requires real `SBR_CDP_URL`, `SHEETS_KEY`, and `SHEET_ID` env vars.
-- `SHEETS_KEY` must be a raw JSON string (the service account key), **not** wrapped in extra quotes. If the env var value starts with `'` or `"` around the JSON object, `pushToSheets` will throw a JSON parse error.
+- `SHEETS_KEY` must be a raw JSON string (the service account key), **not** wrapped in extra quotes. The code strips leading/trailing single quotes, but it's best to set it correctly.
 - The SQLite DB at `data/db/lien-queue.db` is auto-created by `init-db.js`; server startup instantiates `SQLiteQueueStore` which expects the file to exist.
 - `npm run build` outputs to `dist/`. The dev server uses `ts-node` directly (no build step needed for dev).
-- Scrape requests can take several minutes due to Bright Data browser session setup and per-row detail scraping (~30s timeout per row).
+- Scrape requests take ~5-12 minutes for 24 records. Each record involves: open drawer → extract details → open history modal → attempt PDF download → close modal → close drawer.
+- CA SOS website uses a **drawer panel** (not page navigation) for record details. Selectors: `.interactive-cell-button` to open, `button.close-button` to close, `div.drawer.show` to detect.
+- The history view opens a fullscreen `div.history-modal[role="dialog"]`. Must be dismissed (force-click close button or DOM removal) before the drawer can be closed.
+- CA SOS PDFs are **image-based** (scanned documents). `pdf-parse` can only extract filing metadata (File No, Date), not the lien content (Amount, Taxpayer Name). OCR would be needed for full extraction.
+- Bright Data browser sessions can be unstable. The scraper stops after 3 consecutive row failures to avoid wasting session time.
