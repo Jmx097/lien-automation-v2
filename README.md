@@ -102,16 +102,18 @@ The server runs on port 8080 by default.
 
 ## Test Commands
 
-Use the local selector resilience harness and runtime smoke independently:
+Use the local checks independently (doctor, types, selector fixture, runtime smoke):
 
 ```bash
 npm run test:types
 npm run test:selector-smoke
 npm run test:smoke
+npm run doctor
 ```
 
 - `test:selector-smoke` runs a non-production Playwright fixture test for file-type selector variants (combobox, labeled select, and DOM fallback) with no external dependencies.
-- `test:smoke` (`scripts/smoke-health.sh`) is kept separate so runtime/network flakiness does not fail selector resilience checks.
+- `test:smoke` runs `scripts/smoke-health.sh` and checks the live `/health` route.
+- `doctor` runs `scripts/doctor.sh` and verifies local prerequisites before smoke/runtime checks.
 - `npm test` runs `test:types` + `test:selector-smoke` companion checks.
 
 ## Setup Troubleshooting (stale clone symptom)
@@ -129,6 +131,8 @@ git checkout work || true
 git pull --rebase
 npm run
 ```
+
+You should see `doctor` (wired to `scripts/doctor.sh`) and `test:smoke` (wired to `scripts/smoke-health.sh`).
 
 
 ## Run Logging + 2026 Week Test Example
