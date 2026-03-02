@@ -5,7 +5,7 @@ import { SQLiteQueueStore } from '../queue/sqlite';
 import { pushToSheets } from '../sheets/push';
 import fs from 'fs';
 import path from 'path';
-import * as pdfParse from 'pdf-parse';
+import { execSync } from 'child_process';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
@@ -39,39 +39,67 @@ interface PdfExtraction {
   residence?: string;
 }
 
+function ocrPdf(pdfPath: string): string {
+  const dir = path.dirname(pdfPath);
+  const base = path.basename(pdfPath, '.pdf');
+  const imgPrefix = path.join(dir, `${base}_page`);
+  const ocrOutput = path.join(dir, `${base}_ocr`);
+
+  try {
+    execSync(`pdftoppm -png -r 300 "${pdfPath}" "${imgPrefix}"`, { timeout: 15000 });
+
+    const imgFiles = fs.readdirSync(dir)
+      .filter(f => f.startsWith(`${base}_page`) && f.endsWith('.png'))
+      .sort()
+      .map(f => path.join(dir, f));
+
+    if (imgFiles.length === 0) return '';
+
+    let fullText = '';
+    for (const imgFile of imgFiles) {
+      execSync(`tesseract "${imgFile}" "${ocrOutput}" --psm 6 2>/dev/null`, { timeout: 30000 });
+      if (fs.existsSync(`${ocrOutput}.txt`)) {
+        fullText += fs.readFileSync(`${ocrOutput}.txt`, 'utf-8') + '\n';
+        fs.unlinkSync(`${ocrOutput}.txt`);
+      }
+      fs.unlinkSync(imgFile);
+    }
+
+    return fullText;
+  } catch (err: any) {
+    log({ stage: 'ocr_error', error: err.message });
+    return '';
+  }
+}
+
 async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
   try {
-    const fileBuffer = fs.readFileSync(pdfPath);
-    const uint8 = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
-    const { PDFParse } = require('pdf-parse') as { PDFParse: any };
-    const parser = new PDFParse(uint8);
-    await parser.load();
-    const rawText = await parser.getText();
-    const text: string = typeof rawText === 'string' ? rawText : JSON.stringify(rawText);
+    const text = ocrPdf(pdfPath);
+    if (!text) return {};
 
-    log({ stage: 'pdf_text_extracted', length: text.length, preview: text.substring(0, 300), type: typeof rawText });
+    log({ stage: 'pdf_ocr_extracted', length: text.length, preview: text.substring(0, 200) });
 
-    const totalMatch = text.match(/Total\s*\$?\s*([\d,]+(?:\.\d+)?)/i);
     let amount: string | undefined;
+    const totalMatch = text.match(/Total\s*\|?\s*\$\s*([\d,]+(?:\.\d+)?)/i);
     if (totalMatch) {
       const raw = totalMatch[1].replace(/,/g, '');
       amount = String(Math.floor(parseFloat(raw)));
     }
 
     let leadType: string | undefined;
-    if (/Certificate\s+of\s+Release/i.test(text)) {
+    if (/Form\s+668\s*\(?\s*Z\s*\)?/i.test(text) || /Certificate\s+of\s+Release\s+of\s+Federal/i.test(text)) {
       leadType = 'Release';
-    } else if (/Notice\s+of\s+Federal\s+Tax\s+Li/i.test(text)) {
+    } else if (/Form\s+668\s*\(?\s*Y\s*\)?/i.test(text) || /Notice\s+of\s+Federal\s+Tax\s+Li/i.test(text)) {
       leadType = 'Lien';
     }
 
     const nameMatch = text.match(/Name\s+of\s+Taxpayer\s+(.+?)(?:\n|Residence)/is);
     const taxpayerName = nameMatch ? nameMatch[1].trim() : undefined;
 
-    const residenceMatch = text.match(/Residence\s+(.+?)(?:\n.*?IMPORTANT|$)/is);
+    const residenceMatch = text.match(/Residence\s+(.+?)(?:\n.*?(?:Tax Period|IMPORTANT|Kind of Tax))/is);
     const residence = residenceMatch ? residenceMatch[1].trim() : undefined;
 
-    await parser.destroy();
+    log({ stage: 'pdf_fields_extracted', amount, leadType, taxpayerName: taxpayerName?.substring(0, 50), residence: residence?.substring(0, 50) });
     return { amount, leadType, taxpayerName, residence };
   } catch (err: any) {
     log({ stage: 'pdf_parse_error', error: err.message });
@@ -178,39 +206,33 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
           const pdfPath = path.join(downloadDir, `${fileNumber}.pdf`);
 
           try {
-            const [download] = await Promise.all([
-              page.waitForEvent('download', { timeout: 15000 }),
-              downloadLink.click()
-            ]);
+            const dlHref = await downloadLink.getAttribute('href');
+            let pdfBuffer: Buffer | null = null;
 
-            let saved = false;
-            try {
-              await download.saveAs(pdfPath);
-              if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 100) saved = true;
-            } catch { /* remote CDP - saveAs may not work */ }
+            if (dlHref) {
+              const fetchUrl = dlHref.startsWith('http') ? dlHref : `https://bizfileonline.sos.ca.gov${dlHref}`;
+              const b64 = await page.evaluate(async (url: string) => {
+                try {
+                  const resp = await fetch(url, { credentials: 'include' });
+                  const buf = await resp.arrayBuffer();
+                  const bytes = new Uint8Array(buf);
+                  let binary = '';
+                  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+                  return btoa(binary);
+                } catch { return ''; }
+              }, fetchUrl);
 
-            if (!saved) {
-              try {
-                const readable = await download.createReadStream();
-                if (readable) {
-                  const chunks: Buffer[] = [];
-                  for await (const chunk of readable) chunks.push(Buffer.from(chunk));
-                  const buf = Buffer.concat(chunks);
-                  if (buf.length > 100) {
-                    fs.writeFileSync(pdfPath, buf);
-                    saved = true;
-                  }
-                }
-              } catch { /* stream not available */ }
+              if (b64) pdfBuffer = Buffer.from(b64, 'base64');
             }
 
-            if (saved) {
-              log({ stage: 'detail_pdf_downloaded', file_number: fileNumber, size: fs.statSync(pdfPath).size });
+            if (pdfBuffer && pdfBuffer.length > 500) {
+              fs.writeFileSync(pdfPath, pdfBuffer);
+              log({ stage: 'detail_pdf_downloaded', file_number: fileNumber, size: pdfBuffer.length });
               pdfData = await extractFromPDF(pdfPath);
               log({ stage: 'detail_pdf_parsed', file_number: fileNumber, amount: pdfData.amount, lead_type: pdfData.leadType });
               try { fs.unlinkSync(pdfPath); } catch {}
             } else {
-              log({ stage: 'detail_pdf_skipped', file_number: fileNumber });
+              log({ stage: 'detail_pdf_skipped', file_number: fileNumber, size: pdfBuffer?.length ?? 0 });
             }
           } catch (err: any) {
             log({ stage: 'detail_pdf_failed', file_number: fileNumber, error: err.message });
