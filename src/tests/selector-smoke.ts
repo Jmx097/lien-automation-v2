@@ -1,5 +1,5 @@
-import { JSDOM } from "jsdom";
-import { selectFederalTaxLienFromDocument } from "../scraper/file_type_selector";
+import { JSDOM } from 'jsdom';
+import { selectFederalTaxLienFromDocument } from '../scraper/file_type_selector';
 
 type Fixture = {
   name: string;
@@ -8,7 +8,7 @@ type Fixture = {
 
 const fixtures: Fixture[] = [
   {
-    name: "proper combobox",
+    name: 'proper combobox',
     html: `
       <label for="fileType">File Type</label>
       <select id="fileType" aria-label="File Type" role="combobox">
@@ -18,7 +18,7 @@ const fixtures: Fixture[] = [
     `,
   },
   {
-    name: "plain select with label",
+    name: 'plain select with label',
     html: `
       <label for="search-file">File Type</label>
       <select id="search-file">
@@ -28,7 +28,7 @@ const fixtures: Fixture[] = [
     `,
   },
   {
-    name: "select requiring DOM fallback",
+    name: 'select requiring DOM fallback',
     html: `
       <select aria-label="File Type Filter" style="display:none">
         <option value="u">UCC Financing Statement</option>
@@ -45,13 +45,15 @@ for (const fixture of fixtures) {
     throw new Error(`[${fixture.name}] helper returned false`);
   }
 
-  const select = dom.window.document.querySelector("select") as HTMLSelectElement | null;
+  const select = dom.window.document.querySelector('select') as HTMLSelectElement | null;
   const option = select?.selectedOptions[0]?.textContent?.trim();
-  if (option !== "Federal Tax Lien") {
-    throw new Error(`[${fixture.name}] expected selected option 'Federal Tax Lien', got '${option}'`);
+  if (option !== 'Federal Tax Lien') {
+    throw new Error(
+      `[${fixture.name}] expected selected option 'Federal Tax Lien', got '${option}'`
+    );
   }
 
   console.log(`PASS: ${fixture.name}`);
 }
 
-console.log("Selector smoke test passed for all fixtures.");
+console.log('Selector smoke test passed for all fixtures.');
