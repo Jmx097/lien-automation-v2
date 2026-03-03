@@ -1,3 +1,10 @@
+/**
+ * LEGACY CONFIG (ARCHIVED)
+ *
+ * This file is kept only for historical reference.
+ * Do not use this for normal production startup.
+ * Use ecosystem.config.js for the default PM2 profile (lien-scraper only).
+ */
 module.exports = {
   apps: [
     {
