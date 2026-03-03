@@ -8,6 +8,11 @@ This project provides an Express.js API server that scrapes lien data from the C
 
 **Current Status**: Production-oriented API with live CA SOS scraping, queueing, schedule readiness checks, externally triggered schedule runs, and persisted scheduler run history in SQLite.
 
+## Planning Documents
+
+- [Project Plan & Delivery Summary](PR_SUMMARY.md)
+- [Phase 2 Plan (Operational Maturity)](PHASE2_PLAN.md)
+
 ## Features
 
 - **Live CA SOS scraping API**: Uses Playwright with Chromium (via Bright Data SBR CDP) to scrape filing records.

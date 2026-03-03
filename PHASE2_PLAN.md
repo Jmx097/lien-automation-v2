@@ -1,83 +1,61 @@
-# Phase 2 Implementation Plan
+# Phase 2 Plan (Operational Maturity)
 
-Based on the MCP_GATE_PIPELINE_PLAN.md, here's what we need to implement for Phase 2:
+**Last reviewed:** 2026-03-03 (UTC)  
+**Owner:** Platform Engineering (Lien Automation v2)
 
-## Goals
-1. Update queue schema (status, chunk_id, etc.)
-2. Implement chunk processor
-3. Add checkpoint tracking
-4. Update scraper to use chunks
+## Context
+The original Phase 2 draft focused on queue chunking schema changes and checkpoint tables. Since then, major scheduler and persistence work has already shipped (PRs #24, #26, #27, #28, #29, #31, #32, #33), so this plan is now reframed around operational maturity.
 
-## Key Files to Create/Modify
+## Completed foundation items (already delivered)
 
-### 1. Database Schema Updates
-- Update `src/queue/sqlite.ts` to add new columns:
-  - `chunk_id TEXT`
-  - `status TEXT DEFAULT 'pending'` (pending | in_progress | done | failed)
-  - `error_code TEXT`
-  - `retry_count INTEGER DEFAULT 0`
-  - `last_attempt_at TIMESTAMP`
-  - `completed_at TIMESTAMP`
+- [x] External schedule trigger endpoint with idempotency controls (**PR #24**, commit `271d165`)
+- [x] Scheduled run upload integration in execution lifecycle (**PR #26**, commit `75b5d60`)
+- [x] Persisted schedule history + cooldown checks in SQLite (**PR #27**, commit `8445912`)
+- [x] Production startup standard + schedule readiness checks (**PR #28**, commit `7bcf521`)
+- [x] Scheduled run retry correctness after errors (**PR #29**, commit `3e7de4f`)
+- [x] DB directory auto-creation for queue reliability (**PR #31**, commit `044315b`)
+- [x] Last-7-days helper + SBR env loading fix (**PR #32**, commit `e59f3a5`)
 
-### 2. Checkpoint Table
-- Add new table for tracking checkpoints:
-  ```sql
-  CREATE TABLE checkpoints (
-    id INTEGER PRIMARY KEY,
-    last_processed_id INTEGER,
-    last_processed_date TEXT,
-    chunk_size INTEGER DEFAULT 25,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-  ```
+## Active next milestone set
 
-### 3. Run Summaries Table
-- Add new table for run summaries:
-  ```sql
-  CREATE TABLE run_summaries (
-    id INTEGER PRIMARY KEY,
-    chunk_id TEXT,
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    expected_count INTEGER,
-    processed_count INTEGER,
-    failed_count INTEGER,
-    timeout_count INTEGER,
-    summary_json TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-  ```
+### Milestone A — Reliability hardening
+**Goal:** Reduce failed/partial runs under unstable browser sessions.
 
-### 4. Chunk Processor Logic
-- Enhance `src/scraper/chunk-processor.ts` with:
-  - Chunk definition logic (count-based and date-window)
-  - Integration with Gate 2 (chunk integrity)
-  - Integration with Gate 3 (post-run verification)
+- [ ] Define and enforce run-level retry budget and backoff policy for scheduler-triggered runs.
+- [ ] Add deterministic failure classes (`network`, `selector`, `modal-timeout`, `upload`) for postmortems.
+- [ ] Implement stop/resume guardrails for consecutive row failures with clear operator signals.
+- [ ] Add regression tests around scheduler idempotency + retry interactions.
 
-### 5. Enhanced Scraper
-- Update scraping logic to work with chunks instead of monolithic runs
+### Milestone B — Observability baseline
+**Goal:** Make run health visible without code inspection.
 
-## Implementation Steps
+- [ ] Standardize structured log fields across scrape, queue, and scheduler paths.
+- [ ] Emit run summary counters (attempted, scraped, uploaded, failed, duration) per run.
+- [ ] Publish a minimal operator runbook for interpreting `/schedule` and `/schedule/health` outputs.
+- [ ] Add a lightweight error-rate and run-duration trend report script.
 
-1. Create branch: `feature/phase2-chunking`
-2. Update database schema in `src/queue/sqlite.ts`
-3. Implement checkpoint tracking
-4. Enhance chunk processor with integrity and verification gates
-5. Update main scraper to use chunking
-6. Add tests for new functionality
-7. Update documentation
-8. Create PR
+### Milestone C — Recovery workflows
+**Goal:** Enable safe replay and manual repair when a run partially fails.
 
-## Commands to Run
+- [ ] Document and implement replay flow for failed scheduled runs with idempotency safety.
+- [ ] Add “requeue failed subset” utility for queue-backed paths.
+- [ ] Define manual recovery checklist for Sheets upload failures.
+- [ ] Add validation check that compares scraped vs uploaded counts before closeout.
 
-```bash
-# Create new branch
-git checkout -b feature/phase2-chunking
+### Milestone D — OCR roadmap (conditional)
+**Goal:** Decide whether OCR investment is justified for scanned CA SOS PDFs.
 
-# After implementation, commit changes
-git add .
-git commit -m "feat: Implement Phase 2 - Chunking Logic and Schema Updates"
+- [ ] Quantify current extraction gap from image-based PDFs (metadata-only vs required lien fields).
+- [ ] Evaluate 1–2 OCR options (accuracy, runtime, cost) on a small labeled sample.
+- [ ] Recommend go/no-go decision with success metrics and rollout constraints.
 
-# Push and create PR
-git push -u origin feature/phase2-chunking
-```
+## Definition of done for this phase
+
+Phase 2 is complete when:
+1. Reliability + observability + recovery milestones have measurable acceptance criteria and passing checks.
+2. Operator workflows are documented well enough to handle routine failures without source-code deep dives.
+3. OCR direction is explicitly decided (adopt/defer) with rationale captured.
+
+## Review cadence
+- Weekly plan review during active implementation.
+- Immediate update required after each merged PR that changes scheduler, queue, scraping reliability, or document extraction behavior.
