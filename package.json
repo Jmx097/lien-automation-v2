@@ -19,7 +19,9 @@
     "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
-    "format": "prettier --write src/**/*.ts"
+    "format": "prettier --write src/**/*.ts",
+    "start:job": "node dist/src/job-entrypoint.js",
+    "dev:job": "ts-node src/job-entrypoint.ts"
   },
   "keywords": [],
   "author": "",

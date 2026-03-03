@@ -235,6 +235,11 @@ Cloud Scheduler equivalent: create two jobs (`morning`, `afternoon`) with the sa
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
 
+
+## Cloud Run Job Deployment
+
+For production one-shot scraping on Cloud Run Jobs (with two Cloud Scheduler triggers, retry policy, and monitoring sink setup), see [`docs/deployment/cloud-run-job.md`](docs/deployment/cloud-run-job.md).
+
 ## Code Quality: Linting and Formatting
 
 This project now includes linting and code formatting tools to ensure code quality and consistency.
