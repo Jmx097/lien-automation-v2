@@ -11,8 +11,8 @@
         "NODE_ENV": "production",
         "PORT": "4000"
       },
-      "max_memory_restart": "1G",
-      "node_args": "--max-old-space-size=1024",
+      "max_memory_restart": "768M",
+      "node_args": "--max-old-space-size=768",
       "out_file": "./logs/mission-control-out.log",
       "error_file": "./logs/mission-control-error.log",
       "log_date_format": "YYYY-MM-DD HH:mm:ss",

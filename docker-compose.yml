@@ -18,6 +18,11 @@ services:
     volumes:
       - ./data:/app/data
     command: ["node", "dist/server.js"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   mission-control:
     build:
@@ -37,12 +42,17 @@ services:
       # Set this if OpenClaw runs on the host machine:
       OPENCLAW_GATEWAY_URL: ws://host.docker.internal:18789
       # Node.js memory limits
-      NODE_OPTIONS: --max-old-space-size=1024
+      NODE_OPTIONS: --max-old-space-size=${MISSION_CONTROL_MAX_OLD_SPACE_MB:-768}
     volumes:
       - mission-control-data:/app/data
       - mission-control-workspace:/app/workspace
     depends_on:
       - lien-scraper
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   mission-control-data:
