@@ -19,15 +19,11 @@ export class SQLiteQueueStore implements QueueStore {
         VALUES (?, ?, ?, ?)
       `);
       for (const record of records) {
-        const fingerprint = crypto.createHash('sha256')
+        const fingerprint = crypto
+          .createHash('sha256')
           .update(`${record.source}-${record.file_number}-${record.filing_date}`)
           .digest('hex');
-        insert.run(
-          fingerprint, 
-          record.source, 
-          record.file_number,
-          record.filing_date
-        );
+        insert.run(fingerprint, record.source, record.file_number, record.filing_date);
       }
     });
     tx();
@@ -35,28 +31,28 @@ export class SQLiteQueueStore implements QueueStore {
 
   async claimBatch(limit: number): Promise<QueueJob[]> {
     const now = new Date().toISOString();
-    
+
     const select = this.db.prepare(`
       SELECT * FROM queue_jobs 
       WHERE status = 'queued' OR (status = 'failed' AND locked_until < ?)
       ORDER BY created_at ASC
       LIMIT ?
     `);
-    
+
     const jobs: any[] = select.all(now, limit);
-    
+
     if (jobs.length === 0) return [];
-    
+
     const update = this.db.prepare(`
       UPDATE queue_jobs 
       SET status = 'processing', locked_until = ?, attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `);
-    
+
     for (const job of jobs) {
       update.run(now, job.id);
     }
-    
+
     return jobs.map(row => ({
       id: row.id,
       fingerprint: row.fingerprint,
@@ -67,7 +63,7 @@ export class SQLiteQueueStore implements QueueStore {
       locked_until: now,
       attempts: row.attempts + 1,
       created_at: row.created_at,
-      updated_at: row.updated_at
+      updated_at: row.updated_at,
     }));
   }
 
@@ -93,7 +89,9 @@ export class SQLiteQueueStore implements QueueStore {
   }
 
   async getPendingCount(): Promise<number> {
-    const row: any = this.db.prepare("SELECT COUNT(*) as count FROM queue_jobs WHERE status IN ('queued', 'processing')").get();
+    const row: any = this.db
+      .prepare("SELECT COUNT(*) as count FROM queue_jobs WHERE status IN ('queued', 'processing')")
+      .get();
     return row.count;
   }
 

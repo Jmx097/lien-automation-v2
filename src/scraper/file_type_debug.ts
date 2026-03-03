@@ -3,7 +3,6 @@ import path from 'path';
 import { Page } from 'playwright';
 import { log } from '../utils/logger';
 
-
 function sanitizeForLog(filePath: string): string {
   return filePath.replace(/[^a-zA-Z0-9_./-]/g, '_');
 }
@@ -15,12 +14,12 @@ export async function captureFileTypeSelectionFailureDebug(page: Page): Promise<
   const { advancedVisible, selectMetadata } = await page.evaluate(() => {
     const normalize = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
 
-    const advancedButton = Array.from(document.querySelectorAll('button')).find((button) =>
+    const advancedButton = Array.from(document.querySelectorAll('button')).find(button =>
       normalize(button.textContent).includes('advanced')
     );
 
     const buttonExpanded = advancedButton?.getAttribute('aria-expanded') === 'true';
-    const panelVisible = Array.from(document.querySelectorAll('input, select')).some((el) => {
+    const panelVisible = Array.from(document.querySelectorAll('input, select')).some(el => {
       const ariaLabel = normalize(el.getAttribute('aria-label'));
       const label = normalize((el as HTMLInputElement).labels?.[0]?.textContent);
       const name = normalize((el as HTMLInputElement).name);
@@ -33,11 +32,13 @@ export async function captureFileTypeSelectionFailureDebug(page: Page): Promise<
     });
 
     const allSelects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
-    const metadata = allSelects.map((sel) => ({
+    const metadata = allSelects.map(sel => ({
       id: sel.id || '',
       name: sel.name || '',
       ariaLabel: sel.getAttribute('aria-label') || '',
-      optionLabelCount: Array.from(sel.options).filter((opt) => (opt.textContent ?? '').trim().length > 0).length,
+      optionLabelCount: Array.from(sel.options).filter(
+        opt => (opt.textContent ?? '').trim().length > 0
+      ).length,
     }));
 
     return {
