@@ -111,6 +111,12 @@ Authenticated endpoint for external scheduler triggers. Accepts optional `slot` 
 - **Google Sheets upload paths** require both `SHEETS_KEY` and `SHEET_ID`.
 - **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
 
+## SQLite Queue DB Initialization
+
+- Queue store path remains `data/db/lien-queue.db` for compatibility.
+- `SQLiteQueueStore` now auto-creates the parent directory (`data/db`) on startup if missing.
+- You still must run `node src/queue/init-db.js` (idempotent) to create/update required SQLite schema tables before queue/scheduler operations.
+
 ## Environment Variables
 
 Required environment variables:

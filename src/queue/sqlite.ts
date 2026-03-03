@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { QueueStore, QueueJob } from './QueueStore';
@@ -9,6 +10,7 @@ export class SQLiteQueueStore implements QueueStore {
 
   constructor() {
     const dbPath = path.join(process.cwd(), 'data/db/lien-queue.db');
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
   }
 
