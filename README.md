@@ -198,6 +198,14 @@ LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_REC
 
 This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
 
+## Production Startup Path (single source of truth)
+
+Production startup is standardized on **systemd** only. Do not use ad-hoc startup scripts, PM2 ecosystems, or mixed process managers for production.
+
+- Service: `deploy/systemd/lien-automation-api.service`
+- Scheduler trigger: `deploy/systemd/lien-automation-schedule.timer` -> `deploy/systemd/lien-automation-schedule.service`
+- Runbook: [`docs/runbooks/systemd-production-runbook.md`](docs/runbooks/systemd-production-runbook.md)
+
 ## Schedule Source of Truth
 
 Production scheduling now uses **an external scheduler** targeting one authenticated endpoint: `POST /schedule/run`.
@@ -234,6 +242,7 @@ Cloud Scheduler equivalent: create two jobs (`morning`, `afternoon`) with the sa
 2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`; cooldown checks also read persisted DB state.
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
+5. `GET /schedule/health` returns schedule readiness checks (required env vars, SQLite reachability, and Google Sheets credential parsing).
 
 
 ## Cloud Run Job Deployment

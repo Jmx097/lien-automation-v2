@@ -1,0 +1,21 @@
+[Unit]
+Description=Lien Automation v2 API and scheduled job runner
+After=network.target
+
+[Service]
+Type=simple
+User=lien
+Group=lien
+WorkingDirectory=/opt/lien-automation-v2
+EnvironmentFile=/etc/lien-automation-v2/lien-automation.env
+ExecStartPre=/usr/bin/mkdir -p /opt/lien-automation-v2/data/db
+ExecStartPre=/usr/bin/node /opt/lien-automation-v2/src/queue/init-db.js
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

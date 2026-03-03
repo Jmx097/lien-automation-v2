@@ -1,0 +1,9 @@
+[Unit]
+Description=Trigger scheduled lien scrape slot
+After=lien-automation-api.service
+Requires=lien-automation-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/lien-automation-v2/lien-automation.env
+ExecStart=/usr/bin/curl --fail --show-error --silent -X POST http://127.0.0.1:8080/schedule/run -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" -H "Content-Type: application/json" -d '{}'

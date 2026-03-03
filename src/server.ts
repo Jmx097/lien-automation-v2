@@ -5,6 +5,7 @@ import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
 import { checkMissedRuns, getNextRuns, getRunHistory, runScheduledScrape } from "./scheduler";
+import { getScheduleReadinessReport } from "./schedule/readiness";
 
 dotenv.config();
 
@@ -158,6 +159,12 @@ app.post("/scrape-all", async (req, res) => {
     }
   }
   return res.json({ results });
+});
+
+app.get("/schedule/health", (_req, res) => {
+  const report = getScheduleReadinessReport();
+  const statusCode = report.status === "ready" ? 200 : 503;
+  res.status(statusCode).json(report);
 });
 
 app.get("/schedule", (req, res) => {
