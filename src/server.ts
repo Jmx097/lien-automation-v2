@@ -160,10 +160,14 @@ app.post("/scrape-all", async (req, res) => {
   return res.json({ results });
 });
 
-app.get("/schedule", (_req, res) => {
+app.get("/schedule", (req, res) => {
+  const limitParam = Number.parseInt(String(req.query.limit ?? '50'), 10);
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
+
   res.json({
     next_runs: getNextRuns(),
-    history: getRunHistory(),
+    history: getRunHistory(limit),
+    persisted: true,
   });
 });
 

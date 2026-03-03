@@ -24,7 +24,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_runs (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
-    slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+    slot_time TEXT NOT NULL,
     trigger_source TEXT NOT NULL CHECK(trigger_source IN ('external', 'manual')),
     started_at TEXT NOT NULL,
     finished_at TEXT,

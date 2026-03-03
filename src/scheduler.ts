@@ -7,12 +7,14 @@ import { pushToSheets } from './sheets/push';
 const SCHEDULE_MAX_RECORDS = 10;
 const LOOKBACK_DAYS = 7;
 const MISSED_RUN_GRACE_MINUTES = 45;
+const SCHEDULE_COOLDOWN_MINUTES = 10;
 
 type Slot = 'morning' | 'afternoon';
 type TriggerSource = 'external' | 'manual';
 
 export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
+  cooldown_of?: string;
 }
 
 interface RunScheduledScrapeOptions {
@@ -81,6 +83,7 @@ async function sendMissedRunAlert(slot: Slot, expectedAtIso: string, key: string
     const payload = {
       text: `Missed scheduled scrape run for ${slot}. Expected success by ${expectedAtIso} (ET). idempotency_key=${key}`,
       slot,
+      slot_time: key,
       expected_at: expectedAtIso,
       idempotency_key: key,
     };
@@ -112,13 +115,28 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     return { ...existing, duplicate_of: existing.id };
   }
 
+  const mostRecent = store.getMostRecentRun();
+  if (mostRecent) {
+    const elapsedMs = Date.now() - new Date(mostRecent.started_at).getTime();
+    const cooldownMs = SCHEDULE_COOLDOWN_MINUTES * 60 * 1000;
+    if (elapsedMs >= 0 && elapsedMs < cooldownMs && mostRecent.status === 'running') {
+      log({
+        stage: 'scheduled_run_cooldown_skipped',
+        idempotency_key: idempotencyKey,
+        cooldown_of: mostRecent.id,
+        cooldown_minutes: SCHEDULE_COOLDOWN_MINUTES,
+      });
+      return { ...mostRecent, cooldown_of: mostRecent.id };
+    }
+  }
+
   const { date_start, date_end } = getLast7DaysRange();
   const runId = `sched_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
   const run: ScheduledRunRecord = {
     id: runId,
     idempotency_key: idempotencyKey,
-    slot,
+    slot_time: idempotencyKey,
     trigger_source: triggerSource,
     started_at: new Date().toISOString(),
     status: 'running',
