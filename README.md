@@ -380,3 +380,8 @@ curl -sS http://127.0.0.1:8080/version
 ```
 
 Expected response includes the same `git_sha` you exported. Operators should always run `export GIT_SHA=$(git rev-parse --short HEAD)` before `docker compose build`.
+
+## Contribution Note: avoid backup artifacts
+
+Please do not commit editor or manual backup files (for example `*.bak`, `*.broken`, or `*.bak-*`).
+These are local artifacts and should remain untracked.
