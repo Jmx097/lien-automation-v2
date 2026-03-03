@@ -1,5 +1,11 @@
 #!/bin/bash
-# PM2 management script for Mission Control
+# LEGACY: PM2 management script for historical Mission Control process
+
+if [ "${ALLOW_LEGACY_MISSION_CONTROL:-}" != "1" ]; then
+  echo "WARNING: legacy-pm2-manager.sh is archived and must not be used in production."
+  echo "Set ALLOW_LEGACY_MISSION_CONTROL=1 only for controlled archival/testing use."
+  exit 2
+fi
 
 case "$1" in
   start)

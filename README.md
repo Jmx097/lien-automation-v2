@@ -183,9 +183,31 @@ These settings reduce overhead while keeping scraper behavior and output unchang
 
 ## Mission Control Status
 
-Mission Control/OpenClaw orchestration has been removed from the default deployment profile to reduce operational overhead and disk usage.
+Mission Control/OpenClaw orchestration is archived and removed from the default deployment profile to reduce operational overhead and disk usage.
 
-If you need to reintroduce it later, consult [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md) as historical reference and re-add a dedicated service definition.
+- **Approved startup path (production/default):** `docker compose up -d lien-scraper`
+- **Optional equivalent wrapper scripts:** `./start-services.sh`, `./start-services-optimized.sh`, `./clean-startup.sh`, `./restart-optimized.sh`
+- **Do not use archived Mission Control scripts in production.** They are retained only for historical or controlled lab/testing scenarios.
+
+If you need to reintroduce Mission Control later, consult [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md) as historical reference and re-add a dedicated service definition intentionally.
+
+### Operational Scripts
+
+Legacy Mission Control helpers are now explicitly archived and renamed with a `legacy-` prefix:
+
+- `legacy-deploy.sh`
+- `legacy-pm2-manager.sh`
+
+Both scripts now print a warning and exit non-zero by default. They only run when `ALLOW_LEGACY_MISSION_CONTROL=1` is set.
+
+Quick verification (expected runtime state is API-only):
+
+```bash
+docker compose up -d lien-scraper
+docker compose ps
+```
+
+`docker compose ps` should show only the `lien-scraper` API service as running.
 
 ## Notes
 

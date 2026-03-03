@@ -1,9 +1,15 @@
 #!/bin/bash
-# Deployment script for Mission Control integration with lien-automation-v2
+# LEGACY: Deployment script for historical Mission Control integration with lien-automation-v2
 
 set -e  # Exit on any error
 
-echo "Starting Mission Control deployment..."
+if [ "${ALLOW_LEGACY_MISSION_CONTROL:-}" != "1" ]; then
+  echo "WARNING: legacy-deploy.sh is archived and must not be used in production."
+  echo "Set ALLOW_LEGACY_MISSION_CONTROL=1 only for controlled archival/testing use."
+  exit 2
+fi
+
+echo "Starting LEGACY Mission Control deployment..."
 
 # Navigate to the project directory
 cd "$(dirname "$0")"
