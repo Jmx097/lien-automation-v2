@@ -198,42 +198,22 @@ LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_REC
 
 This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
 
-## Scheduled Daily Scraper
+## Schedule Source of Truth
 
-This project includes a scheduled daily scraper that runs at 3pm PST to automatically fetch lien records for the previous day. The scheduling is implemented using cron.
+Production scheduling uses **Option B: the internal in-process scheduler** implemented in `src/scheduler.ts` and started from `src/server.ts`.
 
-### Setup
+- **Timezone:** `America/New_York` (EST/EDT as observed by the runtime)
+- **Trigger times:** `07:30` and `14:30` daily (10-minute execution windows: `07:25-07:35` and `14:25-14:35`)
+- **Ownership:** API/platform team that deploys and operates this service
 
-The scheduled scraper is automatically set up when you deploy the application. It creates a cron job that runs daily at 3pm PST.
+### Operational details
 
-### How it Works
+1. `startScheduler()` runs when the API process starts.
+2. The scheduler checks every minute and runs `runScheduledScrape()` when inside either trigger window.
+3. A three-hour guard prevents duplicate runs too close together.
+4. Manual trigger remains available via `POST /schedule/run`.
 
-1. A shell script (`scripts/scheduled-ca-scraper.sh`) is executed daily at 3pm
-2. The script sets the date range to the previous day's filings
-3. It loads environment variables from the `.env` file
-4. It runs the scraper for the California SOS website
-5. Results are automatically exported to Google Sheets
-
-### Manual Testing
-
-You can manually test the scheduled scraper by running:
-
-```bash
-./scripts/scheduled-ca-scraper.sh
-```
-
-### Logs
-
-Scheduled scraper logs are written to `/var/log/lien-scraper.log`. Log rotation is configured to keep 7 days of logs.
-
-### Customization
-
-To modify the schedule:
-1. Edit the crontab: `crontab -e`
-2. Modify the cron expression (currently set to `0 15 * * *` for 3pm daily)
-3. Save and exit
-
-The cron expression format is: `minute hour day month day_of_week`
+There is no production crontab/script scheduler of record in this repository.
 
 ## Code Quality: Linting and Formatting
 
