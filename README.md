@@ -198,6 +198,21 @@ LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_REC
 
 This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
 
+## Last 7 Days Helper (default max 10)
+
+For a quick end-to-end run that scrapes the **last 7 calendar days (including today)** from CA SOS and pushes directly to Sheets using the existing mapping:
+
+```bash
+npx ts-node scripts/run-last7days.ts
+```
+
+- **Default cap**: 10 records per run (via the scraper’s `max_records` default).
+- **Temporary override** (this run only):
+  - Using env: `MAX_RECORDS_OVERRIDE=50 npx ts-node scripts/run-last7days.ts`
+  - Using CLI: `npx ts-node scripts/run-last7days.ts 50` (takes precedence over env)
+
+If an invalid override (non-numeric or ≤ 0) is provided, the script falls back to using 10 for that run.
+
 ## Production Startup Path (single source of truth)
 
 Production startup is standardized on **systemd** only. Do not use ad-hoc startup scripts, PM2 ecosystems, or mixed process managers for production.

@@ -10,7 +10,13 @@ import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 
-const SBR_CDP_URL = process.env.SBR_CDP_URL!;
+function getSbrCdpUrl(): string {
+  const url = process.env.SBR_CDP_URL;
+  if (!url) {
+    throw new Error('Missing SBR_CDP_URL environment variable for Bright Data Scraping Browser');
+  }
+  return url;
+}
 
 interface ScrapeOptions {
   date_start: string;
@@ -36,9 +42,10 @@ function computeFingerprint(source: string, fileNumber: string, filingDate: stri
 }
 
 function getRandomSessionCDP(): string {
+  const baseUrl = getSbrCdpUrl();
   const sessionId = `session_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
-  const separator = SBR_CDP_URL.includes('?') ? '&' : '?';
-  return `${SBR_CDP_URL}${separator}session=${sessionId}`;
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${separator}session=${sessionId}`;
 }
 
 function getCheckpointPath(key: string): string {
