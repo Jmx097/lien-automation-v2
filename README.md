@@ -6,17 +6,19 @@ A web scraper and automation tool for retrieving UCC (Uniform Commercial Code) f
 
 This project provides an Express.js API server that scrapes lien data from the CA Secretary of State's UCC filing system and automatically pushes the results to Google Sheets for analysis and tracking.
 
-**Current Status**: MVP phase with mock data implementation. The infrastructure validates Cloud Run deployment and Google Sheets integration before full automation is implemented.
+**Current Status**: Production-oriented API with live CA SOS scraping, queueing, schedule readiness checks, externally triggered schedule runs, and persisted scheduler run history in SQLite.
 
 ## Features
 
-- **Web Scraping**: Uses Playwright with Chromium for headless browser automation
-- **Rate Limiting**: Built-in rate limiting to prevent overwhelming target servers
-- **Retry Logic**: Automatic retry mechanisms for failed requests
-- **Google Sheets Integration**: Direct data export to Google Sheets
-- **Structured Logging**: JSON-formatted logs with timestamps
-- **Mission Control Integration**: Multi-agent orchestration with real-time monitoring
-- **Qwen Cost Tracking**: Monitor and track Qwen API usage and costs
+- **Live CA SOS scraping API**: Uses Playwright with Chromium (via Bright Data SBR CDP) to scrape filing records.
+- **Direct and queued execution paths**: `POST /scrape` pushes to Sheets immediately, while `POST /enqueue` stores records in SQLite-backed queue storage.
+- **Enhanced scrape mode**: `POST /scrape-enhanced` runs scrape processing without sheet upload in the same response flow.
+- **Scheduler readiness + introspection**:
+  - `GET /schedule/health` reports readiness checks and configuration status.
+  - `GET /schedule` returns next run windows and persisted schedule history.
+- **Externally triggered schedule runs**: `POST /schedule/run` supports authenticated scheduler triggers with slot/idempotency controls.
+- **Persisted scheduler history**: scheduled run records are stored in SQLite and used for idempotency/cooldown and monitoring.
+- **Structured logging and retry behavior**: runtime logs and scraper safeguards for operational reliability.
 
 ## Architecture
 
@@ -33,11 +35,21 @@ Additionally, the project now includes:
 - **Agents** (`agents/`): Custom MCP agents for chunk scraping, validation, and uploading
 - **Cost Tracking** (`scripts/qwen-cost-tracker.js`): Monitor Qwen API usage and costs
 
-## API Usage
+## API Endpoints
+
+The following routes are defined by the Express server.
+
+### GET /health
+
+Basic liveness check.
+
+### GET /version
+
+Runtime version metadata (`git_sha`, app version, Node version).
 
 ### POST /scrape
 
-Initiates a scraping job for the specified date range.
+Runs a scrape for a single site/date range and uploads results to Google Sheets.
 
 **Request Body**:
 ```json
@@ -60,6 +72,44 @@ Initiates a scraping job for the specified date range.
   "duration_seconds": 2.5
 }
 ```
+
+### POST /enqueue
+
+Runs a scrape and writes results to the SQLite queue store for downstream processing.
+
+### POST /scrape-all
+
+Runs scrape attempts for all configured scrapers and returns per-site outcomes.
+
+### POST /scrape-enhanced
+
+Runs scrape processing and returns record counts without a Sheets upload step in that route.
+
+### GET /schedule/health
+
+Returns scheduler readiness status and checks (including env/config dependencies).
+
+### GET /schedule
+
+Returns upcoming schedule windows and persisted run history (`history`) from the scheduler store.
+
+### POST /schedule/run
+
+Authenticated endpoint for external scheduler triggers. Accepts optional `slot` (`morning`/`afternoon`) and `idempotency_key`.
+
+## What is production-ready vs requires credentials/external dependencies
+
+### Production-ready in this repository
+
+- API route surface and request handling (`/health`, `/version`, `/scrape`, `/enqueue`, `/scrape-all`, `/scrape-enhanced`, `/schedule/health`, `/schedule`, `/schedule/run`).
+- SQLite-backed queue + scheduler persistence, including schedule history responses and missed-run checks.
+- Local validation tooling (`doctor`, type checks, selector smoke tests, and health smoke script).
+
+### Requires credentials or external services
+
+- **Live CA SOS scraping execution** requires a working `SBR_CDP_URL` (Bright Data Scraping Browser).
+- **Google Sheets upload paths** require both `SHEETS_KEY` and `SHEET_ID`.
+- **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
 
 ## Environment Variables
 
@@ -113,7 +163,6 @@ For detailed information about the Mission Control integration, see [MISSION_CON
 
 ## Notes
 
-- This is currently an MVP. Full scraping automation is in progress.
 - The scraper is configured to run in headless mode with sandbox disabled for container compatibility.
 - Human-like delays are implemented between actions to mimic natural browsing patterns.
 - Only California SOS (`ca_sos`) is supported in the current version.
