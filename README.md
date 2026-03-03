@@ -15,6 +15,8 @@ This project provides an Express.js API server that scrapes lien data from the C
 - **Retry Logic**: Automatic retry mechanisms for failed requests
 - **Google Sheets Integration**: Direct data export to Google Sheets
 - **Structured Logging**: JSON-formatted logs with timestamps
+- **Mission Control Integration**: Multi-agent orchestration with real-time monitoring
+- **Qwen Cost Tracking**: Monitor and track Qwen API usage and costs
 
 ## Architecture
 
@@ -24,6 +26,12 @@ The project is organized into three main modules:
 - **Sheets** (`src/sheets/`): Manages Google Sheets API integration
 - **Utils** (`src/utils/`): Utility functions for delays, rate limiting, retries, and logging
 - **Server** (`src/server.ts`): Express.js API server with `/scrape` endpoint
+
+Additionally, the project now includes:
+
+- **Mission Control** (`mission-control/`): AI Agent Orchestration Dashboard for task management
+- **Agents** (`agents/`): Custom MCP agents for chunk scraping, validation, and uploading
+- **Cost Tracking** (`scripts/qwen-cost-tracker.js`): Monitor Qwen API usage and costs
 
 ## API Usage
 
@@ -84,10 +92,24 @@ Data is exported to Google Sheets with a state column prepended.
 - **Web Framework**: Express.js
 - **Scraping**: Playwright (Chromium)
 - **API Integration**: Google Sheets API (googleapis)
+- **Orchestration**: Mission Control with OpenClaw Gateway
+- **Monitoring**: Qwen cost tracking and analysis
 
 ## Server
 
 The server runs on port 8080 by default.
+
+## Mission Control Integration
+
+This project now includes Mission Control integration for multi-agent orchestration:
+
+- **Dashboard**: Access at `http://localhost:4000`
+- **Task Management**: Create, plan, and dispatch scraping tasks
+- **Agent Orchestration**: Automated chunk scraping, validation, and uploading
+- **Real-time Monitoring**: Track agent activity and task progress
+- **Cost Tracking**: Monitor Qwen API usage and expenses
+
+For detailed information about the Mission Control integration, see [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md).
 
 ## Notes
 
@@ -98,7 +120,6 @@ The server runs on port 8080 by default.
 - On `TooManyResultsError`, halve the date range and retry.
 - The scraper uses Bright Data Scraping Browser via the `SBR_CDP_URL` connection string for remote Playwright sessions.
 - `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
-
 
 ## Test Commands
 

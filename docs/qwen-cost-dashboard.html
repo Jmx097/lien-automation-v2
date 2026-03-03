@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qwen Cost Tracking Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            flex: 1;
+            margin: 0 10px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .chart-container {
+            height: 300px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Qwen Cost Tracking Dashboard</h1>
+        
+        <div class="card">
+            <h2>Current Usage Statistics</h2>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value" id="total-cost">$0.00</div>
+                    <div class="stat-label">Total Estimated Cost</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="prompt-tokens">0</div>
+                    <div class="stat-label">Prompt Tokens</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="completion-tokens">0</div>
+                    <div class="stat-label">Completion Tokens</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="total-requests">0</div>
+                    <div class="stat-label">Total API Requests</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Recent Usage Logs</h2>
+            <table id="usage-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Model</th>
+                        <th>Prompt Tokens</th>
+                        <th>Completion Tokens</th>
+                        <th>Estimated Cost</th>
+                    </tr>
+                </thead>
+                <tbody id="usage-table-body">
+                    <!-- Data will be populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card">
+            <h2>Cost Trend</h2>
+            <div class="chart-container">
+                <canvas id="cost-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Sample data - in a real implementation, this would come from your backend
+        const sampleData = [
+            { timestamp: '2026-03-01T10:30:00Z', model: 'qwen-coder-plus', tokens_prompt: 1250, tokens_completion: 875, estimated_cost: 0.0023 },
+            { timestamp: '2026-03-01T11:45:00Z', model: 'qwen-coder-plus', tokens_prompt: 980, tokens_completion: 650, estimated_cost: 0.0018 },
+            { timestamp: '2026-03-01T13:15:00Z', model: 'qwen-coder-plus', tokens_prompt: 1520, tokens_completion: 1200, estimated_cost: 0.0031 },
+            { timestamp: '2026-03-01T14:30:00Z', model: 'qwen-coder-plus', tokens_prompt: 750, tokens_completion: 420, estimated_cost: 0.0012 },
+            { timestamp: '2026-03-01T15:45:00Z', model: 'qwen-coder-plus', tokens_prompt: 2100, tokens_completion: 1800, estimated_cost: 0.0045 }
+        ];
+
+        // Function to update statistics
+        function updateStats(data) {
+            let totalCost = 0;
+            let totalPromptTokens = 0;
+            let totalCompletionTokens = 0;
+            
+            data.forEach(entry => {
+                totalCost += entry.estimated_cost;
+                totalPromptTokens += entry.tokens_prompt;
+                totalCompletionTokens += entry.tokens_completion;
+            });
+            
+            document.getElementById('total-cost').textContent = '$' + totalCost.toFixed(4);
+            document.getElementById('prompt-tokens').textContent = totalPromptTokens.toLocaleString();
+            document.getElementById('completion-tokens').textContent = totalCompletionTokens.toLocaleString();
+            document.getElementById('total-requests').textContent = data.length;
+        }
+
+        // Function to populate usage table
+        function populateTable(data) {
+            const tbody = document.getElementById('usage-table-body');
+            tbody.innerHTML = '';
+            
+            data.forEach(entry => {
+                const row = document.createElement('tr');
+                
+                const timestampCell = document.createElement('td');
+                timestampCell.textContent = new Date(entry.timestamp).toLocaleString();
+                
+                const modelCell = document.createElement('td');
+                modelCell.textContent = entry.model;
+                
+                const promptTokensCell = document.createElement('td');
+                promptTokensCell.textContent = entry.tokens_prompt.toLocaleString();
+                
+                const completionTokensCell = document.createElement('td');
+                completionTokensCell.textContent = entry.tokens_completion.toLocaleString();
+                
+                const costCell = document.createElement('td');
+                costCell.textContent = '$' + entry.estimated_cost.toFixed(4);
+                
+                row.appendChild(timestampCell);
+                row.appendChild(modelCell);
+                row.appendChild(promptTokensCell);
+                row.appendChild(completionTokensCell);
+                row.appendChild(costCell);
+                
+                tbody.appendChild(row);
+            });
+        }
+
+        // Initialize dashboard
+        function initDashboard() {
+            updateStats(sampleData);
+            populateTable(sampleData);
+            
+            // In a real implementation, you would fetch data from your backend
+            // and update the dashboard periodically
+            /*
+            setInterval(() => {
+                fetch('/api/qwen-usage')
+                    .then(response => response.json())
+                    .then(data => {
+                        updateStats(data);
+                        populateTable(data);
+                    })
+                    .catch(error => console.error('Error fetching data:', error));
+            }, 30000); // Update every 30 seconds
+            */
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initDashboard);
+    </script>
+</body>
+</html>
