@@ -31,6 +31,7 @@ db.exec(`
     status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error')),
     records_scraped INTEGER NOT NULL DEFAULT 0,
     records_skipped INTEGER NOT NULL DEFAULT 0,
+    rows_uploaded INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
