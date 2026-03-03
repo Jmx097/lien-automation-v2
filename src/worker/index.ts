@@ -1,5 +1,5 @@
 import { SQLiteQueueStore } from '../queue/sqlite';
-import { pushToSheets } from '../sheets/push';
+import { buildCaliforniaRunTabTitle, pushToSheetsForTab } from '../sheets/push';
 import { log } from '../utils/logger';
 import { scrapeCASOSDetail } from './detail-scraper';
 import dotenv from 'dotenv';
@@ -40,6 +40,8 @@ async function processJob(job: any): Promise<any> {
 
 async function runWorker() {
   const queue = new SQLiteQueueStore();
+  const runStartedAt = new Date();
+  const tabTitle = buildCaliforniaRunTabTitle(runStartedAt);
 
   log({ stage: 'worker_start' });
 
@@ -57,7 +59,7 @@ async function runWorker() {
     try {
       const record = await processJob(job);
 
-      await pushToSheets([record]);
+      await pushToSheetsForTab([record], tabTitle);
 
       await queue.markDone([job.id]);
       log({ stage: 'worker_job_done', job_id: job.id });

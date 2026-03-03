@@ -10,6 +10,27 @@ type BusinessFlag = 'Business' | 'Personal';
 
 const INVALID_SHEET_TITLE_CHARS_REGEX = /[\\/?*\[\]:]/g;
 
+function getEasternTimestampForTab(d: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+  const yyyy = get('year');
+  const mm = get('month');
+  const dd = get('day');
+  const hh = get('hour');
+  const min = get('minute');
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
 function getPacificTimestampForTab(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
@@ -131,6 +152,12 @@ function sanitizeSheetTitle(input: string): string {
   const noApostrophes = noInvalid.replace(/'/g, '');
   const collapsed = noApostrophes.replace(/\s+/g, ' ');
   return collapsed.slice(0, 100);
+}
+
+export function buildCaliforniaRunTabTitle(runStartedAt: Date): string {
+  const ts = getEasternTimestampForTab(runStartedAt);
+  const raw = `California ${ts}`;
+  return sanitizeSheetTitle(raw);
 }
 
 export function formatRunTabName(

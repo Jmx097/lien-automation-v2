@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { log } from './utils/logger';
 import { scrapers } from './scraper/index';
 import { ScheduledRunStore, ScheduledRunRecord } from './scheduler/store';
-import { pushToSheets } from './sheets/push';
+import { buildCaliforniaRunTabTitle, pushToSheetsForTab } from './sheets/push';
 
 const SCHEDULE_MAX_RECORDS = 10;
 const LOOKBACK_DAYS = 7;
@@ -161,7 +161,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   try {
     const scraper = (scrapers as any).ca_sos;
     const records = await scraper({ date_start, date_end, max_records: SCHEDULE_MAX_RECORDS });
-    const uploadResult = await pushToSheets(records);
+    const startedAtDate = new Date(run.started_at);
+    const tabTitle = buildCaliforniaRunTabTitle(startedAtDate);
+    const uploadResult = await pushToSheetsForTab(records, tabTitle);
 
     run.records_scraped = records.length;
     run.rows_uploaded = uploadResult.uploaded;

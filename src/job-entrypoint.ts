@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { scrapers } from './scraper';
-import { pushToSheets } from './sheets/push';
+import { buildCaliforniaRunTabTitle, pushToSheetsForTab } from './sheets/push';
 import { log } from './utils/logger';
 
 dotenv.config();
@@ -98,7 +98,12 @@ async function main(): Promise<void> {
       max_records: config.max_records,
     });
 
-    const sheetResult = await pushToSheets(records);
+    const tabTitle =
+      config.site === 'ca_sos'
+        ? buildCaliforniaRunTabTitle(startedAt)
+        : 'Records';
+
+    const sheetResult = await pushToSheetsForTab(records, tabTitle);
     const finishedAt = new Date();
 
     log({
