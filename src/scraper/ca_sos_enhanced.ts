@@ -16,6 +16,7 @@ interface ScrapeOptions {
   date_start: string;
   date_end: string;
   max_records?: number;
+  chunk_id?: string;
 }
 
 function humanDelay() {
@@ -150,7 +151,7 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
 }
 
 export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<LienRecord[]> {
-  const { date_start, date_end, max_records = 10 } = options;
+  const { date_start, date_end, max_records = 10, chunk_id } = options;
   const queue = new SQLiteQueueStore();
   const processedRecords: LienRecord[] = [];
 
@@ -220,7 +221,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         await pushToSheets([record]);
         log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
         
-        await queue.insertMany([record]);
+        await queue.insertMany([record], { chunkId: chunk_id });
         
         processedRecords.push(record);
       }

@@ -15,7 +15,9 @@
     "test:selector-smoke": "ts-node src/tests/selector-smoke.ts",
     "test:gates": "vitest run tests/gates/",
     "test:retry": "vitest run tests/utils/retry-policy.test.ts",
-    "demo:chunk": "ts-node scripts/run-chunk-demo.ts"
+    "demo:chunk": "ts-node scripts/run-chunk-demo.ts",
+    "chunk:range": "ts-node scripts/run-chunk-range.ts",
+    "ops:daily-summary": "ts-node scripts/generate-daily-ops-summary.ts"
   },
   "keywords": [],
   "author": "",
