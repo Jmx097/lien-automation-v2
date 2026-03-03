@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "dev": "ts-node src/server.ts",
     "test": "npm run test:types && npm run test:selector-smoke",
     "worker": "ts-node src/worker/index.ts",
