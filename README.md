@@ -34,9 +34,8 @@ The project is organized into three main modules:
 - **Utils** (`src/utils/`): Utility functions for delays, rate limiting, retries, and logging
 - **Server** (`src/server.ts`): Express.js API server with `/scrape` endpoint
 
-Additionally, the project now includes:
+Additionally, the repository includes optional artifacts for historical orchestration experiments:
 
-- **Mission Control** (`mission-control/`): AI Agent Orchestration Dashboard for task management
 - **Agents** (`agents/`): Custom MCP agents for chunk scraping, validation, and uploading
 - **Cost Tracking** (`scripts/qwen-cost-tracker.js`): Monitor Qwen API usage and costs
 
@@ -153,7 +152,7 @@ Data is exported to Google Sheets with a state column prepended.
 - **Web Framework**: Express.js
 - **Scraping**: Playwright (Chromium)
 - **API Integration**: Google Sheets API (googleapis)
-- **Orchestration**: Mission Control with OpenClaw Gateway
+- **Orchestration**: External scheduler trigger (`POST /schedule/run`) with SQLite-backed run history
 - **Monitoring**: Qwen cost tracking and analysis
 
 ## Server
@@ -164,9 +163,8 @@ The server runs on port 8080 by default.
 
 If your host is running near memory or disk limits, you can lower usage without reducing scrape quality:
 
-- `docker-compose.yml` now caps Mission Control Node heap to `768MB` by default (`MISSION_CONTROL_MAX_OLD_SPACE_MB`, overrideable).
-- Docker log rotation is enabled for both services (`max-size: 10m`, `max-file: 5`) to prevent unbounded container log growth.
-- For PM2-based deployments, Mission Control now uses a lower restart limit (`768M`) and Node old-space (`768MB`).
+- Default `docker-compose.yml` now runs only the core `lien-scraper` service.
+- Docker log rotation is enabled (`max-size: 10m`, `max-file: 5`) to prevent unbounded container log growth.
 
 Operational cleanup commands (safe housekeeping):
 
@@ -183,17 +181,11 @@ sudo journalctl --vacuum-time=7d
 
 These settings reduce overhead while keeping scraper behavior and output unchanged.
 
-## Mission Control Integration
+## Mission Control Status
 
-This project now includes Mission Control integration for multi-agent orchestration:
+Mission Control/OpenClaw orchestration has been removed from the default deployment profile to reduce operational overhead and disk usage.
 
-- **Dashboard**: Access at `http://localhost:4000`
-- **Task Management**: Create, plan, and dispatch scraping tasks
-- **Agent Orchestration**: Automated chunk scraping, validation, and uploading
-- **Real-time Monitoring**: Track agent activity and task progress
-- **Cost Tracking**: Monitor Qwen API usage and expenses
-
-For detailed information about the Mission Control integration, see [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md).
+If you need to reintroduce it later, consult [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md) as historical reference and re-add a dedicated service definition.
 
 ## Notes
 
