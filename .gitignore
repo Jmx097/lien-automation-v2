@@ -3,3 +3,8 @@ node_modules/
 dist/
 build.log
 src/scraper/ca_sos_orig.ts
+
+# Ignore local backup/editor artifact files
+*.bak
+*.broken
+*.bak-*
