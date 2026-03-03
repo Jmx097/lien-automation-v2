@@ -11,6 +11,12 @@ COPY package*.json ./
 # Install dependencies
 RUN npm install
 
+# OCR runtime dependencies for image-based CA SOS PDFs
+RUN apk add --no-cache \
+  poppler-utils \
+  tesseract-ocr \
+  tesseract-ocr-data-eng
+
 # Copy the rest of the source
 COPY . .
 

@@ -100,6 +100,65 @@ interface PdfExtraction {
   residence?: string;
 }
 
+let ocrToolingChecked = false;
+
+function hasCommand(cmd: string): boolean {
+  try {
+    execSync(`command -v ${cmd}`, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeOcrText(text: string): string {
+  const cleaned = text
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/[|]/g, 'I')
+    .replace(/\$\s+/g, '$')
+    .replace(/\s{2,}/g, ' ');
+
+  // Correct common OCR slips around numeric values.
+  return cleaned
+    .replace(/(?<=\d)[Oo](?=\d)/g, '0')
+    .replace(/(?<=\$)\s*[Oo](?=[\d,])/g, '0')
+    .replace(/(?<=\d)[lI](?=\d)/g, '1');
+}
+
+function extractAmountFromText(text: string): string | undefined {
+  const normalized = normalizeOcrText(text);
+
+  const keywordPatterns = [
+    /(?:Total|Amount\s+Due|Amount|Balance|TOTAL\s+AMOUNT)\s*[:|\-]?\s*\$?\s*([\dOolI][\dOolI,\s]*(?:\.\d{1,2})?)/gi,
+  ];
+
+  for (const pattern of keywordPatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(normalized)) !== null) {
+      const raw = match[1]
+        .replace(/[O]/g, '0')
+        .replace(/[lI]/g, '1')
+        .replace(/\s+/g, '')
+        .replace(/,/g, '');
+      const parsed = Number.parseFloat(raw);
+      if (!Number.isNaN(parsed) && parsed > 0 && parsed < 1_000_000_000) {
+        return String(Math.trunc(parsed));
+      }
+    }
+  }
+
+  // Fallback: find currency-like tokens and pick the largest plausible value.
+  const currencyLike = normalized.match(/\$?\s*\d{1,3}(?:[\s,]\d{3})*(?:\.\d{1,2})?/g) ?? [];
+  const candidates = currencyLike
+    .map((chunk) => Number.parseFloat(chunk.replace(/[\s,$]/g, '')))
+    .filter((value) => !Number.isNaN(value) && value > 0 && value < 1_000_000_000)
+    .sort((a, b) => b - a);
+
+  return candidates.length > 0 ? String(Math.trunc(candidates[0])) : undefined;
+}
+
 function ocrPdf(pdfPath: string): string {
   const dir = path.dirname(pdfPath);
   const base = path.basename(pdfPath, '.pdf');
@@ -107,6 +166,14 @@ function ocrPdf(pdfPath: string): string {
   const ocrOutput = path.join(dir, `${base}_ocr`);
 
   try {
+    if (!ocrToolingChecked) {
+      const tesseractInstalled = hasCommand('tesseract');
+      const pdftoppmInstalled = hasCommand('pdftoppm');
+      log({ stage: 'ocr_tooling_check', tesseract_installed: tesseractInstalled, pdftoppm_installed: pdftoppmInstalled });
+      ocrToolingChecked = true;
+      if (!tesseractInstalled || !pdftoppmInstalled) return '';
+    }
+
     execSync(`pdftoppm -png -r 300 "${pdfPath}" "${imgPrefix}"`, { timeout: 15000 });
 
     const imgFiles = fs.readdirSync(dir)
@@ -140,33 +207,10 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
 
     log({ stage: 'pdf_ocr_extracted', length: text.length, preview: text.substring(0, 200) });
 
-    let amount: string | undefined;
-    const patterns = [
-      /Total\s*\|?\s*\$\s*([\d,]+(?:\.\d{1,2})?)/i,
-      /Total\s*:?\s*([\d,]+(?:\.\d{1,2})?)/i,
-      /Amount\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
-      /Balance\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
-      /^\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*$/m,
-    ];
+    const amount = extractAmountFromText(text);
 
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (!match) continue;
-
-      const raw = match[1].replace(/,/g, '');
-      const parsed = parseFloat(raw);
-
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        const wholeDollars = Math.trunc(parsed);
-        amount = String(wholeDollars);
-        log({
-          stage: 'pdf_amount_matched',
-          pattern: pattern.toString(),
-          raw_match: match[1],
-          parsed_amount: amount,
-        });
-        break;
-      }
+    if (amount) {
+      log({ stage: 'pdf_amount_matched', parsed_amount: amount });
     }
 
     if (!amount) {
