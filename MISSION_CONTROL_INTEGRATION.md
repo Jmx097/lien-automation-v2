@@ -1,5 +1,7 @@
 # Mission Control Integration for lien-automation-v2
 
+> **Status:** Archived reference. Mission Control is disabled in the default workspace/deployment.
+
 This document describes the integration of Mission Control with the lien-automation-v2 repository to enable multi-agent orchestration for automated lien scraping.
 
 ## Overview
