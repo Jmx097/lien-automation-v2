@@ -1,0 +1,11 @@
+[Unit]
+Description=Two daily scheduled scrape triggers (07:30 and 14:30 America/New_York)
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 America/New_York
+OnCalendar=*-*-* 14:30:00 America/New_York
+Persistent=true
+Unit=lien-automation-schedule.service
+
+[Install]
+WantedBy=timers.target
