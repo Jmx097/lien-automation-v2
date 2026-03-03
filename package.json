@@ -12,7 +12,10 @@
     "test:types": "tsc --noEmit",
     "test:smoke": "bash scripts/smoke-health.sh",
     "doctor": "bash scripts/doctor.sh",
-    "test:selector-smoke": "ts-node src/tests/selector-smoke.ts"
+    "test:selector-smoke": "ts-node src/tests/selector-smoke.ts",
+    "test:gates": "vitest run tests/gates/",
+    "test:retry": "vitest run tests/utils/retry-policy.test.ts",
+    "demo:chunk": "ts-node scripts/run-chunk-demo.ts"
   },
   "keywords": [],
   "author": "",
@@ -33,10 +36,11 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/jsdom": "^28.0.0",
-    "@types/node": "^25.2.3",
+    "@types/node": "^25.3.3",
     "jsdom": "^28.1.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20.16.0"
