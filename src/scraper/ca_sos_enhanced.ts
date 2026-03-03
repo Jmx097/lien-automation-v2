@@ -141,10 +141,39 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
     log({ stage: 'pdf_ocr_extracted', length: text.length, preview: text.substring(0, 200) });
 
     let amount: string | undefined;
-    const totalMatch = text.match(/Total\s*\|?\s*\$\s*([\d,]+(?:\.\d+)?)/i);
-    if (totalMatch) {
-      const raw = totalMatch[1].replace(/,/g, '');
-      amount = String(Math.floor(parseFloat(raw)));
+    const patterns = [
+      /Total\s*\|?\s*\$\s*([\d,]+(?:\.\d{1,2})?)/i,
+      /Total\s*:?\s*([\d,]+(?:\.\d{1,2})?)/i,
+      /Amount\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+      /Balance\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
+      /^\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*$/m,
+    ];
+
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (!match) continue;
+
+      const raw = match[1].replace(/,/g, '');
+      const parsed = parseFloat(raw);
+
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        const wholeDollars = Math.trunc(parsed);
+        amount = String(wholeDollars);
+        log({
+          stage: 'pdf_amount_matched',
+          pattern: pattern.toString(),
+          raw_match: match[1],
+          parsed_amount: amount,
+        });
+        break;
+      }
+    }
+
+    if (!amount) {
+      log({
+        stage: 'pdf_amount_not_found',
+        text_preview: text.substring(0, 500),
+      });
     }
 
     let leadType: string | undefined;
