@@ -1,73 +1,37 @@
-# Pull Request: Implement Phase 1 of MCP-Gated Pipeline
+# Project Plan & Delivery Summary
 
-## Summary
+**Last reviewed:** 2026-03-03 (UTC)  
+**Owner:** Platform Engineering (Lien Automation v2)
 
-This PR implements Phase 1 of the MCP-Gated Pipeline as outlined in the MCP_GATE_PIPELINE_PLAN.md.
+## Completed milestones (explicit references)
 
-## Changes Included
+### Core API + Scraping surface
+- ✅ Baseline CA SOS scraping API and enqueue flow are in place (`/scrape`, `/enqueue`, `/scrape-all`, `/scrape-enhanced`).
+- ✅ Scheduler run trigger endpoint, idempotency keys, and alerting path were added in **PR #24** (`271d165`).
+- ✅ Scheduled scrape lifecycle now includes upload integration in **PR #26** (`75b5d60`).
 
-### ✅ Gate Interfaces and Types
-- Created `src/gates/types.ts` with interfaces for:
-  - `GateResult` - Generic gate result structure
-  - `ChunkIntegrityResult` - Extended result for chunk integrity checks
-  - `PostRunVerifyResult` - Extended result for post-run verification
-  - `RunSummary` - Structure for run summary JSON
+### Scheduling hardening + persistence
+- ✅ Schedule history and cooldown checks are persisted in SQLite in **PR #27** (`8445912`).
+- ✅ Production startup path with readiness checks is standardized in **PR #28** (`7bcf521`).
+- ✅ Retry behavior for scheduled run error recovery was fixed in **PR #29** (`3e7de4f`).
 
-### ✅ Gate 1: Pre-Run Health Check
-- Implemented `src/gates/pre-run-health.ts` with comprehensive health checks:
-  - Docker container health verification
-  - Required environment variable validation (`BRIGHT_DATA_PROXY`, `GOOGLE_SHEETS_CREDENTIALS`, `DATABASE_URL`)
-  - Canary request testing with timeout
-  - Playwright browser installation check
+### Reliability + operational guardrails
+- ✅ Queue DB parent directory auto-creation was implemented in **PR #31** (`044315b`).
+- ✅ Last-7-days execution helper and Bright Data env loading fix landed in **PR #32** (`e59f3a5`).
+- ✅ Cleanup of backup artifacts and ignore rules completed in **PR #33** (`a5e5cf3`).
 
-### ✅ Retry Policy Utility
-- Created `src/utils/retry-policy.ts` with:
-  - Configurable retry policy with exponential backoff
-  - Timeout enforcement per operation
-  - Jitter implementation to prevent thundering herd
-  - Generic retry function that can wrap any async operation
+### Documentation sync
+- ✅ README production status and scheduler details were refreshed in commit `1383d98` (merged via **PR #30**).
 
-### ✅ Tests
-- Created comprehensive test files:
-  - `tests/gates/pre-run-health.test.ts` - Unit tests for pre-run health check
-  - `tests/utils/retry-policy.test.ts` - Unit tests for retry policy utility
-  - `tests/integration/gate-integration.test.ts` - Integration tests
+## Superseded “next steps”
 
-### ✅ Documentation
-- Created detailed documentation:
-  - `src/gates/README.md` - Overview of gates and usage
-  - `docs/github-mcp-guide.md` - Guide for using GitHub MCP for PRs
-  - `docs/playwright-mcp-guide.md` - Guide for using Playwright MCP for debugging
+The old “Phase 2 chunking implementation” next-steps list is now outdated as a standalone milestone set. Current work should prioritize the milestone track in `PHASE2_PLAN.md`:
+1. Reliability hardening (run stability, retry semantics, guardrails)
+2. Observability baseline (run metrics, log taxonomy, operator visibility)
+3. Recovery workflows (replay/requeue/manual repair paths)
+4. OCR roadmap (decision + pilot only if still required for scanned PDF content)
 
-### ✅ Demo Implementation
-- Created demonstration files:
-  - `src/scraper/chunk-processor.ts` - Shows integration of gates with scraping
-  - `scripts/run-chunk-demo.ts` - CLI script to run the chunk processor
-  - `dist/health-check.js` - Simple health check script for Docker
-
-### ✅ Package Updates
-- Updated `package.json` with:
-  - Test scripts for gates and retry policy
-  - Demo script for chunk processing
-  - Added vitest as a dev dependency for testing
-
-## Test Plan
-
-- [x] TypeScript compilation passes
-- [x] All new code compiles without errors
-- [x] Unit tests cover core functionality
-- [x] Integration points documented
-
-## Next Steps
-
-After merging this PR, we can proceed with Phase 2 of the implementation which will focus on:
-1. Updating the queue schema for chunking
-2. Implementing chunk processing logic
-3. Adding checkpoint tracking
-
-Fixes: Implements Phase 1 of MCP_GATE_PIPELINE_PLAN.md
-
-## PR URL
-
-You can create the pull request using this URL:
-https://github.com/Jmx097/lien-automation-v2/pull/new/feature/phase1-gate-implementation
+## Current status snapshot
+- The codebase is in a production-oriented state for API serving, queued execution, and scheduler-triggered runs.
+- Primary risk is now operational quality under long-running scrape conditions, not feature completeness of the route surface.
+- Planning docs should be treated as operational roadmap artifacts and reviewed on a fixed cadence.
