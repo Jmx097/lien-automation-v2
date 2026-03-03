@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { LienRecord } from '../types';
+import { log } from '../utils/logger';
 
 const SITE_ID_CA_SOS = 11; // from your Lien Sites sheet for CA SOS
 const LEAD_SOURCE = '777';
@@ -227,11 +228,25 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
   const sheets = getSheetsClient();
   const values = buildRowValues(rows);
 
+  const spreadsheetId = process.env.SHEET_ID;
+  log({
+    stage: 'sheets_append_records',
+    spreadsheet_id_suffix: spreadsheetId?.slice(-6),
+    target_range: 'Records!A2',
+    row_count: values.length,
+  });
+
   await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.SHEET_ID,
+    spreadsheetId,
     range: 'Records!A2',
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
+  });
+
+  log({
+    stage: 'sheets_append_records_complete',
+    spreadsheet_id_suffix: spreadsheetId?.slice(-6),
+    row_count: values.length,
   });
 
   return { uploaded: rows.length };
@@ -249,11 +264,26 @@ export async function pushToSheetsForTab(
 
   const range = `'${tabTitle}'!A2`;
 
+  log({
+    stage: 'sheets_append_tab',
+    spreadsheet_id_suffix: spreadsheetId.slice(-6),
+    tab_title: tabTitle,
+    target_range: range,
+    row_count: values.length,
+  });
+
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
+  });
+
+  log({
+    stage: 'sheets_append_tab_complete',
+    spreadsheet_id_suffix: spreadsheetId.slice(-6),
+    tab_title: tabTitle,
+    row_count: values.length,
   });
 
   return { uploaded: rows.length, tab_title: tabTitle };

@@ -2,7 +2,6 @@ import { chromium, Page } from 'playwright';
 import { LienRecord } from '../types';
 import { log } from '../utils/logger';
 import { SQLiteQueueStore } from '../queue/sqlite';
-import { pushToSheets } from '../sheets/push';
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -197,6 +196,38 @@ async function dismissHistoryModal(page: Page): Promise<void> {
   log({ stage: 'history_modal_dismissed' });
 }
 
+async function waitForResultsOrNoResults(page: Page): Promise<{ rowCount: number; hasNoResults: boolean }> {
+  const rowsLocator = page.locator('.div-table-row');
+  const resultsTextLocator = page.locator('text=/Results:\\s*\\d+/');
+  const noResultsLocator = page.locator('text=/No\\s+records\\s+found/i');
+
+  const start = Date.now();
+  const timeoutMs = 30_000;
+
+  while (Date.now() - start < timeoutMs) {
+    const rowCount = await rowsLocator.count();
+    if (rowCount > 0) {
+      return { rowCount, hasNoResults: false };
+    }
+
+    const hasResultsText = await resultsTextLocator.isVisible({ timeout: 500 }).catch(() => false);
+    if (hasResultsText) {
+      const finalRowCount = await rowsLocator.count();
+      return { rowCount: finalRowCount, hasNoResults: finalRowCount === 0 };
+    }
+
+    const hasNoResults = await noResultsLocator.isVisible({ timeout: 500 }).catch(() => false);
+    if (hasNoResults) {
+      return { rowCount: 0, hasNoResults: true };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  log({ stage: 'results_visibility_timeout' });
+  throw new Error('results_not_visible_after_search');
+}
+
 async function closeDrawer(page: Page): Promise<void> {
   const drawer = page.locator('div.drawer.show');
   if (!(await drawer.isVisible({ timeout: 1000 }).catch(() => false))) return;
@@ -358,6 +389,10 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   const checkpoint = loadCheckpoint(checkpoint_key);
   let nextIndex = Math.max(start_index, checkpoint?.next_index ?? 0);
   let knownRowCount = Number.POSITIVE_INFINITY;
+  let successfulChunks = 0;
+  let failedChunks = 0;
+  let firstChunkStart: number | null = null;
+  let lastChunkStart: number | null = null;
 
   log({
     stage: 'scraper_start',
@@ -376,6 +411,9 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     let lastErr: Error | null = null;
     let chunkRowCount = knownRowCount;
     const chunkRecords: LienRecord[] = [];
+
+    if (firstChunkStart === null) firstChunkStart = chunkStart;
+    lastChunkStart = chunkStart;
 
     for (let attempt = 0; attempt < max_chunk_retries; attempt++) {
       const cdpUrl = getRandomSessionCDP();
@@ -440,11 +478,22 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         await page.waitForLoadState('networkidle');
         await humanDelay();
 
-        const resultLocator = page.locator('text=/Results:\\s*\\d+/');
-        await resultLocator.waitFor({ state: 'visible', timeout: 30000 });
+        const resultsInfo = await waitForResultsOrNoResults(page);
+        chunkRowCount = resultsInfo.rowCount;
+        knownRowCount = Number.isFinite(knownRowCount)
+          ? Math.min(knownRowCount, chunkRowCount)
+          : chunkRowCount;
 
-        chunkRowCount = await page.locator('.div-table-row').count();
-        knownRowCount = chunkRowCount;
+        if (resultsInfo.hasNoResults || chunkRowCount === 0) {
+          log({
+            stage: 'chunk_no_results',
+            chunk_start: chunkStart,
+            chunk_end_exclusive: chunkEndExclusive,
+          });
+          nextIndex = chunkEndExclusive;
+          lastErr = null;
+          break;
+        }
         chunkEndExclusive = Math.min(chunkEndExclusive, chunkRowCount);
 
         log({
@@ -476,8 +525,6 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
           const record = await processDetailRow(page, i);
           if (record) {
             consecutiveFailures = 0;
-            await pushToSheets([record]);
-            await queue.insertMany([record]);
             chunkRecords.push(record);
           } else {
             consecutiveFailures++;
@@ -492,6 +539,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
         nextIndex = chunkEndExclusive;
         lastErr = null;
+        successfulChunks += 1;
         break;
       } catch (err: any) {
         lastErr = err instanceof Error ? err : new Error(String(err));
@@ -522,6 +570,15 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
       });
       nextIndex = chunkEndExclusive;
       saveCheckpoint(checkpoint_key, nextIndex);
+      failedChunks += 1;
+      if (failedChunks >= 5) {
+        log({
+          stage: 'scraper_abort_after_failed_chunks',
+          failed_chunks: failedChunks,
+          processed: processedRecords.length,
+        });
+        break;
+      }
     }
   }
 
@@ -534,6 +591,10 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     processed: processedRecords.length,
     next_index: nextIndex,
     row_count: Number.isFinite(knownRowCount) ? knownRowCount : null,
+    total_chunks_successful: successfulChunks,
+    total_chunks_failed: failedChunks,
+    first_chunk_start: firstChunkStart,
+    last_chunk_start: lastChunkStart,
   });
 
   return processedRecords;
