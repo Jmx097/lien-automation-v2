@@ -230,8 +230,8 @@ Cloud Scheduler equivalent: create two jobs (`morning`, `afternoon`) with the sa
 
 ### Runtime safeguards
 
-1. Run records are stored in SQLite table `scheduled_runs` (not in-memory).
-2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`.
+1. Run records are stored in SQLite table `scheduled_runs` (not in-memory), including `slot_time`, `started_at`, `finished_at`, `status`, `records_scraped`, `rows_uploaded`, and `error`.
+2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`; cooldown checks also read persisted DB state.
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
 

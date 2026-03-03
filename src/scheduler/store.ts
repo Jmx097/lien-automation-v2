@@ -4,7 +4,7 @@ import path from 'path';
 export interface ScheduledRunRecord {
   id: string;
   idempotency_key: string;
-  slot: 'morning' | 'afternoon';
+  slot_time: string;
   trigger_source: 'external' | 'manual';
   started_at: string;
   finished_at?: string;
@@ -33,9 +33,18 @@ export class ScheduledRunStore {
   private ensureSchema(): void {
     const columns = this.db.prepare("PRAGMA table_info('scheduled_runs')").all() as Array<{ name: string }>;
     const hasRowsUploaded = columns.some((column) => column.name === 'rows_uploaded');
+    const hasSlotTime = columns.some((column) => column.name === 'slot_time');
+    const hasLegacySlot = columns.some((column) => column.name === 'slot');
 
     if (!hasRowsUploaded) {
       this.db.prepare('ALTER TABLE scheduled_runs ADD COLUMN rows_uploaded INTEGER NOT NULL DEFAULT 0').run();
+    }
+
+    if (!hasSlotTime) {
+      this.db.prepare("ALTER TABLE scheduled_runs ADD COLUMN slot_time TEXT NOT NULL DEFAULT ''").run();
+      if (hasLegacySlot) {
+        this.db.prepare("UPDATE scheduled_runs SET slot_time = idempotency_key WHERE slot_time = '' OR slot_time IS NULL").run();
+      }
     }
   }
 
@@ -43,14 +52,14 @@ export class ScheduledRunStore {
     this.db
       .prepare(
         `INSERT INTO scheduled_runs (
-          id, idempotency_key, slot, trigger_source, started_at, finished_at, status,
+          id, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
           records_scraped, records_skipped, rows_uploaded, error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         run.id,
         run.idempotency_key,
-        run.slot,
+        run.slot_time,
         run.trigger_source,
         run.started_at,
         run.finished_at ?? null,
@@ -79,6 +88,11 @@ export class ScheduledRunStore {
     return row ?? null;
   }
 
+  getMostRecentRun(): ScheduledRunRecord | null {
+    const row = this.db.prepare('SELECT * FROM scheduled_runs ORDER BY started_at DESC LIMIT 1').get() as ScheduledRunRecord | undefined;
+    return row ?? null;
+  }
+
   getSuccessfulRunByIdempotencyKey(idempotencyKey: string): ScheduledRunRecord | null {
     const row = this.db
       .prepare("SELECT * FROM scheduled_runs WHERE idempotency_key = ? AND status = 'success' ORDER BY created_at DESC LIMIT 1")
@@ -87,9 +101,7 @@ export class ScheduledRunStore {
   }
 
   getRunHistory(limit = 50): ScheduledRunRecord[] {
-    const rows = this.db
-      .prepare('SELECT * FROM scheduled_runs ORDER BY started_at DESC LIMIT ?')
-      .all(limit) as ScheduledRunRecord[];
+    const rows = this.db.prepare('SELECT * FROM scheduled_runs ORDER BY started_at DESC LIMIT ?').all(limit) as ScheduledRunRecord[];
     return rows;
   }
 
