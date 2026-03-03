@@ -11,7 +11,14 @@ const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = 300000;
 
 async function processJob(job: any): Promise<any> {
-  log({ stage: 'worker_process_start', job_id: job.id, file_number: job.filingNumber });
+  log({
+    stage: 'worker_process_start',
+    job_id: job.id,
+    site: job.site,
+    file_number: job.filingNumber,
+    filing_date: job.filingDate,
+    attempt: job.attempts,
+  });
   
   const detail = await scrapeCASOSDetail(job.filingNumber);
   
@@ -52,7 +59,14 @@ async function runWorker() {
     }
     
     const job = jobs[0];
-    log({ stage: 'worker_claimed', job_id: job.id, file_number: job.filingNumber });
+    log({
+      stage: 'worker_claimed',
+      job_id: job.id,
+      site: job.site,
+      file_number: job.filingNumber,
+      filing_date: job.filingDate,
+      attempt: job.attempts,
+    });
     
     try {
       const record = await processJob(job);
@@ -60,16 +74,45 @@ async function runWorker() {
       await pushToSheets([record]);
       
       await queue.markDone([job.id]);
-      log({ stage: 'worker_job_done', job_id: job.id });
+      log({
+        stage: 'worker_job_done',
+        job_id: job.id,
+        site: job.site,
+        file_number: job.filingNumber,
+        filing_date: job.filingDate,
+        attempt: job.attempts,
+      });
     } catch (err: any) {
-      log({ stage: 'worker_job_failed', job_id: job.id, error: err.message });
+      log({
+        stage: 'worker_job_failed',
+        job_id: job.id,
+        site: job.site,
+        file_number: job.filingNumber,
+        filing_date: job.filingDate,
+        attempt: job.attempts,
+        error: err.message,
+      });
       
       if (job.attempts >= MAX_ATTEMPTS) {
         await queue.markDone([job.id]);
-        log({ stage: 'worker_job_exhausted', job_id: job.id });
+        log({
+          stage: 'worker_job_exhausted',
+          job_id: job.id,
+          site: job.site,
+          file_number: job.filingNumber,
+          filing_date: job.filingDate,
+          attempt: job.attempts,
+        });
       } else {
         await queue.markFailed([job.id], BACKOFF_MS);
-        log({ stage: 'worker_retry_later', job_id: job.id, attempt: job.attempts });
+        log({
+          stage: 'worker_retry_later',
+          job_id: job.id,
+          site: job.site,
+          file_number: job.filingNumber,
+          filing_date: job.filingDate,
+          attempt: job.attempts,
+        });
       }
     }
     
