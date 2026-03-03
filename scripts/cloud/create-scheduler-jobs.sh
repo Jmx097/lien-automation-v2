@@ -55,6 +55,6 @@ create_or_update_job () {
 }
 
 create_or_update_job "${JOB_NAME}-morning" "30 7 * * *"
-create_or_update_job "${JOB_NAME}-afternoon" "30 14 * * *"
+create_or_update_job "${JOB_NAME}-afternoon" "30 19 * * *"
 
 echo "Scheduler jobs upserted for ${JOB_NAME} in ${TIME_ZONE}."

@@ -42,7 +42,7 @@ bash scripts/cloud/create-scheduler-jobs.sh
 This creates/updates:
 
 - `${JOB_NAME}-morning` at `30 7 * * *`
-- `${JOB_NAME}-afternoon` at `30 14 * * *`
+- `${JOB_NAME}-afternoon` at `30 19 * * *`
 
 Both execute Cloud Run Job API `.../jobs/${JOB_NAME}:run`.
 
