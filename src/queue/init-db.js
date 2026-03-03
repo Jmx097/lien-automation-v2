@@ -20,6 +20,34 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_status ON queue_jobs(status);
   CREATE INDEX IF NOT EXISTS idx_locked ON queue_jobs(locked_until);
+
+  CREATE TABLE IF NOT EXISTS scheduled_runs (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+    trigger_source TEXT NOT NULL CHECK(trigger_source IN ('external', 'manual')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error')),
+    records_scraped INTEGER NOT NULL DEFAULT 0,
+    records_skipped INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at);
+  CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status);
+
+  CREATE TABLE IF NOT EXISTS scheduler_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idempotency_key TEXT NOT NULL,
+    slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+    alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run')),
+    expected_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(idempotency_key, alert_type)
+  );
 `);
 
 db.close();

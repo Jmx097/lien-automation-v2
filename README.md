@@ -200,20 +200,40 @@ This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, 
 
 ## Schedule Source of Truth
 
-Production scheduling uses **Option B: the internal in-process scheduler** implemented in `src/scheduler.ts` and started from `src/server.ts`.
+Production scheduling now uses **an external scheduler** targeting one authenticated endpoint: `POST /schedule/run`.
 
-- **Timezone:** `America/New_York` (EST/EDT as observed by the runtime)
-- **Trigger times:** `07:30` and `14:30` daily (10-minute execution windows: `07:25-07:35` and `14:25-14:35`)
-- **Ownership:** API/platform team that deploys and operates this service
+- **Execution target:** `POST /schedule/run` only
+- **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
+- **Timezone:** `America/New_York`
+- **Trigger times:** exactly two daily runs: `07:30` and `14:30`
+- **Idempotency:** `runScheduledScrape()` keys runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skips duplicates
 
-### Operational details
+### External scheduler configuration (exactly two triggers)
 
-1. `startScheduler()` runs when the API process starts.
-2. The scheduler checks every minute and runs `runScheduledScrape()` when inside either trigger window.
-3. A three-hour guard prevents duplicate runs too close together.
-4. Manual trigger remains available via `POST /schedule/run`.
+Linux cron example:
 
-There is no production crontab/script scheduler of record in this repository.
+```cron
+# 07:30 America/New_York
+30 7 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+  -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"slot":"morning"}'
+
+# 14:30 America/New_York
+30 14 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+  -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"slot":"afternoon"}'
+```
+
+Cloud Scheduler equivalent: create two jobs (`morning`, `afternoon`) with the same endpoint/token and JSON body containing the matching `slot`.
+
+### Runtime safeguards
+
+1. Run records are stored in SQLite table `scheduled_runs` (not in-memory).
+2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`.
+3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
+4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
 
 ## Code Quality: Linting and Formatting
 

@@ -4,7 +4,7 @@ import { pushToSheets } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
-import { startScheduler, runScheduledScrape, getRunHistory, getNextRuns } from "./scheduler";
+import { checkMissedRuns, getNextRuns, getRunHistory, runScheduledScrape } from "./scheduler";
 
 dotenv.config();
 
@@ -167,9 +167,30 @@ app.get("/schedule", (_req, res) => {
   });
 });
 
-app.post("/schedule/run", async (_req, res) => {
+app.post("/schedule/run", async (req, res) => {
   try {
-    const result = await runScheduledScrape();
+    const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
+    if (!configuredToken) {
+      return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
+    }
+
+    const authHeader = req.headers.authorization;
+    const schedulerTokenHeader = req.headers['x-scheduler-token'];
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    const suppliedToken = bearerToken ?? (Array.isArray(schedulerTokenHeader) ? schedulerTokenHeader[0] : schedulerTokenHeader);
+
+    if (suppliedToken !== configuredToken) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const slot = req.body?.slot === 'morning' || req.body?.slot === 'afternoon' ? req.body.slot : undefined;
+    const idempotencyKey = typeof req.body?.idempotency_key === 'string' ? req.body.idempotency_key : undefined;
+
+    const result = await runScheduledScrape({
+      slot,
+      idempotencyKey,
+      triggerSource: 'external',
+    });
     return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -184,7 +205,9 @@ app.listen(8080, () => {
   });
   console.log("Server running on port 8080");
 
-  startScheduler();
+  setInterval(() => {
+    checkMissedRuns().catch((err) => log({ stage: 'missed_run_check_error', error: String(err) }));
+  }, 60_000);
 });
 
 app.post("/scrape-enhanced", async (req, res) => {
