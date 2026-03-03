@@ -11,23 +11,27 @@ interface SelectFileTypeOptions {
 
 export async function selectFederalTaxLienFileType(page: Page, log?: Logger): Promise<boolean> {
   const fileTypeSelectCandidates = [
-    page.getByLabel(/file type/i),
-    page.getByRole("combobox", { name: /file type/i }),
-    page.locator('select[aria-label*="File Type" i]'),
-    page.locator('select[name*="fileType" i], select[id*="fileType" i]'),
+    { method: "label", locator: page.getByLabel(/file type/i) },
+    { method: "combobox_role", locator: page.getByRole("combobox", { name: /file type/i }) },
+    { method: "aria_label_select", locator: page.locator('select[aria-label*="File Type" i]') },
+    { method: "name_or_id_select", locator: page.locator('select[name*="fileType" i], select[id*="fileType" i]') },
   ];
 
   for (const candidate of fileTypeSelectCandidates) {
-    if ((await candidate.count()) === 0) continue;
+    if ((await candidate.locator.count()) === 0) continue;
 
-    const control = candidate.first();
+    const control = candidate.locator.first();
     try {
-      await control.waitFor({ state: "visible", timeout: 3000 });
-      await control.selectOption({ label: "Federal Tax Lien" });
-      log?.({ stage: "file_type_selected", method: "locator" });
+      await control.waitFor({ state: "visible", timeout: 2000 });
+      await control.selectOption({ label: "Federal Tax Lien" }, { timeout: 2000 });
+      log?.({ stage: "file_type_selected", method: candidate.method });
       return true;
-    } catch {
-      // try next selector variant
+    } catch (err: unknown) {
+      log?.({
+        stage: "file_type_candidate_failed",
+        method: candidate.method,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
