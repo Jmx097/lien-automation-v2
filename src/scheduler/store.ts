@@ -11,6 +11,7 @@ export interface ScheduledRunRecord {
   status: 'running' | 'success' | 'error';
   records_scraped: number;
   records_skipped: number;
+  rows_uploaded: number;
   error?: string;
 }
 
@@ -26,6 +27,16 @@ export class ScheduledRunStore {
   constructor() {
     const dbPath = path.join(process.cwd(), 'data/db/lien-queue.db');
     this.db = new Database(dbPath);
+    this.ensureSchema();
+  }
+
+  private ensureSchema(): void {
+    const columns = this.db.prepare("PRAGMA table_info('scheduled_runs')").all() as Array<{ name: string }>;
+    const hasRowsUploaded = columns.some((column) => column.name === 'rows_uploaded');
+
+    if (!hasRowsUploaded) {
+      this.db.prepare('ALTER TABLE scheduled_runs ADD COLUMN rows_uploaded INTEGER NOT NULL DEFAULT 0').run();
+    }
   }
 
   insertRun(run: ScheduledRunRecord): void {
@@ -33,8 +44,8 @@ export class ScheduledRunStore {
       .prepare(
         `INSERT INTO scheduled_runs (
           id, idempotency_key, slot, trigger_source, started_at, finished_at, status,
-          records_scraped, records_skipped, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          records_scraped, records_skipped, rows_uploaded, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         run.id,
@@ -46,6 +57,7 @@ export class ScheduledRunStore {
         run.status,
         run.records_scraped,
         run.records_skipped,
+        run.rows_uploaded,
         run.error ?? null
       );
   }
@@ -54,10 +66,10 @@ export class ScheduledRunStore {
     this.db
       .prepare(
         `UPDATE scheduled_runs
-         SET finished_at = ?, status = ?, records_scraped = ?, records_skipped = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+         SET finished_at = ?, status = ?, records_scraped = ?, records_skipped = ?, rows_uploaded = ?, error = ?, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
       )
-      .run(run.finished_at ?? null, run.status, run.records_scraped, run.records_skipped, run.error ?? null, run.id);
+      .run(run.finished_at ?? null, run.status, run.records_scraped, run.records_skipped, run.rows_uploaded, run.error ?? null, run.id);
   }
 
   getByIdempotencyKey(idempotencyKey: string): ScheduledRunRecord | null {

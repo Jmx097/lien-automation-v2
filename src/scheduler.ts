@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { log } from './utils/logger';
 import { scrapers } from './scraper/index';
 import { ScheduledRunStore, ScheduledRunRecord } from './scheduler/store';
+import { pushToSheets } from './sheets/push';
 
 const SCHEDULE_MAX_RECORDS = 10;
 const LOOKBACK_DAYS = 7;
@@ -123,6 +124,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     status: 'running',
     records_scraped: 0,
     records_skipped: 0,
+    rows_uploaded: 0,
   };
 
   store.insertRun(run);
@@ -132,8 +134,10 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   try {
     const scraper = (scrapers as any).ca_sos;
     const records = await scraper({ date_start, date_end, max_records: SCHEDULE_MAX_RECORDS });
+    const uploadResult = await pushToSheets(records);
 
     run.records_scraped = records.length;
+    run.rows_uploaded = uploadResult.uploaded;
     run.status = 'success';
     run.finished_at = new Date().toISOString();
 
@@ -144,16 +148,17 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       run_id: runId,
       idempotency_key: idempotencyKey,
       records_scraped: records.length,
+      rows_uploaded: uploadResult.uploaded,
       duration_seconds: (Date.now() - new Date(run.started_at).getTime()) / 1000,
     });
   } catch (err: any) {
     run.status = 'error';
-    run.error = err.message;
+    run.error = String(err?.stack ?? err?.message ?? err);
     run.finished_at = new Date().toISOString();
 
     store.updateRun(run);
 
-    log({ stage: 'scheduled_run_error', run_id: runId, idempotency_key: idempotencyKey, error: err.message });
+    log({ stage: 'scheduled_run_error', run_id: runId, idempotency_key: idempotencyKey, error: run.error, rows_uploaded: run.rows_uploaded });
   }
 
   return run;
