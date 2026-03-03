@@ -15,6 +15,6 @@ export interface LienRecord {
   pdf_filename: string;       // e.g. "U260005937931_01202026.pdf" or ""
   processed: boolean;
   error?: string;             // "panel_failed" | "history_failed" | "no_download_available"
-  amount?: string;            // Total from PDF, dollars only (no cents)
+  amount?: string;            // Total from PDF, whole dollars only (cents parsed then truncated)
   lead_type?: string;         // "Lien" or "Release" from PDF header
 }
