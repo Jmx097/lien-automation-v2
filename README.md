@@ -160,6 +160,29 @@ Data is exported to Google Sheets with a state column prepended.
 
 The server runs on port 8080 by default.
 
+## Production Resource Footprint (Memory/Disk)
+
+If your host is running near memory or disk limits, you can lower usage without reducing scrape quality:
+
+- `docker-compose.yml` now caps Mission Control Node heap to `768MB` by default (`MISSION_CONTROL_MAX_OLD_SPACE_MB`, overrideable).
+- Docker log rotation is enabled for both services (`max-size: 10m`, `max-file: 5`) to prevent unbounded container log growth.
+- For PM2-based deployments, Mission Control now uses a lower restart limit (`768M`) and Node old-space (`768MB`).
+
+Operational cleanup commands (safe housekeeping):
+
+```bash
+# Reclaim unused image/layer/cache space
+docker system prune -af
+
+# Reclaim only unused build cache (more conservative)
+docker builder prune -af
+
+# Vacuum journald if systemd logs are large
+sudo journalctl --vacuum-time=7d
+```
+
+These settings reduce overhead while keeping scraper behavior and output unchanged.
+
 ## Mission Control Integration
 
 This project now includes Mission Control integration for multi-agent orchestration:
