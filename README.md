@@ -152,7 +152,7 @@ curl -sS -X POST http://127.0.0.1:8080/scrape   -H 'Content-Type: application/js
 
 ## 2026 Range Test (writes to a new Sheet tab)
 
-If you want a reproducible CA SOS scrape that **creates a new tab** in the same spreadsheet for that run (tab name includes **California + date range + Pacific timestamp**), use:
+If you want a reproducible CA SOS scrape that **creates a new tab** in the same spreadsheet for that run (tab name includes **label + date range + Pacific timestamp**), use:
 
 ```bash
 npm run test:ca-sos-range
@@ -160,17 +160,88 @@ npm run test:ca-sos-range
 
 Defaults:
 
+- **LABEL**: `California` (customize for county-specific tabs)
 - **DATE_START**: `02/02/2026`
 - **DATE_END**: `03/02/2026`
 - **MAX_RECORDS**: `25` (set `MAX_RECORDS=0` to remove the cap)
 
-Example:
+Examples:
 
 ```bash
+# Default California run
 DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_RECORDS=25 npm run test:ca-sos-range
+
+# Custom county label
+LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_RECORDS=25 npm run test:ca-sos-range
 ```
 
 This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
+
+## Scheduled Daily Scraper
+
+This project includes a scheduled daily scraper that runs at 3pm PST to automatically fetch lien records for the previous day. The scheduling is implemented using cron.
+
+### Setup
+
+The scheduled scraper is automatically set up when you deploy the application. It creates a cron job that runs daily at 3pm PST.
+
+### How it Works
+
+1. A shell script (`scripts/scheduled-ca-scraper.sh`) is executed daily at 3pm
+2. The script sets the date range to the previous day's filings
+3. It loads environment variables from the `.env` file
+4. It runs the scraper for the California SOS website
+5. Results are automatically exported to Google Sheets
+
+### Manual Testing
+
+You can manually test the scheduled scraper by running:
+
+```bash
+./scripts/scheduled-ca-scraper.sh
+```
+
+### Logs
+
+Scheduled scraper logs are written to `/var/log/lien-scraper.log`. Log rotation is configured to keep 7 days of logs.
+
+### Customization
+
+To modify the schedule:
+1. Edit the crontab: `crontab -e`
+2. Modify the cron expression (currently set to `0 15 * * *` for 3pm daily)
+3. Save and exit
+
+The cron expression format is: `minute hour day month day_of_week`
+
+## Code Quality: Linting and Formatting
+
+This project now includes linting and code formatting tools to ensure code quality and consistency.
+
+### Tools Included
+
+- **ESLint** with TypeScript support for static code analysis
+- **Prettier** for automatic code formatting
+
+### Available Scripts
+
+```bash
+# Check for linting issues
+npm run lint
+
+# Fix linting issues automatically
+npm run lint:fix
+
+# Format code with Prettier
+npm run format
+```
+
+### Configuration Files
+
+- `eslint.config.js` - Modern ESLint configuration
+- `.prettierrc` - Prettier formatting rules
+
+For detailed information about the linting setup, see [LINTING_SETUP.md](LINTING_SETUP.md).
 
 ## Preflight: runtime version must match local commit
 

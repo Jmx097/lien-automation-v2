@@ -13,7 +13,9 @@ import { selectFileType } from './selectors/fileType';
 function getSbrCdpUrl(): string {
   const v = process.env.SBR_CDP_URL;
   if (!v) {
-    throw new Error("Missing SBR_CDP_URL environment variable (Bright Data Scraping Browser Playwright CDP URL).");
+    throw new Error(
+      'Missing SBR_CDP_URL environment variable (Bright Data Scraping Browser Playwright CDP URL).'
+    );
   }
   return v;
 }
@@ -45,13 +47,13 @@ async function extractFromPDF(pdfPath: string): Promise<{ amount?: string; lienD
     const dataBuffer = fs.readFileSync(pdfPath);
     const data = await (pdfParse as any)(dataBuffer);
     const text = data.text;
-    
+
     const amountMatch = text.match(/Total[:\s]+\$?([\d,]+\.?\d*)/i);
     const amount = amountMatch ? amountMatch[1].replace(/,/g, '') : undefined;
-    
+
     const dateMatches = text.match(/(\d{1,2}\/\d{1,2}\/\d{4})/g);
     const lienDate = dateMatches && dateMatches.length > 0 ? dateMatches[0] : undefined;
-    
+
     return { amount, lienDate };
   } catch (err: any) {
     log({ stage: 'pdf_parse_error', error: err.message });
@@ -62,72 +64,110 @@ async function extractFromPDF(pdfPath: string): Promise<{ amount?: string; lienD
 async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecord | null> {
   try {
     log({ stage: 'detail_process_start', row: rowIndex });
-    
+
     const rows = page.locator('.div-table-row');
     const row = rows.nth(rowIndex);
     await row.locator('.interactive-button').first().click();
     await page.waitForLoadState('networkidle');
     await humanDelay();
-    
-    const fileNumber = await page.locator('text=/File Number/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    const debtorName = await page.locator('text=/Debtor Name/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    const debtorAddress = await page.locator('text=/Debtor Address/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    const securedPartyName = await page.locator('text=/Secured Party Name/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    const securedPartyAddress = await page.locator('text=/Secured Party Address/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    const filingDateText = await page.locator('text=/Filing Date/i').locator('..').locator('+ *').textContent().catch(() => '') || '';
-    
+
+    const fileNumber =
+      (await page
+        .locator('text=/File Number/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+    const debtorName =
+      (await page
+        .locator('text=/Debtor Name/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+    const debtorAddress =
+      (await page
+        .locator('text=/Debtor Address/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+    const securedPartyName =
+      (await page
+        .locator('text=/Secured Party Name/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+    const securedPartyAddress =
+      (await page
+        .locator('text=/Secured Party Address/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+    const filingDateText =
+      (await page
+        .locator('text=/Filing Date/i')
+        .locator('..')
+        .locator('+ *')
+        .textContent()
+        .catch(() => '')) || '';
+
     log({ stage: 'detail_extracted_basic', file_number: fileNumber.trim() });
-    
+
     const historyBtn = page.getByRole('button', { name: /View History/i });
     let amount: string | undefined;
     let lienDate: string | undefined;
-    
+
     if (await historyBtn.isVisible().catch(() => false)) {
       await historyBtn.click();
-      await page.getByRole('dialog', { name: 'History' }).waitFor({ state: 'visible', timeout: 8000 });
+      await page
+        .getByRole('dialog', { name: 'History' })
+        .waitFor({ state: 'visible', timeout: 8000 });
       await humanDelay();
-      
+
       const modal = page.getByRole('dialog', { name: 'History' });
       const downloadLink = modal.getByRole('link', { name: /Download/i });
-      
+
       if (await downloadLink.isVisible().catch(() => false)) {
         const downloadDir = path.join(process.cwd(), 'data/downloads');
         if (!fs.existsSync(downloadDir)) {
           fs.mkdirSync(downloadDir, { recursive: true });
         }
-        
+
         const pdfPath = path.join(downloadDir, `${fileNumber.trim()}.pdf`);
-        
+
         try {
           const [download] = await Promise.all([
             page.waitForEvent('download', { timeout: 15000 }),
-            downloadLink.click()
+            downloadLink.click(),
           ]);
-          
+
           await download.saveAs(pdfPath);
           log({ stage: 'detail_pdf_downloaded', file_number: fileNumber.trim() });
-          
+
           const pdfData = await extractFromPDF(pdfPath);
           amount = pdfData.amount;
           lienDate = pdfData.lienDate;
-          
+
           fs.unlinkSync(pdfPath);
           log({ stage: 'detail_pdf_deleted', file_number: fileNumber.trim() });
         } catch (err: any) {
           log({ stage: 'detail_pdf_failed', file_number: fileNumber.trim(), error: err.message });
         }
       }
-      
+
       const closeBtn = modal.getByRole('button', { name: /Close|Back/i }).first();
       if (await closeBtn.isVisible().catch(() => false)) {
         await closeBtn.click();
         await page.waitForLoadState('networkidle');
       }
     }
-    
+
     await page.goBack({ waitUntil: 'networkidle' });
     await humanDelay();
-    
+
     const record: LienRecord = {
       state: 'CA',
       source: 'ca_sos',
@@ -144,13 +184,12 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
       document_type: 'Notice of Federal Tax Lien',
       pdf_filename: '',
       processed: true,
-      error: ''
+      error: '',
     };
-    
+
     log({ stage: 'detail_mapped', file_number: record.file_number });
-    
+
     return record;
-    
   } catch (err: any) {
     log({ stage: 'detail_row_failed', row: rowIndex, error: err.message });
     return null;
@@ -174,7 +213,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   try {
     await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
       waitUntil: 'networkidle',
-      timeout: 90000
+      timeout: 90000,
     });
 
     const searchInput = page.getByLabel('Search by name or file number');
@@ -215,8 +254,8 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
     const resultLocator = page.locator('text=/Results:\\s*\\d+/');
     await resultLocator.waitFor({ state: 'visible', timeout: 30000 });
-    const resultText = (await resultLocator.textContent().catch(() => "")) ?? "";
-    const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? "0", 10);
+    const resultText = (await resultLocator.textContent().catch(() => '')) ?? '';
+    const totalCount = parseInt(resultText.match(/\d+/)?.[0] ?? '0', 10);
 
     log({ stage: 'scraper_results_total', total: totalCount });
 
@@ -230,18 +269,18 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
       for (let i = 0; i < toProcess; i++) {
         const record = await processDetailRow(page, i);
-        
+
         if (record) {
           if (!skip_sheet_writes) {
             await pushToSheets([record]);
             log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
           }
-          
+
           await queue.insertMany([record]);
-          
+
           processedRecords.push(record);
         }
-        
+
         await humanDelay();
       }
 
@@ -261,7 +300,6 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     }
 
     log({ stage: 'scraper_complete', processed: processedRecords.length });
-
   } catch (err: any) {
     log({ stage: 'scraper_error', error: err.message });
     throw err;

@@ -13,7 +13,10 @@
     "test:smoke": "bash scripts/smoke-health.sh",
     "doctor": "bash scripts/doctor.sh",
     "test:selector-smoke": "ts-node src/tests/selector-smoke.ts",
-    "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts"
+    "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write src/**/*.ts"
   },
   "keywords": [],
   "author": "",
@@ -32,12 +35,20 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
     "@types/jsdom": "^28.0.0",
     "@types/node": "^25.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
     "jsdom": "^28.1.0",
+    "prettier": "^3.8.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
   },
   "engines": {
     "node": ">=20.16.0"
