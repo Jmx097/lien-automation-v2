@@ -34,11 +34,6 @@ The project is organized into three main modules:
 - **Utils** (`src/utils/`): Utility functions for delays, rate limiting, retries, and logging
 - **Server** (`src/server.ts`): Express.js API server with `/scrape` endpoint
 
-Additionally, the repository includes optional artifacts for historical orchestration experiments:
-
-- **Agents** (`agents/`): Custom MCP agents for chunk scraping, validation, and uploading
-- **Cost Tracking** (`scripts/qwen-cost-tracker.js`): Monitor Qwen API usage and costs
-
 ## API Endpoints
 
 The following routes are defined by the Express server.
@@ -99,7 +94,7 @@ Returns upcoming schedule windows and persisted run history (`history`) from the
 
 ### POST /schedule/run
 
-Authenticated endpoint for external scheduler triggers. Accepts optional `slot` (`morning`/`afternoon`) and `idempotency_key`.
+Authenticated endpoint for external scheduler triggers. Accepts optional `slot` (`morning`/`afternoon`) and `idempotency_key`. Scheduled runs are configured for max records and create a brand-new sheet tab per run.
 
 ## What is production-ready vs requires credentials/external dependencies
 
@@ -128,6 +123,10 @@ Required environment variables:
 - `SHEETS_KEY`: Google service account credentials (JSON string)
 - `SHEET_ID`: Target Google Sheets spreadsheet ID
 - `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
+- `SCHEDULE_MAX_RECORDS` (optional): Max records per scheduled run (default `1000`)
+- `ENABLE_SCHEDULE_IDEMPOTENCY` (optional): Set to `1` to dedupe by slot/day; leave unset for a new run and tab each trigger
+- `SCHEDULE_MORNING_HOUR` / `SCHEDULE_MORNING_MINUTE` (optional): Morning trigger display/missed-run baseline (defaults `7`/`30`)
+- `SCHEDULE_AFTERNOON_HOUR` / `SCHEDULE_AFTERNOON_MINUTE` (optional): Afternoon trigger display/missed-run baseline (defaults `19`/`30`)
 
 ## Data Schema
 
@@ -181,34 +180,6 @@ sudo journalctl --vacuum-time=7d
 
 These settings reduce overhead while keeping scraper behavior and output unchanged.
 
-## Mission Control Status
-
-Mission Control/OpenClaw orchestration is archived and removed from the default deployment profile to reduce operational overhead and disk usage.
-
-- **Approved startup path (production/default):** `docker compose up -d lien-scraper`
-- **Optional equivalent wrapper scripts:** `./start-services.sh`, `./start-services-optimized.sh`, `./clean-startup.sh`, `./restart-optimized.sh`
-- **Do not use archived Mission Control scripts in production.** They are retained only for historical or controlled lab/testing scenarios.
-
-If you need to reintroduce Mission Control later, consult [MISSION_CONTROL_INTEGRATION.md](MISSION_CONTROL_INTEGRATION.md) as historical reference and re-add a dedicated service definition intentionally.
-
-### Operational Scripts
-
-Legacy Mission Control helpers are now explicitly archived and renamed with a `legacy-` prefix:
-
-- `legacy-deploy.sh`
-- `legacy-pm2-manager.sh`
-
-Both scripts now print a warning and exit non-zero by default. They only run when `ALLOW_LEGACY_MISSION_CONTROL=1` is set.
-
-Quick verification (expected runtime state is API-only):
-
-```bash
-docker compose up -d lien-scraper
-docker compose ps
-```
-
-`docker compose ps` should show only the `lien-scraper` API service as running.
-
 ## Notes
 
 - The scraper is configured to run in headless mode with sandbox disabled for container compatibility.
@@ -217,6 +188,10 @@ docker compose ps
 - On `TooManyResultsError`, halve the date range and retry.
 - The scraper uses Bright Data Scraping Browser via the `SBR_CDP_URL` connection string for remote Playwright sessions.
 - `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
+- `SCHEDULE_MAX_RECORDS` (optional): Max records per scheduled run (default `1000`)
+- `ENABLE_SCHEDULE_IDEMPOTENCY` (optional): Set to `1` to dedupe by slot/day; leave unset for a new run and tab each trigger
+- `SCHEDULE_MORNING_HOUR` / `SCHEDULE_MORNING_MINUTE` (optional): Morning trigger display/missed-run baseline (defaults `7`/`30`)
+- `SCHEDULE_AFTERNOON_HOUR` / `SCHEDULE_AFTERNOON_MINUTE` (optional): Afternoon trigger display/missed-run baseline (defaults `19`/`30`)
 
 ## Test Commands
 
@@ -325,8 +300,8 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 - **Execution target:** `POST /schedule/run` only
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
 - **Timezone:** `America/New_York`
-- **Trigger times:** exactly two daily runs: `07:30` and `14:30`
-- **Idempotency:** `runScheduledScrape()` keys runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skips duplicates
+- **Trigger times:** exactly two daily runs: `07:30` and `19:30`
+- **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
 ### External scheduler configuration (exactly two triggers)
 
@@ -339,8 +314,8 @@ Linux cron example:
   -H "Content-Type: application/json" \
   -d '{"slot":"morning"}'
 
-# 14:30 America/New_York
-30 14 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# 19:30 America/New_York
+30 19 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"slot":"afternoon"}'

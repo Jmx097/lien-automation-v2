@@ -2,12 +2,17 @@ import crypto from 'crypto';
 import { log } from './utils/logger';
 import { scrapers } from './scraper/index';
 import { ScheduledRunStore, ScheduledRunRecord } from './scheduler/store';
-import { pushToSheets } from './sheets/push';
+import { formatRunTabName, pushToSheetsForTab } from './sheets/push';
 
-const SCHEDULE_MAX_RECORDS = 10;
+const SCHEDULE_MAX_RECORDS = Number(process.env.SCHEDULE_MAX_RECORDS ?? '1000');
 const LOOKBACK_DAYS = 7;
 const MISSED_RUN_GRACE_MINUTES = 45;
 const SCHEDULE_COOLDOWN_MINUTES = 10;
+const ENABLE_SCHEDULE_IDEMPOTENCY = process.env.ENABLE_SCHEDULE_IDEMPOTENCY === '1';
+const MORNING_RUN_HOUR = Number(process.env.SCHEDULE_MORNING_HOUR ?? '7');
+const MORNING_RUN_MINUTE = Number(process.env.SCHEDULE_MORNING_MINUTE ?? '30');
+const AFTERNOON_RUN_HOUR = Number(process.env.SCHEDULE_AFTERNOON_HOUR ?? '19');
+const AFTERNOON_RUN_MINUTE = Number(process.env.SCHEDULE_AFTERNOON_MINUTE ?? '30');
 
 type Slot = 'morning' | 'afternoon';
 type TriggerSource = 'external' | 'manual';
@@ -110,7 +115,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const triggerSource = options.triggerSource ?? 'external';
 
   const existing = store.getByIdempotencyKey(idempotencyKey);
-  if (existing && existing.status !== 'error') {
+  if (ENABLE_SCHEDULE_IDEMPOTENCY && existing && existing.status !== 'error') {
     log({ stage: 'scheduled_run_duplicate_skipped', idempotency_key: idempotencyKey, existing_run_id: existing.id });
     return { ...existing, duplicate_of: existing.id };
   }
@@ -161,7 +166,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   try {
     const scraper = (scrapers as any).ca_sos;
     const records = await scraper({ date_start, date_end, max_records: SCHEDULE_MAX_RECORDS });
-    const uploadResult = await pushToSheets(records);
+    const tabTitle = formatRunTabName(`Scheduled_${slot}_${runId}`, date_start, date_end, new Date());
+    const uploadResult = await pushToSheetsForTab(records, tabTitle);
 
     run.records_scraped = records.length;
     run.rows_uploaded = uploadResult.uploaded;
@@ -176,6 +182,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       idempotency_key: idempotencyKey,
       records_scraped: records.length,
       rows_uploaded: uploadResult.uploaded,
+      tab_title: uploadResult.tab_title,
       duration_seconds: (Date.now() - new Date(run.started_at).getTime()) / 1000,
     });
   } catch (err: any) {
@@ -197,8 +204,8 @@ export function getRunHistory(limit = 50): ScheduledRun[] {
 
 export function getNextRuns(): { morning: string; afternoon: string } {
   return {
-    morning: '07:30 AM America/New_York daily',
-    afternoon: '02:30 PM America/New_York daily',
+    morning: `${String(MORNING_RUN_HOUR).padStart(2, '0')}:${String(MORNING_RUN_MINUTE).padStart(2, '0')} America/New_York daily`,
+    afternoon: `${String(AFTERNOON_RUN_HOUR).padStart(2, '0')}:${String(AFTERNOON_RUN_MINUTE).padStart(2, '0')} America/New_York daily`,
   };
 }
 
@@ -211,8 +218,8 @@ export async function checkMissedRuns(): Promise<void> {
   const ny = getNyDateParts(now);
 
   const checks: Array<{ slot: Slot; dueHour: number; dueMinute: number }> = [
-    { slot: 'morning', dueHour: 7, dueMinute: 30 + MISSED_RUN_GRACE_MINUTES },
-    { slot: 'afternoon', dueHour: 14, dueMinute: 30 + MISSED_RUN_GRACE_MINUTES },
+    { slot: 'morning', dueHour: MORNING_RUN_HOUR, dueMinute: MORNING_RUN_MINUTE + MISSED_RUN_GRACE_MINUTES },
+    { slot: 'afternoon', dueHour: AFTERNOON_RUN_HOUR, dueMinute: AFTERNOON_RUN_MINUTE + MISSED_RUN_GRACE_MINUTES },
   ];
 
   for (const check of checks) {

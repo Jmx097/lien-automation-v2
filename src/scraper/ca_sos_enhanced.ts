@@ -451,10 +451,10 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   const {
     date_start,
     date_end,
-    max_records = 10,
+    max_records = 1000,
     chunk_size = 25,
     start_index = 0,
-    max_chunk_retries = 3,
+    max_chunk_retries = 5,
     checkpoint_key = `${date_start}_${date_end}`,
   } = options;
   const queue = new SQLiteQueueStore();
@@ -601,7 +601,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
             chunkRecords.push(record);
           } else {
             consecutiveFailures++;
-            if (consecutiveFailures >= 3) {
+            if (consecutiveFailures >= 5) {
               throw new Error(`chunk_failed_consecutive_rows_${consecutiveFailures}`);
             }
           }
@@ -644,7 +644,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
       nextIndex = chunkEndExclusive;
       saveCheckpoint(checkpoint_key, nextIndex);
       failedChunks += 1;
-      if (failedChunks >= 5) {
+      if (failedChunks >= 8) {
         log({
           stage: 'scraper_abort_after_failed_chunks',
           failed_chunks: failedChunks,

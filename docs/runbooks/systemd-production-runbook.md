@@ -7,7 +7,7 @@ This repository supports **one production startup path**: `systemd`.
 1. **API/Job runner**: `lien-automation-api.service`
    - Runs the Express API (`npm start`) and executes scheduled jobs when `/schedule/run` is called.
 2. **Orchestration dependency**: `lien-automation-schedule.timer`
-   - Fires at **07:30** and **14:30** America/New_York.
+   - Fires at **07:30** and **19:30** America/New_York.
    - Triggers `lien-automation-schedule.service`, which calls the API schedule endpoint.
 
 ## Install unit files
