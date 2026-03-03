@@ -16,6 +16,15 @@ interface ScrapeOptions {
   date_start: string;
   date_end: string;
   max_records?: number;
+  chunk_size?: number;
+  start_index?: number;
+  max_chunk_retries?: number;
+  checkpoint_key?: string;
+}
+
+interface ScrapeCheckpoint {
+  next_index: number;
+  updated_at: string;
 }
 
 function humanDelay() {
@@ -30,6 +39,52 @@ function getRandomSessionCDP(): string {
   const sessionId = `session_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
   const separator = SBR_CDP_URL.includes('?') ? '&' : '?';
   return `${SBR_CDP_URL}${separator}session=${sessionId}`;
+}
+
+function getCheckpointPath(key: string): string {
+  const checkpointDir = path.join(process.cwd(), 'data/checkpoints');
+  if (!fs.existsSync(checkpointDir)) {
+    fs.mkdirSync(checkpointDir, { recursive: true });
+  }
+  const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(checkpointDir, `ca_sos_${safeKey}.json`);
+}
+
+function loadCheckpoint(key: string): ScrapeCheckpoint | null {
+  try {
+    const checkpointPath = getCheckpointPath(key);
+    if (!fs.existsSync(checkpointPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as ScrapeCheckpoint;
+    if (typeof parsed.next_index === 'number') {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCheckpoint(key: string, nextIndex: number): void {
+  const checkpointPath = getCheckpointPath(key);
+  const payload: ScrapeCheckpoint = {
+    next_index: nextIndex,
+    updated_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(checkpointPath, JSON.stringify(payload, null, 2));
+}
+
+function clearCheckpoint(key: string): void {
+  const checkpointPath = getCheckpointPath(key);
+  if (fs.existsSync(checkpointPath)) {
+    fs.unlinkSync(checkpointPath);
+  }
+}
+
+async function backoffDelay(attempt: number): Promise<void> {
+  const base = 1000;
+  const jitter = Math.floor(Math.random() * 250);
+  const delayMs = Math.min(base * (2 ** attempt) + jitter, 10000);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 interface PdfExtraction {
@@ -282,121 +337,197 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
 }
 
 export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<LienRecord[]> {
-  const { date_start, date_end, max_records = 10 } = options;
+  const {
+    date_start,
+    date_end,
+    max_records = 10,
+    chunk_size = 25,
+    start_index = 0,
+    max_chunk_retries = 3,
+    checkpoint_key = `${date_start}_${date_end}`,
+  } = options;
   const queue = new SQLiteQueueStore();
   const processedRecords: LienRecord[] = [];
+  const checkpoint = loadCheckpoint(checkpoint_key);
+  let nextIndex = Math.max(start_index, checkpoint?.next_index ?? 0);
+  let knownRowCount = Number.POSITIVE_INFINITY;
 
-  log({ stage: 'scraper_start', site: 'ca_sos', date_start, date_end });
+  log({
+    stage: 'scraper_start',
+    site: 'ca_sos',
+    date_start,
+    date_end,
+    chunk_size,
+    max_chunk_retries,
+    start_index,
+    resume_index: nextIndex,
+  });
 
-  const cdpUrl = getRandomSessionCDP();
-  log({ stage: 'cdp_session', has_session_param: cdpUrl.includes('session=') });
+  while (processedRecords.length < max_records && nextIndex < knownRowCount) {
+    const chunkStart = nextIndex;
+    let chunkEndExclusive = chunkStart + chunk_size;
+    let lastErr: Error | null = null;
+    let chunkRowCount = knownRowCount;
+    const chunkRecords: LienRecord[] = [];
 
-  const browser = await chromium.connectOverCDP(cdpUrl);
-  const context = browser.contexts()[0];
-  const page = await context.newPage();
+    for (let attempt = 0; attempt < max_chunk_retries; attempt++) {
+      const cdpUrl = getRandomSessionCDP();
+      log({
+        stage: 'chunk_start',
+        chunk_start: chunkStart,
+        chunk_end_exclusive: chunkEndExclusive,
+        attempt: attempt + 1,
+        has_session_param: cdpUrl.includes('session='),
+      });
 
-  try {
-    await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
-      waitUntil: 'networkidle',
-      timeout: 90000
-    });
+      const browser = await chromium.connectOverCDP(cdpUrl);
+      const context = browser.contexts()[0] ?? await browser.newContext({ acceptDownloads: true });
+      const page = await context.newPage();
 
-    const searchInput = page.getByLabel('Search by name or file number');
-    await searchInput.waitFor({ state: 'visible', timeout: 90000 });
-    await humanDelay();
+      try {
+        page.setDefaultTimeout(30000);
+        page.setDefaultNavigationTimeout(60000);
+        await page.route('**/*', (route) => {
+          const type = route.request().resourceType();
+          if (['image', 'font', 'media'].includes(type)) {
+            return route.abort();
+          }
+          return route.continue();
+        });
 
-    log({ stage: 'fill_search' });
-    await searchInput.fill('Internal Revenue Service');
-    await humanDelay();
+        await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
+          waitUntil: 'networkidle',
+          timeout: 60000,
+        });
 
-    const advancedBtn = page.getByRole('button', { name: /Advanced/i });
-    await advancedBtn.waitFor({ state: 'visible' });
-    await advancedBtn.click();
-    await humanDelay();
+        const searchInput = page.getByLabel('Search by name or file number');
+        await searchInput.waitFor({ state: 'visible', timeout: 60000 });
+        await humanDelay();
 
-    const fileTypeSelected = await selectFileType(page, {
-      log,
-      onFailure: () => captureFileTypeSelectionFailureDebug(page),
-    });
+        await searchInput.fill('Internal Revenue Service');
+        await humanDelay();
 
-    if (!fileTypeSelected) {
-      throw new Error('Could not find/select File Type control after opening Advanced search.');
-    }
-    await humanDelay();
+        const advancedBtn = page.getByRole('button', { name: /Advanced/i });
+        await advancedBtn.waitFor({ state: 'visible', timeout: 30000 });
+        await advancedBtn.click();
+        await humanDelay();
 
-    const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });
-    const dateEndInput = page.getByRole('textbox', { name: 'File Date: End' });
-    await dateStartInput.fill(date_start);
-    await humanDelay();
-    await dateEndInput.fill(date_end);
-    await dateEndInput.press('Tab');
-    await humanDelay();
+        const fileTypeSelected = await selectFileType(page, {
+          log,
+          onFailure: () => captureFileTypeSelectionFailureDebug(page),
+        });
 
-    log({ stage: 'submit_search' });
-    await page.getByRole('button', { name: 'Search' }).click();
-    await page.waitForLoadState('networkidle');
-    await humanDelay();
+        if (!fileTypeSelected) {
+          throw new Error('Could not find/select File Type control after opening Advanced search.');
+        }
 
-    const resultLocator = page.locator('text=/Results:\\s*\\d+/');
-    await resultLocator.waitFor({ state: 'visible', timeout: 30000 });
+        const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });
+        const dateEndInput = page.getByRole('textbox', { name: 'File Date: End' });
+        await dateStartInput.fill(date_start);
+        await humanDelay();
+        await dateEndInput.fill(date_end);
+        await dateEndInput.press('Tab');
+        await humanDelay();
 
-    const rowCount = await page.locator('.div-table-row').count();
-    const toProcess = Math.min(rowCount, max_records);
+        await page.getByRole('button', { name: 'Search' }).click();
+        await page.waitForLoadState('networkidle');
+        await humanDelay();
 
-    log({ stage: 'scraper_results_found', count: rowCount, processing: toProcess });
+        const resultLocator = page.locator('text=/Results:\\s*\\d+/');
+        await resultLocator.waitFor({ state: 'visible', timeout: 30000 });
 
-    let consecutiveFailures = 0;
-    let newRecordCount = 0;
-    for (let i = 0; i < rowCount; i++) {
-      if (newRecordCount >= max_records) break;
+        chunkRowCount = await page.locator('.div-table-row').count();
+        knownRowCount = chunkRowCount;
+        chunkEndExclusive = Math.min(chunkEndExclusive, chunkRowCount);
 
-      if (page.isClosed()) {
-        log({ stage: 'scraper_page_closed', row: i });
+        log({
+          stage: 'chunk_results_found',
+          row_count: chunkRowCount,
+          chunk_start: chunkStart,
+          chunk_end_exclusive: chunkEndExclusive,
+          already_processed: processedRecords.length,
+        });
+
+        let consecutiveFailures = 0;
+        for (let i = chunkStart; i < chunkEndExclusive; i++) {
+          if (processedRecords.length + chunkRecords.length >= max_records) {
+            break;
+          }
+
+          const cells = page.locator('.div-table-row').nth(i).locator('.div-table-cell .cell');
+          const peekFileNumber = (await cells.nth(2).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+          const peekFilingDate = (await cells.nth(5).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+
+          if (peekFileNumber && peekFilingDate) {
+            const fp = computeFingerprint('ca_sos', peekFileNumber, peekFilingDate);
+            if (queue.hasFingerprint(fp)) {
+              saveCheckpoint(checkpoint_key, i + 1);
+              continue;
+            }
+          }
+
+          const record = await processDetailRow(page, i);
+          if (record) {
+            consecutiveFailures = 0;
+            await pushToSheets([record]);
+            await queue.insertMany([record]);
+            chunkRecords.push(record);
+          } else {
+            consecutiveFailures++;
+            if (consecutiveFailures >= 3) {
+              throw new Error(`chunk_failed_consecutive_rows_${consecutiveFailures}`);
+            }
+          }
+
+          saveCheckpoint(checkpoint_key, i + 1);
+          await humanDelay();
+        }
+
+        nextIndex = chunkEndExclusive;
+        lastErr = null;
         break;
+      } catch (err: any) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        log({
+          stage: 'chunk_error',
+          chunk_start: chunkStart,
+          chunk_end_exclusive: chunkEndExclusive,
+          attempt: attempt + 1,
+          error: lastErr.message,
+        });
+        await backoffDelay(attempt);
+      } finally {
+        await page.close().catch(() => {});
+        await context.close().catch(() => {});
+        await browser.close().catch(() => {});
       }
-
-      const cells = page.locator('.div-table-row').nth(i).locator('.div-table-cell .cell');
-      const peekFileNumber = (await cells.nth(2).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
-      const peekFilingDate = (await cells.nth(5).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
-
-      if (peekFileNumber && peekFilingDate) {
-        const fp = computeFingerprint('ca_sos', peekFileNumber, peekFilingDate);
-        if (queue.hasFingerprint(fp)) {
-          log({ stage: 'scraper_skip_duplicate', row: i, file_number: peekFileNumber });
-          continue;
-        }
-      }
-
-      const record = await processDetailRow(page, i);
-
-      if (record) {
-        consecutiveFailures = 0;
-        await pushToSheets([record]);
-        log({ stage: 'scraper_pushed_sheet', file_number: record.file_number });
-
-        await queue.insertMany([record]);
-        processedRecords.push(record);
-        newRecordCount++;
-      } else {
-        consecutiveFailures++;
-        if (consecutiveFailures >= 3) {
-          log({ stage: 'scraper_too_many_failures', consecutive: consecutiveFailures, stopping: true });
-          break;
-        }
-      }
-
-      await humanDelay();
     }
 
-    log({ stage: 'scraper_complete', processed: processedRecords.length });
+    processedRecords.push(...chunkRecords);
 
-  } catch (err: any) {
-    log({ stage: 'scraper_error', error: err.message });
-    throw err;
-  } finally {
-    await page.close().catch(() => {});
-    await browser.close().catch(() => {});
+    if (lastErr) {
+      log({
+        stage: 'chunk_persistent_failure',
+        chunk_start: chunkStart,
+        chunk_end_exclusive: chunkEndExclusive,
+        row_count: chunkRowCount,
+        error: lastErr.message,
+      });
+      nextIndex = chunkEndExclusive;
+      saveCheckpoint(checkpoint_key, nextIndex);
+    }
   }
+
+  if (processedRecords.length >= max_records || nextIndex >= knownRowCount) {
+    clearCheckpoint(checkpoint_key);
+  }
+
+  log({
+    stage: 'scraper_complete',
+    processed: processedRecords.length,
+    next_index: nextIndex,
+    row_count: Number.isFinite(knownRowCount) ? knownRowCount : null,
+  });
 
   return processedRecords;
 }
