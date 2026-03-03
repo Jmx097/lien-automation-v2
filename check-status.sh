@@ -1,5 +1,5 @@
 #!/bin/bash
-# Status check script for lien-automation-v2 with Mission Control integration
+# Status check script for lien-automation-v2
 
 echo "Checking status of lien-automation-v2 services..."
 
@@ -9,14 +9,6 @@ if curl -sS http://localhost:8080/health >/dev/null 2>&1; then
     echo "✓ lien-automation-v2 API is running"
 else
     echo "✗ lien-automation-v2 API is not accessible"
-fi
-
-# Check Mission Control service
-echo "Checking Mission Control service..."
-if curl -sS http://localhost:4000 >/dev/null 2>&1; then
-    echo "✓ Mission Control is running"
-else
-    echo "✗ Mission Control is not accessible"
 fi
 
 # Check Docker containers
@@ -39,4 +31,3 @@ fi
 echo ""
 echo "Service URLs:"
 echo "- lien-automation-v2 API: http://localhost:8080"
-echo "- Mission Control Dashboard: http://localhost:4000"
