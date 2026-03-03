@@ -131,7 +131,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   const { date_start, date_end } = getLast7DaysRange();
-  const runId = `sched_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+  const runId = existing?.status === 'error'
+    ? existing.id
+    : `sched_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
   const run: ScheduledRunRecord = {
     id: runId,
@@ -143,9 +145,16 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     records_scraped: 0,
     records_skipped: 0,
     rows_uploaded: 0,
+    error: undefined,
+    finished_at: undefined,
   };
 
-  store.insertRun(run);
+  if (existing?.status === 'error') {
+    store.updateRun(run);
+    log({ stage: 'scheduled_run_retry_start', run_id: runId, idempotency_key: idempotencyKey, previous_status: existing.status });
+  } else {
+    store.insertRun(run);
+  }
 
   log({ stage: 'scheduled_run_start', run_id: runId, idempotency_key: idempotencyKey, date_start, date_end, max_records: SCHEDULE_MAX_RECORDS });
 
