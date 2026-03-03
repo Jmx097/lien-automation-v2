@@ -3,6 +3,9 @@ FROM node:20-alpine
 # Using Alpine instead of Playwright image (~150MB vs ~1.5GB)
 # Browser runs remotely via Bright Data Scraping Browser in production
 
+# System tools for PDF OCR-based parsing (CA SOS liens)
+RUN apk add --no-cache poppler-utils tesseract-ocr tesseract-ocr-data-eng
+
 WORKDIR /app
 
 # Copy package files first (layer caching — only re-runs npm ci if these change)

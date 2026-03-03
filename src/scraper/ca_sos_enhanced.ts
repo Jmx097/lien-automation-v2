@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import crypto from 'crypto';
+import * as pdfParse from 'pdf-parse';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 
@@ -135,10 +136,32 @@ function ocrPdf(pdfPath: string): string {
 
 async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
   try {
-    const text = ocrPdf(pdfPath);
-    if (!text) return {};
+    let primaryText = '';
+    try {
+      const dataBuffer = fs.readFileSync(pdfPath);
+      const parsed = await (pdfParse as any)(dataBuffer);
+      if (parsed && typeof parsed.text === 'string') {
+        primaryText = parsed.text;
+      }
+    } catch (err: any) {
+      log({ stage: 'pdf_text_extract_error', error: err.message });
+    }
 
-    log({ stage: 'pdf_ocr_extracted', length: text.length, preview: text.substring(0, 200) });
+    const ocrText = ocrPdf(pdfPath);
+    const hasOcrText = ocrText.length > 0;
+    const hasPrimaryText = primaryText.length > 0;
+    const combinedText = hasOcrText ? ocrText : primaryText;
+
+    if (!combinedText) {
+      return {};
+    }
+
+    log({
+      stage: 'pdf_text_combined',
+      source: hasOcrText && hasPrimaryText ? 'mixed' : hasOcrText ? 'ocr' : 'pdf-parse',
+      length: combinedText.length,
+      preview: combinedText.substring(0, 200),
+    });
 
     let amount: string | undefined;
     const patterns = [
@@ -150,7 +173,7 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
     ];
 
     for (const pattern of patterns) {
-      const match = text.match(pattern);
+      const match = combinedText.match(pattern);
       if (!match) continue;
 
       const raw = match[1].replace(/,/g, '');
@@ -172,21 +195,23 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
     if (!amount) {
       log({
         stage: 'pdf_amount_not_found',
-        text_preview: text.substring(0, 500),
+        has_ocr_text: hasOcrText,
+        has_pdf_text: hasPrimaryText,
+        text_preview: combinedText.substring(0, 500),
       });
     }
 
     let leadType: string | undefined;
-    if (/Form\s+668\s*\(?\s*Z\s*\)?/i.test(text) || /Certificate\s+of\s+Release\s+of\s+Federal/i.test(text)) {
+    if (/Form\s+668\s*\(?\s*Z\s*\)?/i.test(combinedText) || /Certificate\s+of\s+Release\s+of\s+Federal/i.test(combinedText)) {
       leadType = 'Release';
-    } else if (/Form\s+668\s*\(?\s*Y\s*\)?/i.test(text) || /Notice\s+of\s+Federal\s+Tax\s+Li/i.test(text)) {
+    } else if (/Form\s+668\s*\(?\s*Y\s*\)?/i.test(combinedText) || /Notice\s+of\s+Federal\s+Tax\s+Li/i.test(combinedText)) {
       leadType = 'Lien';
     }
 
-    const nameMatch = text.match(/Name\s+of\s+Taxpayer\s+(.+?)(?:\n|Residence)/is);
+    const nameMatch = combinedText.match(/Name\s+of\s+Taxpayer\s+(.+?)(?:\n|Residence)/is);
     const taxpayerName = nameMatch ? nameMatch[1].trim() : undefined;
 
-    const residenceMatch = text.match(/Residence\s+(.+?)(?:\n.*?(?:Tax Period|IMPORTANT|Kind of Tax))/is);
+    const residenceMatch = combinedText.match(/Residence\s+(.+?)(?:\n.*?(?:Tax Period|IMPORTANT|Kind of Tax))/is);
     const residence = residenceMatch ? residenceMatch[1].trim() : undefined;
 
     log({ stage: 'pdf_fields_extracted', amount, leadType, taxpayerName: taxpayerName?.substring(0, 50), residence: residence?.substring(0, 50) });
@@ -422,6 +447,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   let failedChunks = 0;
   let firstChunkStart: number | null = null;
   let lastChunkStart: number | null = null;
+  let recordsWithAmount = 0;
 
   log({
     stage: 'scraper_start',
@@ -555,6 +581,9 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
           if (record) {
             consecutiveFailures = 0;
             chunkRecords.push(record);
+            if (record.amount) {
+              recordsWithAmount += 1;
+            }
           } else {
             consecutiveFailures++;
             if (consecutiveFailures >= 3) {
@@ -618,6 +647,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   log({
     stage: 'scraper_complete',
     processed: processedRecords.length,
+    records_with_amount: recordsWithAmount,
     next_index: nextIndex,
     row_count: Number.isFinite(knownRowCount) ? knownRowCount : null,
     total_chunks_successful: successfulChunks,

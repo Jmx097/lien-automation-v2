@@ -16,6 +16,7 @@
     "test:gates": "vitest run tests/gates/",
     "test:retry": "vitest run tests/utils/retry-policy.test.ts",
     "demo:chunk": "ts-node scripts/run-chunk-demo.ts",
+    "test:ca-sos-pdf-amount": "ts-node scripts/test-ca-sos-pdf-amount.ts",
     "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",

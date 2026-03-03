@@ -17,7 +17,7 @@ services:
       - GIT_SHA=${GIT_SHA:-unknown}
     volumes:
       - ./data:/app/data
-    command: ["node", "dist/server.js"]
+    command: ["node", "dist/src/server.js"]
 
   mission-control:
     build:
