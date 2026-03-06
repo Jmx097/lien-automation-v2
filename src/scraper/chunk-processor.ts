@@ -3,8 +3,6 @@ import { preRunHealthCheck } from '../gates/pre-run-health';
 import { processRecordWithRetry, DEFAULT_RETRY_POLICY } from '../utils/retry-policy';
 import { scrapeCASOS_Enhanced } from './ca_sos_enhanced';
 import { LienRecord } from '../types';
-import { SQLiteQueueStore } from '../queue/sqlite';
-import { log } from '../utils/logger';
 
 export interface ChunkProcessorOptions {
   chunkId: string;
