@@ -1,8 +1,10 @@
+import dotenv from 'dotenv';
 import { SQLiteQueueStore } from '../queue/sqlite';
+import { QueueJob } from '../queue/QueueStore';
 import { pushToSheets } from '../sheets/push';
+import { LienRecord } from '../types';
 import { log } from '../utils/logger';
 import { scrapeCASOSDetail } from './detail-scraper';
-import dotenv from 'dotenv';
 
 dotenv.config();
 
@@ -10,17 +12,16 @@ const BATCH_SIZE = 1;
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = 300000;
 
-async function processJob(job: any): Promise<any> {
+async function processJob(job: QueueJob): Promise<LienRecord> {
   log({ stage: 'worker_process_start', job_id: job.id, file_number: job.filingNumber });
 
   const detail = await scrapeCASOSDetail(job.filingNumber);
 
-  // Map to LienRecord format for Sheets
-  const record = {
+  return {
     state: 'CA',
     source: job.site,
     county: '',
-    ucc_type: 'Federal Tax Lien', // From your search
+    ucc_type: 'Federal Tax Lien',
     debtor_name: detail.debtor_name,
     debtor_address: detail.debtor_address,
     file_number: detail.file_number,
@@ -30,12 +31,10 @@ async function processJob(job: any): Promise<any> {
     filing_date: job.filingDate,
     lapse_date: '12/31/9999',
     document_type: 'Notice of Federal Tax Lien',
-    pdf_filename: detail.pdf_path ? detail.pdf_path.split('/').pop() : '',
+    pdf_filename: detail.pdf_path ? detail.pdf_path.split('/').pop() ?? '' : '',
     processed: true,
     error: '',
   };
-
-  return record;
 }
 
 async function runWorker() {
@@ -61,8 +60,9 @@ async function runWorker() {
 
       await queue.markDone([job.id]);
       log({ stage: 'worker_job_done', job_id: job.id });
-    } catch (err: any) {
-      log({ stage: 'worker_job_failed', job_id: job.id, error: err.message });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log({ stage: 'worker_job_failed', job_id: job.id, error: message });
 
       if (job.attempts >= MAX_ATTEMPTS) {
         await queue.markDone([job.id]);
@@ -73,7 +73,7 @@ async function runWorker() {
       }
     }
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
   log({ stage: 'worker_shutdown' });
@@ -81,7 +81,7 @@ async function runWorker() {
 
 runWorker()
   .then(() => process.exit(0))
-  .catch(err => {
+  .catch((err: unknown) => {
     console.error('Worker fatal error:', err);
     process.exit(1);
   });

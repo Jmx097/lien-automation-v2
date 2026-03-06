@@ -106,9 +106,10 @@ export async function scrapeCASOSDetail(fileNumber: string): Promise<DetailResul
       pdf_path: pdfPath
     };
     
-  } catch (err: any) {
+  } catch (err: unknown) {
     await page.close().catch(() => {});
-    throw new Error(`Detail scrape failed: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    throw Object.assign(new Error(`Detail scrape failed: ${message}`), { cause: err });
   } finally {
     await browser.close().catch(() => {});
   }

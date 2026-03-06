@@ -56,11 +56,11 @@ function checkDbReachable(): ReadinessCheck {
       name: 'db_reachable',
       ok: true,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       name: 'db_reachable',
       ok: false,
-      detail: err?.message ?? String(err),
+      detail: err instanceof Error ? err.message : String(err),
     };
   }
 }
@@ -94,11 +94,12 @@ function checkDownstreamCredentialsLoaded(): ReadinessCheck {
       name: 'downstream_credentials_loaded',
       ok: true,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       name: 'downstream_credentials_loaded',
       ok: false,
-      detail: `SHEETS_KEY is not valid JSON: ${err?.message ?? String(err)}`,
+      detail: `SHEETS_KEY is not valid JSON: ${message}`,
     };
   }
 }
