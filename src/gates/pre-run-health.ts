@@ -1,7 +1,5 @@
 // src/gates/pre-run-health.ts
-import { execSync, spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import { execSync } from 'child_process';
 
 export interface PreRunHealthResult {
   success: boolean;
@@ -58,17 +56,17 @@ async function checkDockerContainer(errors: string[]): Promise<void> {
       try {
         execSync('docker start lien-scraper', { stdio: 'ignore' });
         console.log('Started lien-scraper container');
-      } catch (startError) {
+      } catch {
         // If we can't start it, try to run it
         try {
           execSync('docker run -d --name lien-scraper lien-scraper', { stdio: 'ignore' });
           console.log('Created and started new lien-scraper container');
-        } catch (runError) {
+        } catch {
           errors.push('Docker container is not running and could not be started');
         }
       }
     }
-  } catch (error) {
+  } catch {
     errors.push('Docker is not available or not functioning properly');
   }
 }
@@ -112,7 +110,7 @@ function checkPlaywrightBrowsers(errors: string[]): void {
   try {
     // Check if Playwright browsers are installed
     execSync('npx playwright install --with-deps chromium', { stdio: 'ignore' });
-  } catch (error) {
+  } catch {
     errors.push('Playwright browsers are not installed or not functioning properly');
   }
 }

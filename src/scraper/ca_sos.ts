@@ -6,7 +6,6 @@ import { limiter } from "../utils/rateLimit";
 import { humanDelay } from "../utils/delay";
 import { log } from "../utils/logger";
 import { LienRecord } from "../types";
-import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 
@@ -65,7 +64,9 @@ async function getField(page: Page | Locator, label: string): Promise<string> {
     try {
       const result = await strategy();
       if (result) return result;
-    } catch {}
+    } catch {
+      // Intentionally ignore strategy-level lookup failures and continue fallback extraction.
+    }
   }
   return "";
 }
@@ -89,7 +90,7 @@ export async function scrapeCASOS(config: ScrapeConfig): Promise<LienRecord[]> {
   const records: LienRecord[] = [];
   let totalCollected = 0;
   const maxRecords = config.max_records ?? 1000;
-  let { page: startPage, row_index: startRow } =
+  const { page: startPage, row_index: startRow } =
     config.resume_cursor ?? { page: 1, row_index: 0 };
 
   try {
@@ -232,6 +233,7 @@ async function processRow(
         break;
       }
     } catch {
+      // Intentionally ignore transient panel visibility errors and retry opening the details panel.
       await humanDelay();
     }
   }
@@ -260,6 +262,7 @@ async function processRow(
       historyOpened = true;
       break;
     } catch {
+      // Intentionally ignore transient history modal timing issues and retry opening history.
       await humanDelay();
     }
   }
@@ -293,7 +296,7 @@ async function processRow(
     try {
       await page.keyboard.press("Escape");
     } catch {
-      // ignore
+      // Intentionally ignore Escape key failures because modal state may already be dismissed.
     }
   }
 
