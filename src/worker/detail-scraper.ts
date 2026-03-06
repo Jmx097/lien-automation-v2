@@ -109,7 +109,9 @@ export async function scrapeCASOSDetail(fileNumber: string): Promise<DetailResul
   } catch (err: unknown) {
     await page.close().catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Detail scrape failed: ${message}`, { cause: err });
+    const wrappedError = new Error(`Detail scrape failed: ${message}`) as Error & { cause?: unknown };
+    wrappedError.cause = err;
+    throw wrappedError;
   } finally {
     await browser.close().catch(() => {});
   }
