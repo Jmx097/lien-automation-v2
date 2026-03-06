@@ -131,7 +131,7 @@ function extractAmountFromText(text: string): string | undefined {
   const normalized = normalizeOcrText(text);
 
   const keywordPatterns = [
-    /(?:Total|Amount\s+Due|Amount|Balance|TOTAL\s+AMOUNT)\s*[:|\-]?\s*\$?\s*([\dOolI][\dOolI,\s]*(?:\.\d{1,2})?)/gi,
+    /(?:Total|Amount\s+Due|Amount|Balance|TOTAL\s+AMOUNT)\s*[:|-]?\s*\$?\s*([\dOolI][\dOolI,\s]*(?:\.\d{1,2})?)/gi,
   ];
 
   for (const pattern of keywordPatterns) {
@@ -194,8 +194,9 @@ function ocrPdf(pdfPath: string): string {
     }
 
     return fullText;
-  } catch (err: any) {
-    log({ stage: 'ocr_error', error: err.message });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log({ stage: 'ocr_error', error: message });
     return '';
   }
 }
@@ -235,8 +236,9 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
 
     log({ stage: 'pdf_fields_extracted', amount, leadType, taxpayerName: taxpayerName?.substring(0, 50), residence: residence?.substring(0, 50) });
     return { amount, leadType, taxpayerName, residence };
-  } catch (err: any) {
-    log({ stage: 'pdf_parse_error', error: err.message });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log({ stage: 'pdf_parse_error', error: message });
     return {};
   }
 }
@@ -396,16 +398,18 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
               log({ stage: 'detail_pdf_downloaded', file_number: fileNumber, size: pdfBuffer.length });
               pdfData = await extractFromPDF(pdfPath);
               log({ stage: 'detail_pdf_parsed', file_number: fileNumber, amount: pdfData.amount, lead_type: pdfData.leadType });
-              try { fs.unlinkSync(pdfPath); } catch {}
+              try { fs.unlinkSync(pdfPath); } catch { /* ignore cleanup errors */ }
             } else {
               log({ stage: 'detail_pdf_skipped', file_number: fileNumber, size: pdfBuffer?.length ?? 0 });
             }
-          } catch (err: any) {
-            log({ stage: 'detail_pdf_failed', file_number: fileNumber, error: err.message });
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            log({ stage: 'detail_pdf_failed', file_number: fileNumber, error: message });
           }
         }
-      } catch (err: any) {
-        log({ stage: 'detail_history_failed', file_number: fileNumber, error: err.message });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        log({ stage: 'detail_history_failed', file_number: fileNumber, error: message });
       }
 
       await dismissHistoryModal(page);
@@ -438,8 +442,9 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
     log({ stage: 'detail_mapped', file_number: record.file_number });
     return record;
 
-  } catch (err: any) {
-    log({ stage: 'detail_row_failed', row: rowIndex, error: err.message });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log({ stage: 'detail_row_failed', row: rowIndex, error: message });
 
     await dismissHistoryModal(page).catch(() => {});
     await closeDrawer(page).catch(() => {});
@@ -614,7 +619,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         lastErr = null;
         successfulChunks += 1;
         break;
-      } catch (err: any) {
+      } catch (err: unknown) {
         lastErr = err instanceof Error ? err : new Error(String(err));
         log({
           stage: 'chunk_error',

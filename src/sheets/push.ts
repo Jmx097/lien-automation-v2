@@ -8,7 +8,7 @@ const LIABILITY_TYPE = 'IRS';
 
 type BusinessFlag = 'Business' | 'Personal';
 
-const INVALID_SHEET_TITLE_CHARS_REGEX = /[\\/?*\[\]:]/g;
+const INVALID_SHEET_TITLE_CHARS_REGEX = new RegExp(String.raw`[/?*\[\]:]`, 'g');
 
 function getPacificTimestampForTab(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {

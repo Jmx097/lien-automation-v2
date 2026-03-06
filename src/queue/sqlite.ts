@@ -5,6 +5,25 @@ import crypto from 'crypto';
 import { QueueStore, QueueJob } from './QueueStore';
 import { LienRecord } from '../types';
 
+interface QueueJobRow {
+  id: number;
+  fingerprint: string;
+  site: string;
+  filingNumber: string;
+  filingDate: string;
+  status: 'queued' | 'processing' | 'done' | 'failed';
+  locked_until: string | null;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CountRow {
+  count: number;
+}
+
+type ExistsRow = { 1: number } | undefined;
+
 export class SQLiteQueueStore implements QueueStore {
   private db: Database.Database;
 
@@ -41,7 +60,7 @@ export class SQLiteQueueStore implements QueueStore {
       LIMIT ?
     `);
 
-    const jobs: any[] = select.all(now, limit);
+    const jobs = select.all(now, limit) as QueueJobRow[];
 
     if (jobs.length === 0) return [];
 
@@ -91,14 +110,14 @@ export class SQLiteQueueStore implements QueueStore {
   }
 
   async getPendingCount(): Promise<number> {
-    const row: any = this.db
+    const row = this.db
       .prepare("SELECT COUNT(*) as count FROM queue_jobs WHERE status IN ('queued', 'processing')")
-      .get();
+      .get() as CountRow;
     return row.count;
   }
 
   hasFingerprint(fingerprint: string): boolean {
-    const row: any = this.db.prepare("SELECT 1 FROM queue_jobs WHERE fingerprint = ?").get(fingerprint);
+    const row = this.db.prepare("SELECT 1 FROM queue_jobs WHERE fingerprint = ?").get(fingerprint) as ExistsRow;
     return !!row;
   }
 }
