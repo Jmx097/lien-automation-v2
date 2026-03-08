@@ -24,6 +24,8 @@ const MORNING_RUN_HOUR = Number(process.env.SCHEDULE_MORNING_HOUR ?? '7');
 const MORNING_RUN_MINUTE = Number(process.env.SCHEDULE_MORNING_MINUTE ?? '30');
 const AFTERNOON_RUN_HOUR = Number(process.env.SCHEDULE_AFTERNOON_HOUR ?? '19');
 const AFTERNOON_RUN_MINUTE = Number(process.env.SCHEDULE_AFTERNOON_MINUTE ?? '30');
+const AFTERNOON_DEADLINE_HOUR = Number(process.env.SCHEDULE_AFTERNOON_DEADLINE_HOUR ?? '23');
+const AFTERNOON_DEADLINE_MINUTE = Number(process.env.SCHEDULE_AFTERNOON_DEADLINE_MINUTE ?? '59');
 
 type Slot = 'morning' | 'afternoon';
 type TriggerSource = 'external' | 'manual';
@@ -112,17 +114,33 @@ function buildDefaultIdempotencyKey(now: Date, slot: Slot): string {
   return `${p.year}-${p.month}-${p.day}:${slot}`;
 }
 
-function buildDeadlineIso(now: Date): string {
+function getDeadlineParts(slot: Slot): { hour: number; minute: number } {
+  if (slot === 'afternoon') {
+    return {
+      hour: AFTERNOON_DEADLINE_HOUR,
+      minute: AFTERNOON_DEADLINE_MINUTE,
+    };
+  }
+
+  return {
+    hour: SCHEDULE_DEADLINE_HOUR,
+    minute: SCHEDULE_DEADLINE_MINUTE,
+  };
+}
+
+function buildDeadlineIso(now: Date, slot: Slot): string {
   const p = getDateParts(now, TARGET_TIMEZONE);
-  const hh = String(SCHEDULE_DEADLINE_HOUR).padStart(2, '0');
-  const mm = String(SCHEDULE_DEADLINE_MINUTE).padStart(2, '0');
+  const deadline = getDeadlineParts(slot);
+  const hh = String(deadline.hour).padStart(2, '0');
+  const mm = String(deadline.minute).padStart(2, '0');
   return `${p.year}-${p.month}-${p.day}T${hh}:${mm}:00 ${TARGET_TIMEZONE}`;
 }
 
-function isPastDeadline(now: Date): boolean {
+function isPastDeadline(slot: Slot, now: Date): boolean {
   const p = getDateParts(now, TARGET_TIMEZONE);
-  if (p.hour > SCHEDULE_DEADLINE_HOUR) return true;
-  if (p.hour === SCHEDULE_DEADLINE_HOUR && p.minute >= SCHEDULE_DEADLINE_MINUTE) return true;
+  const deadline = getDeadlineParts(slot);
+  if (p.hour > deadline.hour) return true;
+  if (p.hour === deadline.hour && p.minute >= deadline.minute) return true;
   return false;
 }
 
@@ -233,7 +251,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   const effectiveMaxRecords = resolveEffectiveMaxRecords();
-  const deadlineIso = buildDeadlineIso(now);
+  const deadlineIso = buildDeadlineIso(now, slot);
   
   const { date_start, date_end } = getLast7DaysRange();
 
@@ -287,7 +305,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       date_start,
       date_end,
       max_records: effectiveMaxRecords,
-      stop_requested: () => isPastDeadline(new Date()),
+      stop_requested: () => isPastDeadline(slot, new Date()),
     });
 
     const tabTitle = formatRunTabName(`Scheduled_${slot}_${runId}`, date_start, date_end, new Date());
@@ -297,7 +315,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
     }
 
-    const deadlineHit = isPastDeadline(new Date());
+    const deadlineHit = isPastDeadline(slot, new Date());
     const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
 
     run.records_scraped = records.length;
@@ -314,7 +332,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
     getStore().updateRun(run);
 
-    const nextCap = maybeAdjustEffectiveMaxRecords(effectiveMaxRecords, run.amount_coverage_pct);
+    const nextCap = deadlineHit || records.length === 0
+      ? effectiveMaxRecords
+      : maybeAdjustEffectiveMaxRecords(effectiveMaxRecords, run.amount_coverage_pct);
     if (nextCap !== effectiveMaxRecords) {
       getStore().upsertControlState(nextCap);
       log({
