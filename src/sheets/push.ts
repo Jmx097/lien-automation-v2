@@ -9,6 +9,22 @@ const LIABILITY_TYPE = 'IRS';
 type BusinessFlag = 'Business' | 'Personal';
 
 const INVALID_SHEET_TITLE_CHARS_REGEX = /[[\]/?*:]/g;
+const SHEET_HEADERS = [
+  'site_id',
+  'filing_date',
+  'amount',
+  'lead_type',
+  'lead_source',
+  'liability_type',
+  'business_personal',
+  'business_name',
+  'first_name',
+  'last_name',
+  'street',
+  'city',
+  'state',
+  'zip',
+];
 
 function getPacificTimestampForTab(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -188,6 +204,71 @@ async function ensureSheetTabExists(
   return title;
 }
 
+async function getSheetIdByTitle(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  title: string
+): Promise<number> {
+  const res = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = res.data.sheets?.find((s) => s.properties?.title === title);
+  const sheetId = sheet?.properties?.sheetId;
+
+  if (typeof sheetId !== 'number') {
+    throw new Error(`Unable to resolve sheet id for tab: ${title}`);
+  }
+
+  return sheetId;
+}
+
+async function initializeSheetHeaderRow(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  tabTitle: string
+): Promise<void> {
+  const sheetId = await getSheetIdByTitle(sheets, spreadsheetId, tabTitle);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${tabTitle}'!A1:N1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [SHEET_HEADERS] },
+  });
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: {
+              sheetId,
+              gridProperties: { frozenRowCount: 1 },
+            },
+            fields: 'gridProperties.frozenRowCount',
+          },
+        },
+        {
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex: 0,
+              endRowIndex: 1,
+              startColumnIndex: 0,
+              endColumnIndex: SHEET_HEADERS.length,
+            },
+            cell: {
+              userEnteredFormat: {
+                textFormat: { bold: true },
+              },
+            },
+            fields: 'userEnteredFormat.textFormat.bold',
+          },
+        },
+      ],
+    },
+  });
+}
+
 function buildRowValues(rows: LienRecord[]) {
   return rows.map(r => {
     const businessPersonal = classifyBusinessPersonal(r.debtor_name);
@@ -260,6 +341,7 @@ export async function pushToSheetsForTab(
   const sheets = getSheetsClient();
 
   const tabTitle = await ensureSheetTabExists(sheets, spreadsheetId, requestedTabTitle);
+  await initializeSheetHeaderRow(sheets, spreadsheetId, tabTitle);
   const values = buildRowValues(rows);
 
   const range = `'${tabTitle}'!A2`;
