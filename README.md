@@ -314,28 +314,22 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 - **Execution target:** `POST /schedule/run` only
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
 - **Timezone:** `America/New_York`
-- **Trigger times:** exactly two daily runs: `07:30` and `19:30`
+- **Trigger times:** Tue/Wed at `09:00`
 - **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
-### External scheduler configuration (exactly two triggers)
+### External scheduler configuration (single trigger)
 
 Linux cron example:
 
 ```cron
-# 07:30 America/New_York
-30 7 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# Tue/Wed 09:00 America/New_York
+0 9 * * 2,3 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"slot":"morning"}'
-
-# 19:30 America/New_York
-30 19 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
-  -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"slot":"afternoon"}'
 ```
 
-Cloud Scheduler equivalent: create two jobs (`morning`, `afternoon`) with the same endpoint/token and JSON body containing the matching `slot`.
+Cloud Scheduler equivalent: create one job with schedule `0 9 * * 2,3`, endpoint `/schedule/run`, Bearer auth header, and JSON body `{"slot":"morning"}`.
 
 ### Runtime safeguards
 
@@ -416,3 +410,4 @@ Expected response includes the same `git_sha` you exported. Operators should alw
 
 Please do not commit editor or manual backup files (for example `*.bak`, `*.broken`, or `*.bak-*`).
 These are local artifacts and should remain untracked.
+

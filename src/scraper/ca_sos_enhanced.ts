@@ -8,6 +8,8 @@ import { execSync } from 'child_process';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
+import { extractAmountFromText as extractAmountByConfidence, AmountReason } from './amount-extraction';
+import { checkOCRRuntime } from './ocr-runtime';
 
 function getSbrCdpUrl(): string {
   const url = process.env.SBR_CDP_URL;
@@ -25,6 +27,8 @@ interface ScrapeOptions {
   start_index?: number;
   max_chunk_retries?: number;
   checkpoint_key?: string;
+  deadline_at_iso?: string;
+  stop_requested?: () => boolean;
 }
 
 interface ScrapeCheckpoint {
@@ -95,6 +99,9 @@ async function backoffDelay(attempt: number): Promise<void> {
 
 interface PdfExtraction {
   amount?: string;
+  amountConfidence?: number;
+  amountReason?: AmountReason;
+  ocrStatus?: 'ok' | 'ocr_missing' | 'ocr_no_text' | 'ocr_error';
   leadType?: string;
   taxpayerName?: string;
   residence?: string;
@@ -104,59 +111,12 @@ let ocrToolingChecked = false;
 
 function hasCommand(cmd: string): boolean {
   try {
-    execSync(`command -v ${cmd}`, { stdio: 'pipe' });
+    const checker = process.platform === 'win32' ? 'where' : 'command -v';
+    execSync(`${checker} ${cmd}`, { stdio: 'pipe' });
     return true;
   } catch {
     return false;
   }
-}
-
-function normalizeOcrText(text: string): string {
-  const cleaned = text
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, '-')
-    .replace(/[|]/g, 'I')
-    .replace(/\$\s+/g, '$')
-    .replace(/\s{2,}/g, ' ');
-
-  // Correct common OCR slips around numeric values.
-  return cleaned
-    .replace(/(?<=\d)[Oo](?=\d)/g, '0')
-    .replace(/(?<=\$)\s*[Oo](?=[\d,])/g, '0')
-    .replace(/(?<=\d)[lI](?=\d)/g, '1');
-}
-
-function extractAmountFromText(text: string): string | undefined {
-  const normalized = normalizeOcrText(text);
-
-  const keywordPatterns = [
-    /(?:Total|Amount\s+Due|Amount|Balance|TOTAL\s+AMOUNT)\s*[:|-]?\s*\$?\s*([\dOolI][\dOolI,\s]*(?:\.\d{1,2})?)/gi,
-  ];
-
-  for (const pattern of keywordPatterns) {
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(normalized)) !== null) {
-      const raw = match[1]
-        .replace(/[O]/g, '0')
-        .replace(/[lI]/g, '1')
-        .replace(/\s+/g, '')
-        .replace(/,/g, '');
-      const parsed = Number.parseFloat(raw);
-      if (!Number.isNaN(parsed) && parsed > 0 && parsed < 1_000_000_000) {
-        return String(Math.trunc(parsed));
-      }
-    }
-  }
-
-  // Fallback: find currency-like tokens and pick the largest plausible value.
-  const currencyLike = normalized.match(/\$?\s*\d{1,3}(?:[\s,]\d{3})*(?:\.\d{1,2})?/g) ?? [];
-  const candidates = currencyLike
-    .map((chunk) => Number.parseFloat(chunk.replace(/[\s,$]/g, '')))
-    .filter((value) => !Number.isNaN(value) && value > 0 && value < 1_000_000_000)
-    .sort((a, b) => b - a);
-
-  return candidates.length > 0 ? String(Math.trunc(candidates[0])) : undefined;
 }
 
 function ocrPdf(pdfPath: string): string {
@@ -203,20 +163,25 @@ function ocrPdf(pdfPath: string): string {
 
 async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
   try {
+    const runtime = checkOCRRuntime();
+    if (!runtime.ok) return { amountReason: 'ocr_missing', ocrStatus: 'ocr_missing' };
+
     const text = ocrPdf(pdfPath);
-    if (!text) return {};
+    if (!text.trim()) return { amountReason: 'ocr_no_text', ocrStatus: 'ocr_no_text' };
 
     log({ stage: 'pdf_ocr_extracted', length: text.length, preview: text.substring(0, 200) });
 
-    const amount = extractAmountFromText(text);
+    const amountResult = extractAmountByConfidence(text, Number(process.env.AMOUNT_MIN_CONFIDENCE ?? '0.75'));
 
-    if (amount) {
-      log({ stage: 'pdf_amount_matched', parsed_amount: amount });
+    if (amountResult.amount) {
+      log({ stage: 'pdf_amount_matched', parsed_amount: amountResult.amount, confidence: amountResult.confidence });
     }
 
-    if (!amount) {
+    if (!amountResult.amount) {
       log({
         stage: 'pdf_amount_not_found',
+        reason: amountResult.reason,
+        confidence: amountResult.confidence,
         text_preview: text.substring(0, 500),
       });
     }
@@ -234,12 +199,20 @@ async function extractFromPDF(pdfPath: string): Promise<PdfExtraction> {
     const residenceMatch = text.match(/Residence\s+(.+?)(?:\n.*?(?:Tax Period|IMPORTANT|Kind of Tax))/is);
     const residence = residenceMatch ? residenceMatch[1].trim() : undefined;
 
-    log({ stage: 'pdf_fields_extracted', amount, leadType, taxpayerName: taxpayerName?.substring(0, 50), residence: residence?.substring(0, 50) });
-    return { amount, leadType, taxpayerName, residence };
+    log({ stage: 'pdf_fields_extracted', amount: amountResult.amount, leadType, taxpayerName: taxpayerName?.substring(0, 50), residence: residence?.substring(0, 50) });
+    return {
+      amount: amountResult.amount,
+      amountConfidence: amountResult.confidence,
+      amountReason: amountResult.reason,
+      ocrStatus: 'ok',
+      leadType,
+      taxpayerName,
+      residence,
+    };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log({ stage: 'pdf_parse_error', error: message });
-    return {};
+    return { amountReason: 'ocr_error', ocrStatus: 'ocr_error' };
   }
 }
 
@@ -436,6 +409,8 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
       processed: true,
       error: '',
       amount: pdfData.amount,
+      amount_confidence: pdfData.amountConfidence,
+      amount_reason: pdfData.amountReason,
       lead_type: pdfData.leadType,
     };
 
@@ -461,6 +436,8 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     start_index = 0,
     max_chunk_retries = 5,
     checkpoint_key = `${date_start}_${date_end}`,
+    deadline_at_iso,
+    stop_requested,
   } = options;
   const queue = new SQLiteQueueStore();
   const processedRecords: LienRecord[] = [];
@@ -471,6 +448,14 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   let failedChunks = 0;
   let firstChunkStart: number | null = null;
   let lastChunkStart: number | null = null;
+  const deadlineMs = deadline_at_iso ? new Date(deadline_at_iso).getTime() : null;
+  const requireOCR = process.env.REQUIRE_OCR_TOOLS !== '0';
+  if (requireOCR) {
+    const ocrState = checkOCRRuntime();
+    if (!ocrState.ok) {
+      throw new Error(`OCR runtime not ready: ${ocrState.detail ?? ocrState.missing.join(', ')}`);
+    }
+  }
 
   log({
     stage: 'scraper_start',
@@ -484,6 +469,14 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   });
 
   while (processedRecords.length < max_records && nextIndex < knownRowCount) {
+    if (stop_requested?.()) {
+      log({ stage: 'scraper_stop_requested', processed: processedRecords.length, next_index: nextIndex });
+      break;
+    }
+    if (deadlineMs !== null && Date.now() >= deadlineMs) {
+      log({ stage: 'scraper_deadline_reached', processed: processedRecords.length, next_index: nextIndex, deadline_at_iso });
+      break;
+    }
     const chunkStart = nextIndex;
     let chunkEndExclusive = chunkStart + chunk_size;
     let lastErr: Error | null = null;
@@ -584,6 +577,8 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
         let consecutiveFailures = 0;
         for (let i = chunkStart; i < chunkEndExclusive; i++) {
+          if (stop_requested?.()) break;
+          if (deadlineMs !== null && Date.now() >= deadlineMs) break;
           if (processedRecords.length + chunkRecords.length >= max_records) {
             break;
           }
@@ -677,3 +672,13 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
   return processedRecords;
 }
+
+
+
+
+
+
+
+
+
+

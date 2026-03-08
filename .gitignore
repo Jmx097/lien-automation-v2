@@ -8,3 +8,5 @@ src/scraper/ca_sos_orig.ts
 *.bak
 *.broken
 *.bak-*
+
+env-vars.yaml

@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
+import { ensureDatabaseReady, resolveDbPath } from '../db/init';
 import crypto from 'crypto';
 import { QueueStore, QueueJob } from './QueueStore';
 import { LienRecord } from '../types';
@@ -28,8 +27,8 @@ export class SQLiteQueueStore implements QueueStore {
   private db: Database.Database;
 
   constructor() {
-    const dbPath = path.join(process.cwd(), 'data/db/lien-queue.db');
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    ensureDatabaseReady();
+    const dbPath = resolveDbPath();
     this.db = new Database(dbPath);
   }
 
@@ -121,3 +120,4 @@ export class SQLiteQueueStore implements QueueStore {
     return !!row;
   }
 }
+

@@ -1,6 +1,11 @@
 node_modules
 dist
 .env
-*.pdf
-downloads/
+.env.*
+.pdf
+downloads
 .git
+*.sqlite
+*.db
+*.log
+env-vars.yaml

@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci
 
 # OCR runtime dependencies for image-based CA SOS PDFs
 RUN apk add --no-cache \

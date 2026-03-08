@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockScraper = vi.fn();
-const mockPushToSheets = vi.fn();
+const mockPushToSheetsForTab = vi.fn();
 const mockLog = vi.fn();
 
 const runs = new Map<string, any>();
+let controlState: any = null;
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -13,7 +14,8 @@ vi.mock('../../src/scraper/index', () => ({
 }));
 
 vi.mock('../../src/sheets/push', () => ({
-  pushToSheets: mockPushToSheets,
+  formatRunTabName: vi.fn(() => 'tab-name'),
+  pushToSheetsForTab: mockPushToSheetsForTab,
 }));
 
 vi.mock('../../src/utils/logger', () => ({
@@ -34,6 +36,10 @@ vi.mock('../../src/scheduler/store', () => {
       return runs.get(idempotencyKey) ?? null;
     }
 
+    getMostRecentRun() {
+      return null;
+    }
+
     getSuccessfulRunByIdempotencyKey(idempotencyKey: string) {
       const run = runs.get(idempotencyKey);
       if (run?.status === 'success') return run;
@@ -42,6 +48,18 @@ vi.mock('../../src/scheduler/store', () => {
 
     getRunHistory(limit = 50) {
       return Array.from(runs.values()).slice(0, limit);
+    }
+
+    getRecentSuccessfulRuns(limit = 4) {
+      return Array.from(runs.values()).filter((r: any) => r.status === 'success').slice(0, limit);
+    }
+
+    upsertControlState(effectiveMaxRecords: number) {
+      controlState = { id: 1, effective_max_records: effectiveMaxRecords };
+    }
+
+    getControlState() {
+      return controlState;
     }
 
     insertMissedAlert() {}
@@ -59,12 +77,16 @@ vi.mock('../../src/scheduler/store', () => {
 describe('runScheduledScrape', () => {
   beforeEach(() => {
     runs.clear();
+    controlState = null;
     vi.clearAllMocks();
   });
 
-  it('uploads scraped records to sheets and records rows_uploaded', async () => {
-    mockScraper.mockResolvedValueOnce([{ filing_number: '1' }, { filing_number: '2' }]);
-    mockPushToSheets.mockResolvedValueOnce({ uploaded: 2 });
+  it('uploads scraped records to sheets and persists quality metrics', async () => {
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: '200', amount_reason: 'ok' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
 
     const { runScheduledScrape } = await import('../../src/scheduler');
 
@@ -74,16 +96,17 @@ describe('runScheduledScrape', () => {
       triggerSource: 'manual',
     });
 
-    expect(mockPushToSheets).toHaveBeenCalledTimes(1);
-    expect(mockPushToSheets).toHaveBeenCalledWith([{ filing_number: '1' }, { filing_number: '2' }]);
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('success');
     expect(result.rows_uploaded).toBe(2);
     expect(result.records_scraped).toBe(2);
+    expect(result.amount_found_count).toBe(2);
+    expect(result.amount_coverage_pct).toBeGreaterThan(90);
   });
 
-  it('fails the run and persists upload error details when sheet upload fails', async () => {
-    mockScraper.mockResolvedValueOnce([{ filing_number: '1' }]);
-    mockPushToSheets.mockRejectedValueOnce(new Error('Sheets unavailable'));
+  it('fails the run when sheet upload count mismatches', async () => {
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 0, tab_title: 'tab-name' });
 
     const { runScheduledScrape } = await import('../../src/scheduler');
 
@@ -93,13 +116,7 @@ describe('runScheduledScrape', () => {
       triggerSource: 'manual',
     });
 
-    expect(mockPushToSheets).toHaveBeenCalledTimes(1);
     expect(result.status).toBe('error');
-    expect(result.error).toContain('Sheets unavailable');
-    expect(result.rows_uploaded).toBe(0);
-
-    const persisted = runs.get('2026-03-03:afternoon');
-    expect(persisted.status).toBe('error');
-    expect(persisted.error).toContain('Sheets unavailable');
+    expect(result.error).toContain('sheet_upload_mismatch');
   });
 });

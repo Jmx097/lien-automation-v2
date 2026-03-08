@@ -1,8 +1,11 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
-const dbPath = path.join(process.cwd(), 'data/db/lien-queue.db');
-const db = new Database(dbPath, { verbose: console.log });
+const dbPath = process.env.SQLITE_DB_PATH && process.env.SQLITE_DB_PATH.trim() ? process.env.SQLITE_DB_PATH : '/tmp/lien.db';
+const resolvedDbPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.cwd(), dbPath);
+fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
+const db = new Database(resolvedDbPath, { verbose: console.log });
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS queue_jobs (
@@ -32,6 +35,14 @@ db.exec(`
     records_scraped INTEGER NOT NULL DEFAULT 0,
     records_skipped INTEGER NOT NULL DEFAULT 0,
     rows_uploaded INTEGER NOT NULL DEFAULT 0,
+    amount_found_count INTEGER NOT NULL DEFAULT 0,
+    amount_missing_count INTEGER NOT NULL DEFAULT 0,
+    amount_coverage_pct REAL NOT NULL DEFAULT 0,
+    ocr_success_pct REAL NOT NULL DEFAULT 0,
+    row_fail_pct REAL NOT NULL DEFAULT 0,
+    deadline_hit INTEGER NOT NULL DEFAULT 0,
+    effective_max_records INTEGER NOT NULL DEFAULT 0,
+    partial INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -49,7 +60,14 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(idempotency_key, alert_type)
   );
+
+  CREATE TABLE IF NOT EXISTS scheduler_control_state (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    effective_max_records INTEGER NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 db.close();
-console.log('DB inited at', dbPath);
+console.log('DB inited at', resolvedDbPath);
+

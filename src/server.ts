@@ -4,13 +4,21 @@ import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
-import { checkMissedRuns, getNextRuns, getRunHistory, runScheduledScrape } from "./scheduler";
+import { checkMissedRuns, getNextRuns, getRunHistory, getScheduleState, runScheduledScrape } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
+import { ensureDatabaseReady } from "./db/init";
 
 dotenv.config();
 
 if (!process.env.SBR_CDP_URL) {
-  console.error('Missing SBR_CDP_URL environment variable for Bright Data Scraping Browser');
+  console.warn('WARN: SBR_CDP_URL not set - Bright Data scraping browser disabled');
+}
+
+try {
+  const dbPath = ensureDatabaseReady();
+  console.log('SQLite DB initialized at ' + dbPath);
+} catch (err: any) {
+  console.error('Database initialization failed: ' + (err?.message ?? String(err)));
   process.exit(1);
 }
 
@@ -23,6 +31,15 @@ const runtimeVersion = {
   app_version: process.env.npm_package_version ?? "unknown",
   node_version: process.version
 };
+
+function isMissingRuntimeConfigError(err: unknown): boolean {
+  const message = String((err as any)?.message ?? err ?? '');
+  return /SBR_CDP_URL|Missing\s+.*environment variable|not configured/i.test(message);
+}
+
+function errorStatusFor(err: unknown): number {
+  return isMissingRuntimeConfigError(err) ? 503 : 500;
+}
 
 app.post("/scrape", async (req, res) => {
   const startTime = Date.now();
@@ -78,7 +95,7 @@ app.post("/scrape", async (req, res) => {
   } catch (err: any) {
     log({ stage: "fatal_error", error: String(err) });
 
-    return res.status(500).json({
+    return res.status(errorStatusFor(err)).json({
       success: false,
       error: err.message
     });
@@ -135,7 +152,7 @@ app.post("/enqueue", async (req, res) => {
   } catch (err: any) {
     log({ stage: "enqueue_error", error: String(err) });
 
-    return res.status(500).json({
+    return res.status(errorStatusFor(err)).json({
       success: false,
       error: err.message
     });
@@ -161,7 +178,7 @@ app.post("/scrape-all", async (req, res) => {
       const records = await (scraper as Function)({ date_start, date_end, max_records });
       results.push({ site, success: true, records: records.length });
     } catch (err: any) {
-      results.push({ site, success: false, error: err.message });
+      results.push({ site, success: false, error: err.message, status: errorStatusFor(err) });
     }
   }
   return res.json({ results });
@@ -180,6 +197,7 @@ app.get("/schedule", (req, res) => {
   res.json({
     next_runs: getNextRuns(),
     history: getRunHistory(limit),
+    state: getScheduleState(),
     persisted: true,
   });
 });
@@ -210,7 +228,7 @@ app.post("/schedule/run", async (req, res) => {
     });
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    return res.status(errorStatusFor(err)).json({ error: err.message });
   }
 });
 
@@ -272,7 +290,7 @@ app.post("/scrape-enhanced", async (req, res) => {
   } catch (err: any) {
     log({ stage: "scrape_enhanced_error", error: String(err) });
 
-    return res.status(500).json({
+    return res.status(errorStatusFor(err)).json({
       success: false,
       error: err.message
     });

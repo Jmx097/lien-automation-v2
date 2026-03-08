@@ -3,9 +3,10 @@ set -euo pipefail
 
 : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID}"
 : "${GCP_REGION:?Set GCP_REGION}"
-: "${JOB_NAME:=lien-scraper-job}"
+: "${JOB_NAME:=lien-scraper-schedule-run}"
 : "${TIME_ZONE:=America/New_York}"
-: "${SCHEDULER_SA_EMAIL:?Set SCHEDULER_SA_EMAIL (service account for Cloud Scheduler OIDC/OAuth auth)}"
+: "${API_BASE_URL:?Set API_BASE_URL, e.g. https://your-service-url}"
+: "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
 
 # Retry policy requirements.
 : "${RETRY_COUNT:=3}"
@@ -13,7 +14,7 @@ set -euo pipefail
 : "${MIN_BACKOFF:=30s}"
 : "${MAX_BACKOFF:=300s}"
 
-RUN_URI="https://${GCP_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${GCP_PROJECT_ID}/jobs/${JOB_NAME}:run"
+RUN_URI="${API_BASE_URL%/}/schedule/run"
 
 create_or_update_job () {
   local name="$1"
@@ -27,14 +28,12 @@ create_or_update_job () {
       --time-zone="${TIME_ZONE}" \
       --uri="${RUN_URI}" \
       --http-method=POST \
-      --oauth-service-account-email="${SCHEDULER_SA_EMAIL}" \
-      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" \
       --max-retry-attempts="${RETRY_COUNT}" \
       --max-retry-duration="${MAX_RETRY_DURATION}" \
       --min-backoff="${MIN_BACKOFF}" \
       --max-backoff="${MAX_BACKOFF}" \
-      --headers="Content-Type=application/json" \
-      --message-body='{}'
+      --update-headers="Content-Type=application/json,Authorization=Bearer ${SCHEDULE_RUN_TOKEN}" \
+      --message-body='{"slot":"morning"}'
   else
     gcloud scheduler jobs create http "${name}" \
       --location="${GCP_REGION}" \
@@ -43,18 +42,18 @@ create_or_update_job () {
       --time-zone="${TIME_ZONE}" \
       --uri="${RUN_URI}" \
       --http-method=POST \
-      --oauth-service-account-email="${SCHEDULER_SA_EMAIL}" \
-      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform" \
       --max-retry-attempts="${RETRY_COUNT}" \
       --max-retry-duration="${MAX_RETRY_DURATION}" \
       --min-backoff="${MIN_BACKOFF}" \
       --max-backoff="${MAX_BACKOFF}" \
-      --headers="Content-Type=application/json" \
-      --message-body='{}'
+      --headers="Content-Type=application/json,Authorization=Bearer ${SCHEDULE_RUN_TOKEN}" \
+      --message-body='{"slot":"morning"}'
   fi
 }
 
-create_or_update_job "${JOB_NAME}-morning" "30 7 * * *"
-create_or_update_job "${JOB_NAME}-afternoon" "30 19 * * *"
+# Tue/Wed at 09:00 local timezone.
+create_or_update_job "${JOB_NAME}-twice-weekly" "0 9 * * 2,3"
 
-echo "Scheduler jobs upserted for ${JOB_NAME} in ${TIME_ZONE}."
+echo "Scheduler job upserted for ${RUN_URI} (Tue/Wed 09:00 ${TIME_ZONE})."
+
+

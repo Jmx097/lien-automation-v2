@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import path from 'path';
+import { resolveDbPath } from '../db/init';
+import { checkOCRRuntime } from '../scraper/ocr-runtime';
 
 export interface ReadinessCheck {
   name: string;
@@ -32,7 +33,7 @@ function checkRequiredEnv(): ReadinessCheck {
 }
 
 function checkDbReachable(): ReadinessCheck {
-  const dbPath = path.join(process.cwd(), 'data/db/lien-queue.db');
+  const dbPath = resolveDbPath();
 
   try {
     const db = new Database(dbPath, { readonly: true });
@@ -104,11 +105,28 @@ function checkDownstreamCredentialsLoaded(): ReadinessCheck {
   }
 }
 
+function checkOCRReady(): ReadinessCheck {
+  const result = checkOCRRuntime();
+  if (!result.ok) {
+    return {
+      name: 'ocr_runtime_ready',
+      ok: false,
+      detail: result.detail ?? `Missing OCR binaries: ${result.missing.join(', ')}`,
+    };
+  }
+
+  return {
+    name: 'ocr_runtime_ready',
+    ok: true,
+  };
+}
+
 export function getScheduleReadinessReport(): ScheduleReadinessReport {
-  const checks = [checkRequiredEnv(), checkDbReachable(), checkDownstreamCredentialsLoaded()];
+  const checks = [checkRequiredEnv(), checkDbReachable(), checkDownstreamCredentialsLoaded(), checkOCRReady()];
 
   return {
     status: checks.every((check) => check.ok) ? 'ready' : 'not_ready',
     checks,
   };
 }
+
