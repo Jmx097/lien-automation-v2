@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { scrapers } from './scraper';
-import { pushToSheets } from './sheets/push';
+import { pushRunToNewSheetTab } from './sheets/push';
 import { log } from './utils/logger';
 
 dotenv.config();
@@ -98,7 +98,12 @@ async function main(): Promise<void> {
       max_records: config.max_records,
     });
 
-    const sheetResult = await pushToSheets(records);
+    const sheetResult = await pushRunToNewSheetTab(records, {
+      label: `${config.site}_job_${config.job_id}`,
+      date_start: config.date_start,
+      date_end: config.date_end,
+      run_started_at: startedAt,
+    });
     const finishedAt = new Date();
 
     log({

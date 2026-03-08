@@ -288,3 +288,22 @@ export async function pushToSheetsForTab(
 
   return { uploaded: rows.length, tab_title: tabTitle };
 }
+
+export async function pushRunToNewSheetTab(
+  rows: LienRecord[],
+  options: {
+    label: string;
+    date_start: string;
+    date_end: string;
+    run_started_at?: Date;
+  }
+): Promise<{ uploaded: number; tab_title: string }> {
+  const tabTitle = formatRunTabName(
+    options.label,
+    options.date_start,
+    options.date_end,
+    options.run_started_at ?? new Date()
+  );
+
+  return pushToSheetsForTab(rows, tabTitle);
+}
