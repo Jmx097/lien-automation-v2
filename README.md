@@ -293,6 +293,20 @@ Production startup is standardized on **systemd** only. Do not use ad-hoc startu
 - Scheduler trigger: `deploy/systemd/lien-automation-schedule.timer` -> `deploy/systemd/lien-automation-schedule.service`
 - Runbook: [`docs/runbooks/systemd-production-runbook.md`](docs/runbooks/systemd-production-runbook.md)
 
+## GitHub-Centered Deployments
+
+Use GitHub as the deployment source of truth for both hosted environments:
+
+- **Cloud Run service**: run `.github/workflows/deploy-cloud-run-service.yml` with the target ref.
+- **DigitalOcean droplet**: run `.github/workflows/deploy-droplet.yml` with the target ref.
+- **Droplet rollout logic** lives in `scripts/ops/deploy-droplet.sh` and assumes the server has a clean git checkout plus systemd units already installed.
+
+Required GitHub configuration:
+
+- **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `SCHEDULE_RUN_TOKEN`
+- **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
+- **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
+
 ## Schedule Source of Truth
 
 Production scheduling now uses **an external scheduler** targeting one authenticated endpoint: `POST /schedule/run`.

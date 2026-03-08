@@ -1,0 +1,71 @@
+name: Deploy Cloud Run Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Git ref to deploy
+        required: false
+        default: main
+      service_name:
+        description: Cloud Run service name
+        required: false
+        default: lien-automation
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION }}
+      GAR_REPOSITORY: ${{ secrets.GAR_REPOSITORY }}
+      SERVICE_NAME: ${{ inputs.service_name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_JSON }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        env:
+          IMAGE_URI: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/${{ inputs.service_name }}:${{ github.sha }}
+        run: |
+          docker build -t "${IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
+
+      - name: Deploy Cloud Run service
+        env:
+          SBR_CDP_URL: ${{ secrets.SBR_CDP_URL }}
+          SHEETS_KEY: ${{ secrets.SHEETS_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SCHEDULE_RUN_TOKEN: ${{ secrets.SCHEDULE_RUN_TOKEN }}
+          SCHEDULE_TARGET_TIMEZONE: ${{ secrets.SCHEDULE_TARGET_TIMEZONE }}
+          SCHEDULE_WEEKLY_DAYS: ${{ secrets.SCHEDULE_WEEKLY_DAYS }}
+          SCHEDULE_RUN_HOUR: ${{ secrets.SCHEDULE_RUN_HOUR }}
+          SCHEDULE_RUN_MINUTE: ${{ secrets.SCHEDULE_RUN_MINUTE }}
+          SCHEDULE_DEADLINE_HOUR: ${{ secrets.SCHEDULE_DEADLINE_HOUR }}
+          SCHEDULE_DEADLINE_MINUTE: ${{ secrets.SCHEDULE_DEADLINE_MINUTE }}
+          AMOUNT_MIN_COVERAGE_PCT: ${{ secrets.AMOUNT_MIN_COVERAGE_PCT }}
+          SCHEDULE_AUTO_THROTTLE: ${{ secrets.SCHEDULE_AUTO_THROTTLE }}
+          SCHEDULE_MAX_RECORDS: ${{ secrets.SCHEDULE_MAX_RECORDS }}
+          SCHEDULE_MAX_RECORDS_FLOOR: ${{ secrets.SCHEDULE_MAX_RECORDS_FLOOR }}
+          SCHEDULE_MAX_RECORDS_CEILING: ${{ secrets.SCHEDULE_MAX_RECORDS_CEILING }}
+          REQUIRE_OCR_TOOLS: ${{ secrets.REQUIRE_OCR_TOOLS }}
+        run: bash scripts/cloud/deploy-cloud-run-service.sh

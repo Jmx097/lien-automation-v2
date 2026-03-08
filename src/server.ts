@@ -1,6 +1,6 @@
 import express from "express";
 import { scrapers } from "./scraper/index";
-import { pushToSheets } from "./sheets/push";
+import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
@@ -52,7 +52,12 @@ app.post("/scrape", async (req, res) => {
       max_records
     });
 
-    const sheetResult = await pushToSheets(results);
+    const sheetResult = await pushRunToNewSheetTab(results, {
+      label: `${site}_manual`,
+      date_start,
+      date_end,
+      run_started_at: new Date(startTime),
+    });
 
     const duration = (Date.now() - startTime) / 1000;
 
@@ -66,6 +71,7 @@ app.post("/scrape", async (req, res) => {
       success: true,
       records_scraped: results.length,
       rows_uploaded: sheetResult.uploaded,
+      tab_title: sheetResult.tab_title,
       duration_seconds: duration
     });
 
