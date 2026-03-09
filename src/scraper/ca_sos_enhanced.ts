@@ -1,4 +1,4 @@
-import { chromium, Page } from 'playwright';
+import { Page } from 'playwright';
 import { LienRecord } from '../types';
 import { log } from '../utils/logger';
 import { SQLiteQueueStore } from '../queue/sqlite';
@@ -10,14 +10,7 @@ import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 import { extractAmountFromText as extractAmountByConfidence, AmountReason } from './amount-extraction';
 import { checkOCRRuntime } from './ocr-runtime';
-
-function getSbrCdpUrl(): string {
-  const url = process.env.SBR_CDP_URL;
-  if (!url) {
-    throw new Error('Missing SBR_CDP_URL environment variable for Bright Data Scraping Browser');
-  }
-  return url;
-}
+import { createIsolatedBrowserContext } from '../browser/transport';
 
 interface ScrapeOptions {
   date_start: string;
@@ -42,13 +35,6 @@ function humanDelay() {
 
 function computeFingerprint(source: string, fileNumber: string, filingDate: string): string {
   return crypto.createHash('sha256').update(`${source}-${fileNumber}-${filingDate}`).digest('hex');
-}
-
-function getRandomSessionCDP(): string {
-  const baseUrl = getSbrCdpUrl();
-  const sessionId = `session_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  return `${baseUrl}${separator}session=${sessionId}`;
 }
 
 function getCheckpointPath(key: string): string {
@@ -487,17 +473,15 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     lastChunkStart = chunkStart;
 
     for (let attempt = 0; attempt < max_chunk_retries; attempt++) {
-      const cdpUrl = getRandomSessionCDP();
       log({
         stage: 'chunk_start',
         chunk_start: chunkStart,
         chunk_end_exclusive: chunkEndExclusive,
         attempt: attempt + 1,
-        has_session_param: cdpUrl.includes('session='),
       });
 
-      const browser = await chromium.connectOverCDP(cdpUrl);
-      const context = browser.contexts()[0] ?? await browser.newContext({ acceptDownloads: true });
+      const handle = await createIsolatedBrowserContext();
+      const context = handle.context;
       const page = await context.newPage();
 
       try {
@@ -626,8 +610,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         await backoffDelay(attempt);
       } finally {
         await page.close().catch(() => {});
-        await context.close().catch(() => {});
-        await browser.close().catch(() => {});
+        await handle.close().catch(() => {});
       }
     }
 

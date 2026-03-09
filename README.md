@@ -1,12 +1,12 @@
 # Lien Automation v2
 
-A web scraper and automation tool for retrieving UCC (Uniform Commercial Code) filings and lien records from the California Secretary of State website, with automatic export to Google Sheets.
+A web scraper and automation tool for retrieving lien records from multiple public filing systems, with automatic export to Google Sheets.
 
 ## Overview
 
 This project provides an Express.js API server that scrapes lien data from the CA Secretary of State's UCC filing system and automatically pushes the results to Google Sheets for analysis and tracking.
 
-**Current Status**: Production-oriented API with live CA SOS scraping, queueing, schedule readiness checks, externally triggered schedule runs, and persisted scheduler run history in SQLite.
+**Current Status**: Production-oriented API with live CA SOS scraping, NYC ACRIS support, queueing, schedule readiness checks, externally triggered per-site schedule runs, and persisted scheduler run history in SQLite.
 
 ## Planning Documents
 
@@ -15,7 +15,7 @@ This project provides an Express.js API server that scrapes lien data from the C
 
 ## Features
 
-- **Live CA SOS scraping API**: Uses Playwright with Chromium (via Bright Data SBR CDP) to scrape filing records.
+- **Multi-site scraping API**: Supports CA SOS and NYC ACRIS via Playwright-based browser automation.
 - **Direct and queued execution paths**: `POST /scrape` pushes to Sheets immediately, while `POST /enqueue` stores records in SQLite-backed queue storage.
 - **Enhanced scrape mode**: `POST /scrape-enhanced` runs scrape processing without sheet upload in the same response flow.
 - **Scheduler readiness + introspection**:
@@ -29,7 +29,7 @@ This project provides an Express.js API server that scrapes lien data from the C
 
 The project is organized into three main modules:
 
-- **Scraper** (`src/scraper/`): Handles web scraping logic for CA SOS website
+- **Scraper** (`src/scraper/`): Handles web scraping logic for CA SOS and NYC ACRIS
 - **Sheets** (`src/sheets/`): Manages Google Sheets API integration
 - **Utils** (`src/utils/`): Utility functions for delays, rate limiting, retries, and logging
 - **Server** (`src/server.ts`): Express.js API server with `/scrape` endpoint
@@ -94,7 +94,7 @@ Returns upcoming schedule windows and persisted run history (`history`) from the
 
 ### POST /schedule/run
 
-Authenticated endpoint for external scheduler triggers. Accepts optional `slot` (`morning`/`afternoon`) and `idempotency_key`. Scheduled runs are configured for max records and create a brand-new sheet tab per run.
+Authenticated endpoint for external scheduler triggers. Accepts optional `site`, `slot` (`morning`/`afternoon`), and `idempotency_key`. Scheduled runs create a brand-new sheet tab per run.
 
 ## What is production-ready vs requires credentials/external dependencies
 
@@ -106,7 +106,7 @@ Authenticated endpoint for external scheduler triggers. Accepts optional `slot` 
 
 ### Requires credentials or external services
 
-- **Live CA SOS scraping execution** requires a working `SBR_CDP_URL` (Bright Data Scraping Browser).
+- **Live browser scraping execution** requires one of `BRIGHTDATA_BROWSER_WS`, `BRIGHTDATA_PROXY_SERVER`, or `SBR_CDP_URL`.
 - **Google Sheets upload paths** require both `SHEETS_KEY` and `SHEET_ID`.
 - **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
 
@@ -122,11 +122,18 @@ Required environment variables:
 
 - `SHEETS_KEY`: Google service account credentials (JSON string)
 - `SHEET_ID`: Target Google Sheets spreadsheet ID
-- `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
-- `SCHEDULE_MAX_RECORDS` (optional): Max records per scheduled run (default `1000`)
-- `ENABLE_SCHEDULE_IDEMPOTENCY` (optional): Set to `1` to dedupe by slot/day; leave unset for a new run and tab each trigger
-- `SCHEDULE_MORNING_HOUR` / `SCHEDULE_MORNING_MINUTE` (optional): Morning trigger display/missed-run baseline (defaults `7`/`30`)
-- `SCHEDULE_AFTERNOON_HOUR` / `SCHEDULE_AFTERNOON_MINUTE` (optional): Afternoon trigger display/missed-run baseline (defaults `19`/`30`)
+- One browser transport:
+  - `BRIGHTDATA_BROWSER_WS`
+  - `BRIGHTDATA_PROXY_SERVER` plus `BRIGHTDATA_PROXY_USERNAME` and `BRIGHTDATA_PROXY_PASSWORD`
+  - `SBR_CDP_URL` (legacy compatibility)
+- `SCHEDULE_RUN_TOKEN`: Auth token for `POST /schedule/run`
+
+Important optional environment variables:
+
+- `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_DEADLINE_HOUR`, `SCHEDULE_CA_SOS_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TIMEZONE`
+- `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
+- `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
+- `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
 
 ## Data Schema
 
@@ -184,14 +191,9 @@ These settings reduce overhead while keeping scraper behavior and output unchang
 
 - The scraper is configured to run in headless mode with sandbox disabled for container compatibility.
 - Human-like delays are implemented between actions to mimic natural browsing patterns.
-- Only California SOS (`ca_sos`) is supported in the current version.
-- On `TooManyResultsError`, halve the date range and retry.
-- The scraper uses Bright Data Scraping Browser via the `SBR_CDP_URL` connection string for remote Playwright sessions.
-- `SBR_CDP_URL`: Bright Data Scraping Browser Playwright connection string (wss://brd-customer-hl_57a9fdd9-zone-lien_automation_v3:7g1mw53lymza@brd.superproxy.io:9222)
-- `SCHEDULE_MAX_RECORDS` (optional): Max records per scheduled run (default `1000`)
-- `ENABLE_SCHEDULE_IDEMPOTENCY` (optional): Set to `1` to dedupe by slot/day; leave unset for a new run and tab each trigger
-- `SCHEDULE_MORNING_HOUR` / `SCHEDULE_MORNING_MINUTE` (optional): Morning trigger display/missed-run baseline (defaults `7`/`30`)
-- `SCHEDULE_AFTERNOON_HOUR` / `SCHEDULE_AFTERNOON_MINUTE` (optional): Afternoon trigger display/missed-run baseline (defaults `19`/`30`)
+- Supported sites are `ca_sos` and `nyc_acris`.
+- NYC ACRIS uses a session-preserving browser flow with hidden-form submits, fresh anti-forgery tokens, and viewer extraction via `iframe[name="mainframe"]`.
+- The scraper supports Bright Data Browser API first, direct proxy mode second, and legacy `SBR_CDP_URL` as a compatibility fallback.
 
 ## Test Commands
 
@@ -270,6 +272,24 @@ LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_REC
 
 This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
 
+## NYC ACRIS Live Validation
+
+Before enabling full NYC production cadence, use the dedicated Browser API validation flow:
+
+```bash
+npm run validate:nyc-acris-live
+```
+
+- Requires `BRIGHTDATA_BROWSER_WS`.
+- Runs a single uninterrupted NYC session through results, viewer iframe extraction, and return-to-results checks.
+- Writes a redacted validation manifest under `out/acris/`.
+
+For a capped end-to-end canary that also writes to Sheets:
+
+```bash
+npm run canary:nyc-acris
+```
+
 ## Last 7 Days Helper (default max 10)
 
 For a quick end-to-end run that scrapes the **last 7 calendar days (including today)** from CA SOS and pushes directly to Sheets using the existing mapping:
@@ -317,19 +337,25 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 - **Trigger times:** Tue/Wed at `09:00`
 - **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
-### External scheduler configuration (single trigger)
+### External scheduler configuration (per-site triggers)
 
 Linux cron example:
 
 ```cron
-# Tue/Wed 09:00 America/New_York
+# CA SOS Tue/Wed 09:00 America/New_York
 0 9 * * 2,3 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"slot":"morning"}'
+  -d '{"site":"ca_sos","slot":"morning"}'
+
+# NYC ACRIS Tue/Wed/Thu/Fri 14:00 America/New_York
+0 14 * * 2,3,4,5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+  -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"site":"nyc_acris","slot":"afternoon"}'
 ```
 
-Cloud Scheduler equivalent: create one job with schedule `0 9 * * 2,3`, endpoint `/schedule/run`, Bearer auth header, and JSON body `{"slot":"morning"}`.
+Cloud Scheduler equivalent: create one job per site with the appropriate schedule and JSON body.
 
 ### Runtime safeguards
 

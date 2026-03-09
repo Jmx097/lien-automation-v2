@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { resolveDbPath } from '../db/init';
 import { checkOCRRuntime } from '../scraper/ocr-runtime';
+import { supportedSites, type SupportedSite } from '../sites';
+import { ScheduledRunStore } from '../scheduler/store';
+import { createDefaultConnectivityState, getNextAllowedRunAt, type SiteConnectivityStatus } from '../scheduler/connectivity';
 
 export interface ReadinessCheck {
   name: string;
@@ -11,23 +14,61 @@ export interface ReadinessCheck {
 export interface ScheduleReadinessReport {
   status: 'ready' | 'not_ready';
   checks: ReadinessCheck[];
+  site_connectivity: Record<SupportedSite, {
+    status: SiteConnectivityStatus;
+    next_probe_at?: string;
+    next_allowed_run_at?: string;
+    last_failure_reason?: string;
+    last_success_at?: string;
+  }>;
 }
 
-const REQUIRED_ENV_VARS = ['SBR_CDP_URL', 'SHEET_ID', 'SHEETS_KEY', 'SCHEDULE_RUN_TOKEN'] as const;
-
 function checkRequiredEnv(): ReadinessCheck {
-  const missing = REQUIRED_ENV_VARS.filter((envVar) => !process.env[envVar]);
+  const missing = ['SHEET_ID', 'SHEETS_KEY', 'SCHEDULE_RUN_TOKEN'].filter((envVar) => !process.env[envVar]);
+  const hasBrowserTransport = Boolean(
+    process.env.BRIGHTDATA_BROWSER_WS ||
+    process.env.BRIGHTDATA_PROXY_SERVER ||
+    process.env.SBR_CDP_URL
+  );
 
-  if (missing.length > 0) {
+  if (missing.length > 0 || !hasBrowserTransport) {
+    const details = [...missing];
+    if (!hasBrowserTransport) {
+      details.push('one of BRIGHTDATA_BROWSER_WS, BRIGHTDATA_PROXY_SERVER, SBR_CDP_URL');
+    }
     return {
       name: 'required_env_present',
       ok: false,
-      detail: `Missing env vars: ${missing.join(', ')}`,
+      detail: `Missing env vars: ${details.join(', ')}`,
     };
   }
 
   return {
     name: 'required_env_present',
+    ok: true,
+  };
+}
+
+function checkSiteScheduleConfig(): ReadinessCheck {
+  const requiredSiteScheduleVars = [
+    'SCHEDULE_NYC_ACRIS_TIMEZONE',
+    'SCHEDULE_NYC_ACRIS_WEEKLY_DAYS',
+    'SCHEDULE_NYC_ACRIS_RUN_HOUR',
+    'SCHEDULE_NYC_ACRIS_RUN_MINUTE',
+    'SCHEDULE_NYC_ACRIS_MAX_RECORDS',
+  ];
+  const missing = requiredSiteScheduleVars.filter((envVar) => !process.env[envVar]);
+
+  if (missing.length > 0) {
+    return {
+      name: 'site_schedule_configured',
+      ok: false,
+      detail: `Missing site schedule env vars: ${missing.join(', ')}`,
+    };
+  }
+
+  return {
+    name: 'site_schedule_configured',
     ok: true,
   };
 }
@@ -122,11 +163,25 @@ function checkOCRReady(): ReadinessCheck {
 }
 
 export function getScheduleReadinessReport(): ScheduleReadinessReport {
-  const checks = [checkRequiredEnv(), checkDbReachable(), checkDownstreamCredentialsLoaded(), checkOCRReady()];
+  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), checkDbReachable(), checkDownstreamCredentialsLoaded(), checkOCRReady()];
+  const store = new ScheduledRunStore();
+  const site_connectivity = Object.fromEntries(
+    supportedSites.map((site) => {
+      const state = store.getConnectivityState(site) ?? createDefaultConnectivityState(site);
+      return [site, {
+        status: state.status,
+        next_probe_at: state.next_probe_at,
+        next_allowed_run_at: getNextAllowedRunAt(state),
+        last_failure_reason: state.last_failure_reason,
+        last_success_at: state.last_success_at,
+      }];
+    })
+  ) as ScheduleReadinessReport['site_connectivity'];
 
   return {
     status: checks.every((check) => check.ok) ? 'ready' : 'not_ready',
     checks,
+    site_connectivity,
   };
 }
 

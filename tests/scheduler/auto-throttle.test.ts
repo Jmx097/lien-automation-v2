@@ -5,10 +5,12 @@ const mockPushToSheetsForTab = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
+const connectivityState = new Map<string, any>();
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
     ca_sos: mockScraper,
+    nyc_acris: mockScraper,
   },
 }));
 
@@ -29,13 +31,16 @@ vi.mock('../../src/scheduler/store', () => {
     getMostRecentRun() { return null; }
     getSuccessfulRunByIdempotencyKey() { return null; }
     getRunHistory(limit = 50) { return Array.from(runs.values()).slice(0, limit); }
-    getRecentSuccessfulRuns(limit = 4) {
-      return Array.from(runs.values()).filter((r: any) => r.status === 'success').slice(0, limit);
+    getRecentSuccessfulRuns(site: string, limit = 4) {
+      return Array.from(runs.values()).filter((r: any) => r.status === 'success' && r.site === site).slice(0, limit);
     }
-    upsertControlState(effectiveMaxRecords: number) {
-      controlState = { id: 1, effective_max_records: effectiveMaxRecords };
+    upsertControlState(site: string, effectiveMaxRecords: number) {
+      controlState = { site, effective_max_records: effectiveMaxRecords };
     }
-    getControlState() { return controlState; }
+    getControlState(site: string) { return controlState?.site === site ? controlState : null; }
+    upsertConnectivityState(state: any) { connectivityState.set(state.site, { ...state }); }
+    getConnectivityState(site: string) { return connectivityState.get(site) ?? null; }
+    listConnectivityStates() { return Array.from(connectivityState.values()); }
     insertMissedAlert() {}
     getMissedAlertByKey() { return null; }
   }
@@ -46,7 +51,8 @@ vi.mock('../../src/scheduler/store', () => {
 describe('scheduler auto-throttle', () => {
   beforeEach(() => {
     runs.clear();
-    controlState = { id: 1, effective_max_records: 100 };
+    controlState = { site: 'ca_sos', effective_max_records: 100 };
+    connectivityState.clear();
     vi.clearAllMocks();
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';
@@ -62,6 +68,7 @@ describe('scheduler auto-throttle', () => {
     const { runScheduledScrape, getScheduleState } = await import('../../src/scheduler');
 
     const result = await runScheduledScrape({
+      site: 'ca_sos',
       idempotencyKey: '2026-03-04:morning',
       slot: 'morning',
       triggerSource: 'manual',
@@ -71,6 +78,6 @@ describe('scheduler auto-throttle', () => {
     expect(result.amount_coverage_pct).toBeLessThan(95);
 
     const state = getScheduleState();
-    expect(state.effective_max_records).toBeLessThan(100);
+    expect(state.ca_sos.effective_max_records).toBeLessThan(100);
   });
 });

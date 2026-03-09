@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { scrapers } from './scraper';
 import { pushRunToNewSheetTab } from './sheets/push';
 import { log } from './utils/logger';
+import { resolveTransportMode } from './browser/transport';
 
 dotenv.config();
 
@@ -36,7 +37,7 @@ function computeDefaultRange(lookbackDays: number): { date_start: string; date_e
   };
 }
 
-function requireEnv(name: 'SBR_CDP_URL' | 'SHEETS_KEY' | 'SHEET_ID'): string {
+function requireEnv(name: 'SHEETS_KEY' | 'SHEET_ID'): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -46,9 +47,11 @@ function requireEnv(name: 'SBR_CDP_URL' | 'SHEETS_KEY' | 'SHEET_ID'): string {
 }
 
 function resolveConfig(): JobConfig {
-  requireEnv('SBR_CDP_URL');
   requireEnv('SHEETS_KEY');
   requireEnv('SHEET_ID');
+  if (resolveTransportMode() === 'local' && !process.env.BRIGHTDATA_PROXY_SERVER?.trim() && !process.env.SBR_CDP_URL?.trim()) {
+    throw new Error('Missing browser transport environment configuration');
+  }
 
   const lookbackDays = Number(process.env.JOB_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
   const maxRecords = process.env.JOB_MAX_RECORDS ? Number(process.env.JOB_MAX_RECORDS) : undefined;

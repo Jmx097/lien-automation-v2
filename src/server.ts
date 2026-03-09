@@ -4,14 +4,14 @@ import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
-import { checkMissedRuns, getNextRuns, getRunHistory, getScheduleState, runScheduledScrape } from "./scheduler";
+import { checkMissedRuns, checkSiteConnectivity, getNextRuns, getRunHistory, getScheduleState, runScheduledScrape } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
 import { ensureDatabaseReady } from "./db/init";
 
 dotenv.config();
 
-if (!process.env.SBR_CDP_URL) {
-  console.warn('WARN: SBR_CDP_URL not set - Bright Data scraping browser disabled');
+if (!process.env.SBR_CDP_URL && !process.env.BRIGHTDATA_BROWSER_WS && !process.env.BRIGHTDATA_PROXY_SERVER) {
+  console.warn('WARN: browser transport not set - Bright Data/browser automation disabled');
 }
 
 try {
@@ -219,9 +219,11 @@ app.post("/schedule/run", async (req, res) => {
     }
 
     const slot = req.body?.slot === 'morning' || req.body?.slot === 'afternoon' ? req.body.slot : undefined;
+    const site = typeof req.body?.site === 'string' ? req.body.site : undefined;
     const idempotencyKey = typeof req.body?.idempotency_key === 'string' ? req.body.idempotency_key : undefined;
 
     const result = await runScheduledScrape({
+      site: site as any,
       slot,
       idempotencyKey,
       triggerSource: 'external',
@@ -242,6 +244,7 @@ app.listen(8080, () => {
 
   setInterval(() => {
     checkMissedRuns().catch((err) => log({ stage: 'missed_run_check_error', error: String(err) }));
+    checkSiteConnectivity().catch((err) => log({ stage: 'site_connectivity_check_error', error: String(err) }));
   }, 60_000);
 });
 

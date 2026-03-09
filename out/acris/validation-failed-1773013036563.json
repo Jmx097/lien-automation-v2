@@ -1,0 +1,20 @@
+{
+  "startedAt": "2026-03-08T23:37:14.467Z",
+  "transportMode": "brightdata-browser-api",
+  "resultPagesVisited": 0,
+  "docIds": [],
+  "documents": [],
+  "warnings": [],
+  "failures": [
+    "page.goto: Protocol error (Page.navigate): Access denied: a836-acris.nyc.gov is classified as Government and blocked by Bright Data as it might breach Bright Data usage policy. For more details review the following: https://docs.brightdata.com/proxy-networks/residential/network-access#residential-proxy-network-policy (proxy_error)\nCall log:\n\u001b[2m  - navigating to \"https://a836-acris.nyc.gov/DS/DocumentSearch/Index\", waiting until \"domcontentloaded\"\u001b[22m\n"
+  ],
+  "network": [],
+  "validationSteps": [
+    {
+      "step": "validation_failed",
+      "ok": false,
+      "detail": "page.goto: Protocol error (Page.navigate): Access denied: a836-acris.nyc.gov is classified as Government and blocked by Bright Data as it might breach Bright Data usage policy. For more details review the following: https://docs.brightdata.com/proxy-networks/residential/network-access#residential-proxy-network-policy (proxy_error)\nCall log:\n\u001b[2m  - navigating to \"https://a836-acris.nyc.gov/DS/DocumentSearch/Index\", waiting until \"domcontentloaded\"\u001b[22m\n"
+    }
+  ],
+  "finishedAt": "2026-03-08T23:37:16.503Z"
+}

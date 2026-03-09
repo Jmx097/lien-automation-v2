@@ -1,0 +1,829 @@
+import fs from 'fs/promises';
+import path from 'path';
+import Bottleneck from 'bottleneck';
+import type { BrowserContext, Page } from 'playwright';
+import { createIsolatedBrowserContext, type BrowserTransportMode } from '../browser/transport';
+import type { NYCAcrisFailureClass, SiteConnectivityStatus } from '../scheduler/connectivity';
+import { classifyNYCAcrisFailure } from '../scheduler/connectivity';
+import type { LienRecord } from '../types';
+import { log } from '../utils/logger';
+import { redactSecret, sanitizeErrorMessage } from '../utils/redaction';
+
+const BASE = 'https://a836-acris.nyc.gov';
+const PATHS = {
+  index: '/DS/DocumentSearch/Index',
+  documentType: '/DS/DocumentSearch/DocumentType',
+  result: '/DS/DocumentSearch/DocumentTypeResult',
+  imageView: '/DS/DocumentSearch/DocumentImageView',
+};
+
+const SEARCH_PROFILE = {
+  hid_doctype: process.env.ACRIS_HIDDOCTYPE || 'FL',
+  hid_doctype_name: process.env.ACRIS_HIDDOCTYPENAME || 'FEDERAL LIEN-IRS',
+  hid_selectdate: process.env.ACRIS_HIDSELECTDATE || '7',
+  hid_borough: process.env.ACRIS_HIDBOROUGH || '0',
+  hid_borough_name: process.env.ACRIS_HIDBOROUGHNAME || 'ALL BOROUGHS',
+  hid_max_rows: process.env.ACRIS_HIDMAXROWS || '10',
+  hid_SearchType: process.env.ACRIS_HIDSEARCHTYPE || 'DOCTYPE',
+  hid_ISIntranet: process.env.ACRIS_HIDISINTRANET || 'N',
+  hid_sort: process.env.ACRIS_HIDSORT || '',
+} as const;
+
+type SearchProfile = Record<keyof typeof SEARCH_PROFILE, string>;
+
+const OUT_DIR = process.env.ACRIS_OUT_DIR || path.resolve(process.cwd(), 'out', 'acris');
+const MAX_RESULT_PAGES = Number(process.env.ACRIS_MAX_RESULT_PAGES ?? '3');
+const INITIAL_MAX_RESULT_PAGES = Number(process.env.ACRIS_INITIAL_MAX_RESULT_PAGES ?? '1');
+const INITIAL_MAX_RECORDS = Number(process.env.ACRIS_INITIAL_MAX_RECORDS ?? '5');
+const ENFORCE_INITIAL_CAP = process.env.ACRIS_ENFORCE_INITIAL_CAP !== '0';
+const CHECKPOINT_DIR = path.join(OUT_DIR, 'checkpoints');
+const NYC_ACRIS_ACTION_DELAY_MIN_MS = Number(process.env.NYC_ACRIS_ACTION_DELAY_MIN_MS ?? '2000');
+const NYC_ACRIS_ACTION_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_ACTION_DELAY_MAX_MS ?? '4000');
+const NYC_ACRIS_DOC_DELAY_MIN_MS = Number(process.env.NYC_ACRIS_DOC_DELAY_MIN_MS ?? '8000');
+const NYC_ACRIS_DOC_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_DOC_DELAY_MAX_MS ?? '15000');
+const NYC_ACRIS_PAGE_DELAY_MIN_MS = Number(process.env.NYC_ACRIS_PAGE_DELAY_MIN_MS ?? '15000');
+const NYC_ACRIS_PAGE_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_PAGE_DELAY_MAX_MS ?? '30000');
+const NYC_ACRIS_SESSION_MAX_MINUTES = Number(process.env.NYC_ACRIS_SESSION_MAX_MINUTES ?? '20');
+const nycAcrisLimiter = new Bottleneck({ maxConcurrent: 1 });
+
+export interface ScrapeOptions {
+  date_start: string;
+  date_end: string;
+  max_records?: number;
+  stop_requested?: () => boolean;
+  connectivity_status_at_start?: SiteConnectivityStatus;
+}
+
+export interface ValidationOptions {
+  max_documents?: number;
+  headed?: boolean;
+  connectivity_status_at_start?: SiteConnectivityStatus;
+}
+
+interface SearchState {
+  pageNum: number;
+  profile: SearchProfile;
+}
+
+interface ResultRowCandidate {
+  docId: string;
+  filingDate: string;
+  debtorName: string;
+  securedPartyName: string;
+  documentType: string;
+  rowText: string;
+  cells: string[];
+}
+
+interface ViewerArtifact {
+  docId: string;
+  imageViewUrl: string;
+  viewerSrc: string | null;
+  imageUrls: string[];
+  title: string;
+}
+
+interface NetworkEvent {
+  method: string;
+  url: string;
+  resourceType: string;
+}
+
+interface ValidationStep {
+  step: string;
+  ok: boolean;
+  detail?: string;
+}
+
+interface CheckpointState {
+  version: 1;
+  pageNum: number;
+  docIndex: number;
+  updatedAt: string;
+}
+
+interface RunManifest {
+  startedAt: string;
+  finishedAt?: string;
+  transportMode: BrowserTransportMode;
+  resultPagesVisited: number;
+  docIds: string[];
+  documents: ViewerArtifact[];
+  warnings: string[];
+  failures: string[];
+  network: NetworkEvent[];
+  validationSteps?: ValidationStep[];
+  failureClass?: NYCAcrisFailureClass;
+  sessionDurationMs?: number;
+  attemptedDocs?: number;
+  completedDocs?: number;
+  connectivityStatusAtStart?: SiteConnectivityStatus;
+  checkpoint?: {
+    pageNum: number;
+    docIndex: number;
+  };
+}
+
+interface ProbeResult {
+  ok: boolean;
+  detail?: string;
+  transportMode: BrowserTransportMode;
+}
+
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)];
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function resolveNYCAcrisDelay(minMs: number, maxMs: number, randomValue = Math.random()): number {
+  if (maxMs <= minMs) return minMs;
+  return minMs + Math.round((maxMs - minMs) * randomValue);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getSessionBudgetMs(): number {
+  return NYC_ACRIS_SESSION_MAX_MINUTES * 60 * 1000;
+}
+
+async function waitForActionDelay(): Promise<void> {
+  await sleep(resolveNYCAcrisDelay(NYC_ACRIS_ACTION_DELAY_MIN_MS, NYC_ACRIS_ACTION_DELAY_MAX_MS));
+}
+
+async function waitForDocDelay(): Promise<void> {
+  await sleep(resolveNYCAcrisDelay(NYC_ACRIS_DOC_DELAY_MIN_MS, NYC_ACRIS_DOC_DELAY_MAX_MS));
+}
+
+async function waitForNextPageDelay(): Promise<void> {
+  await sleep(resolveNYCAcrisDelay(NYC_ACRIS_PAGE_DELAY_MIN_MS, NYC_ACRIS_PAGE_DELAY_MAX_MS));
+}
+
+function throwIfSessionBudgetExceeded(startedAtMs: number): void {
+  if (Date.now() - startedAtMs > getSessionBudgetMs()) {
+    throw new Error('session_budget_exceeded');
+  }
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function buildSearchPayload(pageNum: number, profile: SearchProfile = { ...SEARCH_PROFILE }): Record<string, string> {
+  return {
+    ...profile,
+    hid_datefromm: '',
+    hid_datefromd: '',
+    hid_datefromy: '',
+    hid_datetom: '',
+    hid_datetod: '',
+    hid_datetoy: '',
+    hid_page: String(pageNum),
+    hid_ReqID: '',
+  };
+}
+
+function formatDocIdDate(docId: string): string {
+  const match = docId.match(/^(\d{4})(\d{2})(\d{2})/);
+  if (!match) return '';
+  return `${match[2]}/${match[3]}/${match[1]}`;
+}
+
+function getCheckpointKey(options: ScrapeOptions): string {
+  return `${options.date_start}_${options.date_end}`.replace(/[^\w-]+/g, '_');
+}
+
+function getCheckpointPath(options: ScrapeOptions): string {
+  return path.join(CHECKPOINT_DIR, `${getCheckpointKey(options)}.json`);
+}
+
+async function ensureDir(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+async function loadCheckpoint(options: ScrapeOptions): Promise<CheckpointState | null> {
+  try {
+    const file = getCheckpointPath(options);
+    const raw = await fs.readFile(file, 'utf8');
+    const parsed = JSON.parse(raw) as CheckpointState;
+    if (parsed.version === 1) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCheckpoint(options: ScrapeOptions, checkpoint: CheckpointState): Promise<void> {
+  await ensureDir(CHECKPOINT_DIR);
+  await fs.writeFile(getCheckpointPath(options), JSON.stringify(checkpoint, null, 2), 'utf8');
+}
+
+async function clearCheckpoint(options: ScrapeOptions): Promise<void> {
+  await fs.rm(getCheckpointPath(options), { force: true });
+}
+
+async function writeManifest(manifest: RunManifest, suffix = `run-${Date.now()}.json`): Promise<string> {
+  await ensureDir(OUT_DIR);
+  const file = path.join(OUT_DIR, suffix);
+  await fs.writeFile(file, JSON.stringify(manifest, null, 2), 'utf8');
+  return file;
+}
+
+async function getToken(page: Page): Promise<string> {
+  const locator = page.locator('input[name="__RequestVerificationToken"], input[name="RequestVerificationToken"]').first();
+  await locator.waitFor({ state: 'attached', timeout: 30000 });
+  const token = await locator.inputValue();
+  if (!token) throw new Error('Missing anti-forgery token');
+  return token;
+}
+
+async function submitHiddenPost(page: Page, actionUrl: string, fields: Record<string, string>): Promise<void> {
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }),
+    page.evaluate(
+      ({ actionUrl, fields }) => {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = actionUrl;
+        form.style.display = 'none';
+
+        for (const [name, value] of Object.entries(fields)) {
+          const input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = name;
+          input.value = value ?? '';
+          form.appendChild(input);
+        }
+
+        document.body.appendChild(form);
+        form.submit();
+      },
+      { actionUrl, fields }
+    ),
+  ]);
+}
+
+async function gotoDocumentType(page: Page): Promise<void> {
+  await page.goto(`${BASE}${PATHS.index}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await page.goto(`${BASE}${PATHS.documentType}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+}
+
+async function loadResultPage(page: Page, pageNum: number, state: SearchState): Promise<void> {
+  if (pageNum > 1) {
+    await waitForNextPageDelay();
+  } else {
+    await waitForActionDelay();
+  }
+  const token = await getToken(page);
+  const profile = state.profile;
+  await submitHiddenPost(page, `${BASE}${PATHS.result}`, {
+    __RequestVerificationToken: token,
+    ...buildSearchPayload(pageNum, profile),
+  });
+  await page.waitForURL(/\/DS\/DocumentSearch\/DocumentTypeResult/i, { timeout: 45000 });
+  state.pageNum = pageNum;
+}
+
+async function collectHiddenFields(page: Page): Promise<Record<string, string>> {
+  return page.evaluate(() => {
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('form input[type="hidden"]'));
+    return Object.fromEntries(
+      inputs
+        .map((input) => [input.name, input.value ?? ''])
+        .filter(([name]) => Boolean(name))
+    );
+  });
+}
+
+function selectAuthoritativeCell(cells: string[], predicates: Array<(value: string) => boolean>): string {
+  for (const predicate of predicates) {
+    const match = cells.find((value) => predicate(value));
+    if (match) return match;
+  }
+  return '';
+}
+
+export function extractDocIdsFromResultsHtml(html: string): string[] {
+  return unique(
+    [
+      ...[...html.matchAll(/DocumentImageView\?doc_id=(\d{16})/gi)].map((match) => match[1]),
+      ...[...html.matchAll(/go_image\(["'](\d{16})["']\)/gi)].map((match) => match[1]),
+    ]
+      .filter((docId) => /^\d{16}$/.test(docId))
+  );
+}
+
+export function extractViewerArtifactFromHtml(html: string): Pick<ViewerArtifact, 'viewerSrc' | 'imageUrls' | 'title'> {
+  const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+  const viewerMatch = html.match(/<iframe[^>]+name=["']mainframe["'][^>]+src=["']([^"']+)["']/i);
+  const imageUrls = unique(
+    [...html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)].map((match) => match[1]).filter(Boolean)
+  );
+
+  return {
+    title: titleMatch?.[1]?.trim() ?? '',
+    viewerSrc: viewerMatch?.[1] ?? null,
+    imageUrls,
+  };
+}
+
+async function extractResultRows(page: Page): Promise<ResultRowCandidate[]> {
+  const html = await page.content();
+  const fallbackIds = extractDocIdsFromResultsHtml(html);
+
+  const rows = await page.evaluate(() => {
+    const rowNodes = Array.from(document.querySelectorAll<HTMLTableRowElement>('tr'));
+    return rowNodes
+      .map((row) => {
+        const imageButton = row.querySelector<HTMLInputElement>('input[title="ViewImage"], input[name="IMG"]');
+        const anchor = row.querySelector<HTMLAnchorElement>('a[href*="DocumentImageView?doc_id="]');
+        const onclick = imageButton?.getAttribute('onclick') ?? '';
+        const href = anchor?.getAttribute('href') ?? '';
+        const docId = onclick.match(/go_image\("(\d{16})"\)|go_image\('(\d{16})'\)/i)?.[1]
+          ?? onclick.match(/go_image\("(\d{16})"\)|go_image\('(\d{16})'\)/i)?.[2]
+          ?? href.match(/doc_id=(\d{16})/i)?.[1]
+          ?? '';
+        const cells = Array.from(row.querySelectorAll('td,th'))
+          .map((node) => (node.textContent ?? '').trim())
+          .filter(Boolean);
+        const rowText = (row.textContent ?? imageButton?.textContent ?? anchor?.textContent ?? '').trim();
+
+        return { docId, cells, rowText };
+      })
+      .filter((row) => Boolean(row.docId));
+  });
+
+  const fallbackRows = fallbackIds.map((docId) => {
+    const rowTextMatch = html.match(new RegExp(`go_image\\(["']${docId}["']\\)[\\s\\S]*?<\\/tr>`, 'i'));
+    const rowText = rowTextMatch?.[0] ?? '';
+
+    return {
+      docId,
+      cells: [] as string[],
+      rowText,
+    };
+  });
+
+  const mapped = [...rows, ...fallbackRows]
+    .filter((row) => /^\d{16}$/.test(row.docId))
+    .map((row) => {
+      const normalizedCells = row.cells.map(normalizeText).filter(Boolean);
+      const filingDate = selectAuthoritativeCell(normalizedCells, [(value) => /^\d{2}\/\d{2}\/\d{4}$/.test(value)]) || formatDocIdDate(row.docId);
+      const documentType = selectAuthoritativeCell(normalizedCells, [(value) => /federal lien-irs/i.test(value)]) || 'FEDERAL LIEN-IRS';
+      const securedPartyName = selectAuthoritativeCell(normalizedCells, [
+        (value) => /internal revenue service/i.test(value),
+        (value) => /^irs$/i.test(value),
+      ]) || 'Internal Revenue Service';
+      const debtorName = selectAuthoritativeCell(normalizedCells, [
+        (value) => !/^\d{16}$/.test(value) &&
+          !/^\d{2}\/\d{2}\/\d{4}$/.test(value) &&
+          !/federal lien-irs/i.test(value) &&
+          !/internal revenue service|^irs$/i.test(value) &&
+          !/all boroughs/i.test(value),
+      ]);
+
+      return {
+        docId: row.docId,
+        filingDate,
+        debtorName,
+        securedPartyName,
+        documentType,
+        rowText: normalizeText(row.rowText),
+        cells: normalizedCells,
+      };
+    });
+
+  if (mapped.length > 0) {
+    const seen = new Set<string>();
+    return mapped.filter((row) => {
+      if (seen.has(row.docId)) return false;
+      seen.add(row.docId);
+      return true;
+    });
+  }
+
+  return fallbackIds.map((docId) => ({
+    docId,
+    filingDate: formatDocIdDate(docId),
+    debtorName: '',
+    securedPartyName: 'Internal Revenue Service',
+    documentType: 'FEDERAL LIEN-IRS',
+    rowText: '',
+    cells: [],
+  }));
+}
+
+async function openImageViewFromResults(page: Page, state: SearchState, docId: string): Promise<Record<string, string>> {
+  await waitForActionDelay();
+  const token = await getToken(page);
+  const currentFields = await collectHiddenFields(page);
+  const imageViewFields = {
+    ...currentFields,
+    ...buildSearchPayload(state.pageNum, state.profile),
+    __RequestVerificationToken: token,
+  };
+
+  await submitHiddenPost(page, `${BASE}${PATHS.imageView}?doc_id=${docId}`, imageViewFields);
+  await page.waitForURL(new RegExp(`/DocumentImageView\\?doc_id=${docId}`, 'i'), { timeout: 45000 });
+  return imageViewFields;
+}
+
+async function returnToResultsFromViewer(page: Page, docId: string): Promise<void> {
+  await waitForActionDelay();
+  const token = await getToken(page);
+  const hiddenFields = await collectHiddenFields(page);
+  const returnFields: Record<string, string> = {
+    ...hiddenFields,
+    __RequestVerificationToken: token,
+  };
+
+  delete returnFields.hid_DocID;
+  delete returnFields.hid_PrintType;
+  delete returnFields.hid_URL;
+  delete returnFields.hid_Cov;
+  delete returnFields.hid_Sup;
+  delete returnFields.hid_Tax;
+
+  await submitHiddenPost(page, `${BASE}${PATHS.result}?page=${hiddenFields.hid_page || '1'}`, returnFields);
+  await page.waitForURL(/\/DS\/DocumentSearch\/DocumentTypeResult/i, { timeout: 45000 });
+
+  const html = await page.content();
+  if (!html.includes(docId) && !html.includes('DocumentTypeResult')) {
+    throw new Error('Failed to return to ACRIS result page with live session state');
+  }
+}
+
+async function extractViewerArtifactInSession(page: Page, state: SearchState, docId: string): Promise<ViewerArtifact> {
+  await openImageViewFromResults(page, state, docId);
+
+  const viewerSrc = (await page.locator('iframe[name="mainframe"]').getAttribute('src').catch(() => null)) ?? null;
+  const title = await page.title();
+  const frame = page.frame({ name: 'mainframe' });
+  let imageUrls: string[] = [];
+
+  if (frame) {
+    await frame.waitForLoadState('domcontentloaded').catch(() => null);
+    imageUrls = unique(
+      await frame
+        .locator('img')
+        .evaluateAll((nodes) => nodes.map((node) => (node as HTMLImageElement).src).filter(Boolean))
+        .catch(() => [])
+    );
+  }
+
+  const artifact: ViewerArtifact = {
+    docId,
+    imageViewUrl: page.url(),
+    viewerSrc,
+    imageUrls,
+    title,
+  };
+
+  await returnToResultsFromViewer(page, docId);
+  return artifact;
+}
+
+async function hardenContext(context: BrowserContext, manifest: RunManifest): Promise<void> {
+  context.on('request', (request) => {
+    const url = request.url();
+    if (/a836-acris\.nyc\.gov/i.test(url)) {
+      manifest.network.push({
+        method: request.method(),
+        url: url.replace(/(__?RequestVerificationToken=)[^&]+/gi, '$1[REDACTED]'),
+        resourceType: request.resourceType(),
+      });
+    }
+  });
+
+  context.on('requestfailed', (request) => {
+    const url = request.url();
+    if (/a836-acris\.nyc\.gov/i.test(url)) {
+      manifest.failures.push(`requestfailed ${request.method()} ${url}`);
+    }
+  });
+
+  await context.route('**/*', async (route) => {
+    const url = route.request().url();
+    if (
+      /prodregistryv2\.org/i.test(url) ||
+      /translate-pa\.googleapis\.com/i.test(url) ||
+      /translate\.googleapis\.com/i.test(url) ||
+      /fonts\.gstatic\.com/i.test(url)
+    ) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
+
+function toLienRecord(row: ResultRowCandidate): LienRecord {
+  return {
+    state: 'NY',
+    source: 'nyc_acris',
+    county: 'New York City',
+    ucc_type: 'Federal Tax Lien',
+    debtor_name: row.debtorName,
+    debtor_address: '',
+    file_number: row.docId,
+    secured_party_name: row.securedPartyName,
+    secured_party_address: '',
+    status: 'Active',
+    filing_date: row.filingDate || formatDocIdDate(row.docId),
+    lapse_date: '12/31/9999',
+    document_type: row.documentType,
+    pdf_filename: '',
+    processed: true,
+    error: '',
+    lead_type: 'Lien',
+  };
+}
+
+function resolveSafeRunLimits(requestedMaxRecords?: number): { maxRecords: number; maxPages: number } {
+  const requested = requestedMaxRecords ?? INITIAL_MAX_RECORDS;
+  if (!ENFORCE_INITIAL_CAP) {
+    return {
+      maxRecords: requested,
+      maxPages: MAX_RESULT_PAGES,
+    };
+  }
+
+  return {
+    maxRecords: Math.min(requested, INITIAL_MAX_RECORDS),
+    maxPages: Math.min(MAX_RESULT_PAGES, INITIAL_MAX_RESULT_PAGES),
+  };
+}
+
+async function initializeSearchSession(page: Page, state: SearchState): Promise<void> {
+  await gotoDocumentType(page);
+  state.profile = { ...SEARCH_PROFILE };
+}
+
+async function captureValidationEvidence(page: Page, name: string): Promise<void> {
+  await ensureDir(OUT_DIR);
+  const sanitized = name.replace(/[^\w-]+/g, '_');
+  const html = await page.content().catch(() => '');
+  await fs.writeFile(path.join(OUT_DIR, `${sanitized}.html`), html, 'utf8').catch(() => null);
+}
+
+async function createAcrisContext(options?: { headed?: boolean }) {
+  return createIsolatedBrowserContext({
+    headless: options?.headed ? false : undefined,
+  });
+}
+
+export async function validateNYCAcrisSelectors(options: ValidationOptions = {}): Promise<RunManifest> {
+  return nycAcrisLimiter.schedule(async () => {
+    const startedAtMs = Date.now();
+    const manifest: RunManifest = {
+      startedAt: nowIso(),
+      transportMode: 'local',
+      resultPagesVisited: 0,
+      docIds: [],
+      documents: [],
+      warnings: [],
+      failures: [],
+      network: [],
+      validationSteps: [],
+      attemptedDocs: 0,
+      completedDocs: 0,
+      connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
+    };
+
+    const handle = await createAcrisContext({ headed: options.headed });
+    manifest.transportMode = handle.mode;
+
+    const page = await handle.context.newPage();
+    page.setDefaultTimeout(45000);
+    const state: SearchState = {
+      pageNum: 1,
+      profile: { ...SEARCH_PROFILE },
+    };
+
+    try {
+      await hardenContext(handle.context, manifest);
+      throwIfSessionBudgetExceeded(startedAtMs);
+      await initializeSearchSession(page, state);
+      manifest.validationSteps?.push({ step: 'open_document_type', ok: true });
+
+      throwIfSessionBudgetExceeded(startedAtMs);
+      await loadResultPage(page, 1, state);
+      manifest.resultPagesVisited = 1;
+      manifest.validationSteps?.push({ step: 'load_result_page', ok: true });
+
+      const rows = await extractResultRows(page);
+      if (rows.length === 0) {
+        throw new Error('No ACRIS rows found during live selector validation');
+      }
+
+      manifest.docIds = rows.map((row) => row.docId);
+      manifest.validationSteps?.push({ step: 'extract_result_rows', ok: true, detail: `rows=${rows.length}` });
+
+      const targetRows = rows.slice(0, Math.min(options.max_documents ?? 2, rows.length));
+      for (let index = 0; index < targetRows.length; index++) {
+        throwIfSessionBudgetExceeded(startedAtMs);
+        const row = targetRows[index];
+        manifest.attemptedDocs = index + 1;
+        const artifact = await extractViewerArtifactInSession(page, state, row.docId);
+        manifest.documents.push(artifact);
+        manifest.completedDocs = manifest.documents.length;
+        manifest.validationSteps?.push({ step: `viewer_roundtrip_${row.docId}`, ok: true });
+
+        if (index < targetRows.length - 1) {
+          await waitForDocDelay();
+        }
+      }
+
+      if (MAX_RESULT_PAGES > 1) {
+        throwIfSessionBudgetExceeded(startedAtMs);
+        await loadResultPage(page, 1, state);
+        manifest.validationSteps?.push({ step: 'reload_result_page_after_viewer', ok: true });
+      }
+
+      manifest.finishedAt = nowIso();
+      manifest.sessionDurationMs = Date.now() - startedAtMs;
+      await writeManifest(manifest, `validation-${Date.now()}.json`);
+      return manifest;
+    } catch (err: unknown) {
+      const message = sanitizeErrorMessage(err);
+      manifest.finishedAt = nowIso();
+      manifest.failureClass = classifyNYCAcrisFailure(message);
+      manifest.failures.push(message);
+      manifest.validationSteps?.push({ step: 'validation_failed', ok: false, detail: message });
+      manifest.sessionDurationMs = Date.now() - startedAtMs;
+      await captureValidationEvidence(page, 'acris-validation-failure');
+      await writeManifest(manifest, `validation-failed-${Date.now()}.json`).catch(() => null);
+      throw err;
+    } finally {
+      await page.close().catch(() => {});
+      await handle.close().catch(() => {});
+    }
+  });
+}
+
+export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord[]> {
+  return nycAcrisLimiter.schedule(async () => {
+    const startedAtMs = Date.now();
+    const limits = resolveSafeRunLimits(options.max_records);
+    const checkpoint = await loadCheckpoint(options);
+    const manifest: RunManifest = {
+      startedAt: nowIso(),
+      transportMode: 'local',
+      resultPagesVisited: checkpoint?.pageNum ?? 0,
+      docIds: [],
+      documents: [],
+      warnings: [],
+      failures: [],
+      network: [],
+      attemptedDocs: 0,
+      completedDocs: 0,
+      connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
+      checkpoint: checkpoint ? { pageNum: checkpoint.pageNum, docIndex: checkpoint.docIndex } : undefined,
+    };
+
+    const handle = await createAcrisContext();
+    manifest.transportMode = handle.mode;
+
+    const page = await handle.context.newPage();
+    page.setDefaultTimeout(45000);
+    const state: SearchState = {
+      pageNum: checkpoint?.pageNum ?? 1,
+      profile: { ...SEARCH_PROFILE },
+    };
+
+    try {
+      await hardenContext(handle.context, manifest);
+      throwIfSessionBudgetExceeded(startedAtMs);
+      await initializeSearchSession(page, state);
+
+      const collectedRows: ResultRowCandidate[] = [];
+      for (let pageNum = 1; pageNum <= limits.maxPages; pageNum++) {
+        throwIfSessionBudgetExceeded(startedAtMs);
+
+        if (options.stop_requested?.()) {
+          manifest.warnings.push(`stop_requested on result page ${pageNum}`);
+          break;
+        }
+
+        await loadResultPage(page, pageNum, state);
+        manifest.resultPagesVisited = pageNum;
+        const rows = await extractResultRows(page);
+        const freshRows = rows.filter((row) => !collectedRows.some((existing) => existing.docId === row.docId));
+
+        if (rows.length === 0) {
+          manifest.warnings.push(`No rows found on result page ${pageNum}`);
+          break;
+        }
+
+        collectedRows.push(...freshRows);
+        if (freshRows.length === 0) {
+          manifest.warnings.push(`No new rows found on result page ${pageNum}`);
+          break;
+        }
+
+        if (collectedRows.length >= limits.maxRecords) break;
+      }
+
+      const selectedRows = collectedRows.slice(0, limits.maxRecords);
+      manifest.docIds = selectedRows.map((row) => row.docId);
+
+      const startIndex = checkpoint?.docIndex ?? 0;
+      for (let index = startIndex; index < selectedRows.length; index++) {
+        throwIfSessionBudgetExceeded(startedAtMs);
+
+        if (options.stop_requested?.()) {
+          manifest.warnings.push(`stop_requested before viewer fetch for ${selectedRows[index].docId}`);
+          break;
+        }
+
+        try {
+          manifest.attemptedDocs = index + 1;
+          const artifact = await extractViewerArtifactInSession(page, state, selectedRows[index].docId);
+          manifest.documents.push(artifact);
+          manifest.completedDocs = manifest.documents.length;
+          await saveCheckpoint(options, {
+            version: 1,
+            pageNum: state.pageNum,
+            docIndex: index + 1,
+            updatedAt: nowIso(),
+          });
+
+          if (index < selectedRows.length - 1) {
+            await waitForDocDelay();
+          }
+        } catch (err: unknown) {
+          manifest.failures.push(`doc ${selectedRows[index].docId}: ${sanitizeErrorMessage(err)}`);
+          throw err;
+        }
+      }
+
+      await clearCheckpoint(options);
+      manifest.finishedAt = nowIso();
+      manifest.sessionDurationMs = Date.now() - startedAtMs;
+      const manifestFile = await writeManifest({
+        ...manifest,
+        warnings: unique(manifest.warnings),
+        failures: unique(manifest.failures),
+        network: manifest.network.slice(0, 200),
+      });
+
+      log({
+        stage: 'scraper_complete',
+        site: 'nyc_acris',
+        transport_mode: manifest.transportMode,
+        browser_ws_present: Boolean(process.env.BRIGHTDATA_BROWSER_WS),
+        browser_ws_redacted: redactSecret(process.env.BRIGHTDATA_BROWSER_WS),
+        proxy_server_present: Boolean(process.env.BRIGHTDATA_PROXY_SERVER),
+        proxy_server_redacted: redactSecret(process.env.BRIGHTDATA_PROXY_SERVER),
+        records_scraped: selectedRows.length,
+        failure_count: manifest.failures.length,
+        manifest_file: manifestFile,
+        initial_cap_enforced: ENFORCE_INITIAL_CAP,
+        session_duration_ms: manifest.sessionDurationMs,
+      });
+
+      return selectedRows.map(toLienRecord);
+    } catch (err: unknown) {
+      const message = sanitizeErrorMessage(err);
+      manifest.finishedAt = nowIso();
+      manifest.failureClass = classifyNYCAcrisFailure(message);
+      manifest.failures.push(message);
+      manifest.sessionDurationMs = Date.now() - startedAtMs;
+      await writeManifest(manifest, `run-failed-${Date.now()}.json`).catch(() => null);
+      throw err;
+    } finally {
+      await page.close().catch(() => {});
+      await handle.close().catch(() => {});
+    }
+  });
+}
+
+export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
+  return nycAcrisLimiter.schedule(async () => {
+    const handle = await createAcrisContext();
+    const page = await handle.context.newPage();
+    page.setDefaultTimeout(30000);
+
+    try {
+      await page.goto(`${BASE}${PATHS.index}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      const html = await page.content();
+      return {
+        ok: /Document Search/i.test(html) || html.length > 1000,
+        detail: `loaded ${page.url()}`,
+        transportMode: handle.mode,
+      };
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        detail: sanitizeErrorMessage(err),
+        transportMode: handle.mode,
+      };
+    } finally {
+      await page.close().catch(() => {});
+      await handle.close().catch(() => {});
+    }
+  });
+}

@@ -20,6 +20,8 @@
     "demo:chunk": "ts-node scripts/run-chunk-demo.ts",
     "calibrate:cap": "ts-node scripts/calibrate-schedule-cap.ts",
     "test:ca-sos-range": "ts-node scripts/run-ca-sos-range.ts",
+    "validate:nyc-acris-live": "ts-node scripts/validate-nyc-acris-live.ts",
+    "canary:nyc-acris": "ts-node scripts/run-nyc-acris-canary.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",

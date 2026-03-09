@@ -1,0 +1,164 @@
+{
+  "startedAt": "2026-03-09T23:20:48.788Z",
+  "transportMode": "brightdata-browser-api",
+  "resultPagesVisited": 1,
+  "docIds": [],
+  "documents": [],
+  "warnings": [],
+  "failures": [
+    "No ACRIS rows found during live selector validation"
+  ],
+  "network": [
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/Index",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/login.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/jquery-1.5.1.min.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/iSearch.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/divider_rule.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentType.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/divider_rule.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentTypeResult.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/Sort.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    }
+  ],
+  "validationSteps": [
+    {
+      "step": "open_document_type",
+      "ok": true
+    },
+    {
+      "step": "load_result_page",
+      "ok": true
+    },
+    {
+      "step": "validation_failed",
+      "ok": false,
+      "detail": "No ACRIS rows found during live selector validation"
+    }
+  ],
+  "finishedAt": "2026-03-09T23:20:57.855Z"
+}

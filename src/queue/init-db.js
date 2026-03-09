@@ -26,12 +26,13 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS scheduled_runs (
     id TEXT PRIMARY KEY,
+    site TEXT NOT NULL DEFAULT 'ca_sos',
     idempotency_key TEXT NOT NULL UNIQUE,
     slot_time TEXT NOT NULL,
     trigger_source TEXT NOT NULL CHECK(trigger_source IN ('external', 'manual')),
     started_at TEXT NOT NULL,
     finished_at TEXT,
-    status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error')),
+    status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error', 'deferred')),
     records_scraped INTEGER NOT NULL DEFAULT 0,
     records_skipped INTEGER NOT NULL DEFAULT 0,
     rows_uploaded INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +45,7 @@ db.exec(`
     effective_max_records INTEGER NOT NULL DEFAULT 0,
     partial INTEGER NOT NULL DEFAULT 0,
     error TEXT,
+    failure_class TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -53,6 +55,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS scheduler_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site TEXT NOT NULL DEFAULT 'ca_sos',
     idempotency_key TEXT NOT NULL,
     slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
     alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run')),
@@ -66,7 +69,45 @@ db.exec(`
     effective_max_records INTEGER NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS scheduler_site_control_state (
+    site TEXT PRIMARY KEY,
+    effective_max_records INTEGER NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS scheduler_site_connectivity_state (
+    site TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('healthy', 'degraded', 'blocked', 'probing')),
+    opened_at TEXT,
+    last_success_at TEXT,
+    last_failure_at TEXT,
+    policy_block_count INTEGER NOT NULL DEFAULT 0,
+    timeout_count INTEGER NOT NULL DEFAULT 0,
+    empty_result_count INTEGER NOT NULL DEFAULT 0,
+    window_started_at TEXT,
+    next_probe_at TEXT,
+    consecutive_probe_successes INTEGER NOT NULL DEFAULT 0,
+    last_failure_reason TEXT,
+    last_alerted_at TEXT,
+    last_recovery_alert_at TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+const scheduledRunColumns = db.prepare("PRAGMA table_info('scheduled_runs')").all();
+if (!scheduledRunColumns.some((column) => column.name === 'site')) {
+  db.prepare("ALTER TABLE scheduled_runs ADD COLUMN site TEXT NOT NULL DEFAULT 'ca_sos'").run();
+}
+
+const schedulerAlertColumns = db.prepare("PRAGMA table_info('scheduler_alerts')").all();
+if (!schedulerAlertColumns.some((column) => column.name === 'site')) {
+  db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN site TEXT NOT NULL DEFAULT 'ca_sos'").run();
+}
+
+if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
+  db.prepare("ALTER TABLE scheduled_runs ADD COLUMN failure_class TEXT").run();
+}
 
 db.close();
 console.log('DB inited at', resolvedDbPath);

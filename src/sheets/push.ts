@@ -1,10 +1,7 @@
 import { google } from 'googleapis';
 import { LienRecord } from '../types';
 import { log } from '../utils/logger';
-
-const SITE_ID_CA_SOS = 11; // from your Lien Sites sheet for CA SOS
-const LEAD_SOURCE = '777';
-const LIABILITY_TYPE = 'IRS';
+import { siteExportConfig, type SupportedSite } from '../sites';
 
 type BusinessFlag = 'Business' | 'Personal';
 
@@ -269,8 +266,10 @@ async function initializeSheetHeaderRow(
   });
 }
 
-function buildRowValues(rows: LienRecord[]) {
+export function buildRowValues(rows: LienRecord[]) {
   return rows.map(r => {
+    const siteKey = (r.source in siteExportConfig ? r.source : 'ca_sos') as SupportedSite;
+    const exportConfig = siteExportConfig[siteKey];
     const businessPersonal = classifyBusinessPersonal(r.debtor_name);
     const nameParts =
       businessPersonal === 'Personal'
@@ -280,12 +279,12 @@ function buildRowValues(rows: LienRecord[]) {
     const addrParts = parseAddress(r.debtor_address, r.state);
 
     return [
-      SITE_ID_CA_SOS,
+      exportConfig.siteId,
       r.filing_date,
       r.amount ?? '',
       r.lead_type ?? 'Lien',
-      LEAD_SOURCE,
-      LIABILITY_TYPE,
+      exportConfig.leadSource,
+      exportConfig.liabilityType,
       businessPersonal,
       businessPersonal === 'Business' ? r.debtor_name : '',
       nameParts.firstName,

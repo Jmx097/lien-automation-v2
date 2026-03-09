@@ -1,9 +1,7 @@
-import { chromium } from 'playwright';
 import { log } from '../utils/logger';
 import fs from 'fs';
 import path from 'path';
-
-const SBR_CDP_URL = process.env.SBR_CDP_URL;
+import { createIsolatedBrowserContext, resolveTransportMode } from '../browser/transport';
 
 interface DetailResult {
   file_number: string;
@@ -16,12 +14,12 @@ interface DetailResult {
 }
 
 export async function scrapeCASOSDetail(fileNumber: string): Promise<DetailResult> {
-  if (!SBR_CDP_URL) {
-    throw new Error('SBR_CDP_URL not configured');
+  if (resolveTransportMode() === 'local' && !process.env.BRIGHTDATA_PROXY_SERVER?.trim() && !process.env.SBR_CDP_URL?.trim()) {
+    throw new Error('Browser transport not configured');
   }
 
-  const browser = await chromium.connectOverCDP(SBR_CDP_URL);
-  const context = browser.contexts()[0];
+  const handle = await createIsolatedBrowserContext();
+  const context = handle.context;
   const page = await context.newPage();
 
   try {
@@ -113,6 +111,6 @@ export async function scrapeCASOSDetail(fileNumber: string): Promise<DetailResul
     wrappedError.cause = err;
     throw wrappedError;
   } finally {
-    await browser.close().catch(() => {});
+    await handle.close().catch(() => {});
   }
 }
