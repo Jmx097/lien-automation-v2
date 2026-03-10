@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockScraper = vi.fn();
+const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
 const runs = new Map<string, any>();
 const controlState = new Map<string, any>();
@@ -11,6 +12,10 @@ vi.mock('../../src/scraper/index', () => ({
     ca_sos: mockScraper,
     nyc_acris: mockScraper,
   },
+}));
+
+vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
+  probeCASOSResultCount: mockProbeCASOSResultCount,
 }));
 
 vi.mock('../../src/sheets/push', () => ({
@@ -60,6 +65,7 @@ describe('site-aware scheduler', () => {
     controlState.clear();
     connectivityState.clear();
     mockScraper.mockReset();
+    mockProbeCASOSResultCount.mockReset();
     mockPushToSheetsForTab.mockReset();
     delete process.env.SCHEDULE_NYC_ACRIS_RUN_HOUR;
     delete process.env.SCHEDULE_NYC_ACRIS_RUN_MINUTE;
@@ -72,13 +78,14 @@ describe('site-aware scheduler', () => {
 
     expect(nextRuns).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ site: 'ca_sos', days: 'TU,WE', run_time: '09:00' }),
-        expect.objectContaining({ site: 'nyc_acris', days: 'TU,WE,TH,FR', run_time: '14:00' }),
+        expect.objectContaining({ site: 'ca_sos', days: 'TU,WE', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
+        expect.objectContaining({ site: 'nyc_acris', days: 'TU,WE,TH,FR', run_time: '14:00', trigger_time: '14:00', finish_by_time: '18:00', deadline_time: '18:00' }),
       ])
     );
   });
 
   it('namespaces idempotency and control state by site', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
     mockScraper.mockResolvedValue([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
     mockPushToSheetsForTab.mockResolvedValue({ uploaded: 1, tab_title: 'tab-name' });
 

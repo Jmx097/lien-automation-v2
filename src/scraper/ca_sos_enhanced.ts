@@ -24,6 +24,12 @@ interface ScrapeOptions {
   stop_requested?: () => boolean;
 }
 
+interface CASOSSearchResult {
+  rowCount: number;
+  hasNoResults: boolean;
+  resultCount: number;
+}
+
 interface ScrapeCheckpoint {
   next_index: number;
   updated_at: string;
@@ -230,36 +236,130 @@ async function dismissHistoryModal(page: Page): Promise<void> {
   log({ stage: 'history_modal_dismissed' });
 }
 
-async function waitForResultsOrNoResults(page: Page): Promise<{ rowCount: number; hasNoResults: boolean }> {
+export function parseCASOSResultsCount(text: string): number | null {
+  const match = text.match(/Results:\s*(\d+)/i);
+  if (!match) return null;
+
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function configureCASOSSearchPage(page: Page): Promise<void> {
+  page.setDefaultTimeout(30000);
+  page.setDefaultNavigationTimeout(60000);
+  await page.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (['image', 'font', 'media'].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
+
+async function submitCASOSSearch(page: Page, date_start: string, date_end: string): Promise<void> {
+  await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
+    waitUntil: 'networkidle',
+    timeout: 60000,
+  });
+
+  const searchInput = page.getByLabel('Search by name or file number');
+  await searchInput.waitFor({ state: 'visible', timeout: 60000 });
+  await humanDelay();
+
+  await searchInput.fill('Internal Revenue Service');
+  await humanDelay();
+
+  const advancedBtn = page.getByRole('button', { name: /Advanced/i });
+  await advancedBtn.waitFor({ state: 'visible', timeout: 30000 });
+  await advancedBtn.click();
+  await humanDelay();
+
+  const fileTypeSelected = await selectFileType(page, {
+    log,
+    onFailure: () => captureFileTypeSelectionFailureDebug(page),
+  });
+
+  if (!fileTypeSelected) {
+    throw new Error('Could not find/select File Type control after opening Advanced search.');
+  }
+
+  const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });
+  const dateEndInput = page.getByRole('textbox', { name: 'File Date: End' });
+  await dateStartInput.fill(date_start);
+  await humanDelay();
+  await dateEndInput.fill(date_end);
+  await dateEndInput.press('Tab');
+  await humanDelay();
+
+  await page.getByRole('button', { name: 'Search' }).click();
+  await page.waitForLoadState('networkidle');
+  await humanDelay();
+}
+
+async function waitForResultsOrNoResults(page: Page): Promise<CASOSSearchResult> {
   const rowsLocator = page.locator('.div-table-row');
   const resultsTextLocator = page.locator('text=/Results:\\s*\\d+/');
   const noResultsLocator = page.locator('text=/No\\s+records\\s+found/i');
 
   const start = Date.now();
   const timeoutMs = 30_000;
+  let latestResultCount: number | null = null;
 
   while (Date.now() - start < timeoutMs) {
     const rowCount = await rowsLocator.count();
-    if (rowCount > 0) {
-      return { rowCount, hasNoResults: false };
-    }
 
     const hasResultsText = await resultsTextLocator.isVisible({ timeout: 500 }).catch(() => false);
     if (hasResultsText) {
-      const finalRowCount = await rowsLocator.count();
-      return { rowCount: finalRowCount, hasNoResults: finalRowCount === 0 };
+      const resultsText = (await resultsTextLocator.first().textContent().catch(() => '')) ?? '';
+      latestResultCount = parseCASOSResultsCount(resultsText);
+      if (latestResultCount === null) {
+        throw new Error(`results_count_parse_failed text=${resultsText}`);
+      }
+      if (latestResultCount === 0) {
+        return { rowCount: 0, hasNoResults: true, resultCount: 0 };
+      }
+      if (rowCount > 0) {
+        return { rowCount, hasNoResults: false, resultCount: latestResultCount };
+      }
     }
 
     const hasNoResults = await noResultsLocator.isVisible({ timeout: 500 }).catch(() => false);
     if (hasNoResults) {
-      return { rowCount: 0, hasNoResults: true };
+      return { rowCount: 0, hasNoResults: true, resultCount: 0 };
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
   log({ stage: 'results_visibility_timeout' });
+  if (latestResultCount !== null) {
+    throw new Error(`results_rows_not_visible_after_search result_count=${latestResultCount}`);
+  }
   throw new Error('results_not_visible_after_search');
+}
+
+export async function probeCASOSResultCount(options: Pick<ScrapeOptions, 'date_start' | 'date_end'>): Promise<number> {
+  const handle = await createIsolatedBrowserContext();
+  const context = handle.context;
+  const page = await context.newPage();
+
+  try {
+    await configureCASOSSearchPage(page);
+    await submitCASOSSearch(page, options.date_start, options.date_end);
+    const results = await waitForResultsOrNoResults(page);
+    log({
+      stage: 'ca_sos_probe_complete',
+      date_start: options.date_start,
+      date_end: options.date_end,
+      result_count: results.resultCount,
+      row_count: results.rowCount,
+      no_results: results.hasNoResults,
+    });
+    return results.resultCount;
+  } finally {
+    await context.close();
+    await handle.close();
+  }
 }
 
 async function closeDrawer(page: Page): Promise<void> {
@@ -485,59 +585,14 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
       const page = await context.newPage();
 
       try {
-        page.setDefaultTimeout(30000);
-        page.setDefaultNavigationTimeout(60000);
-        await page.route('**/*', (route) => {
-          const type = route.request().resourceType();
-          if (['image', 'font', 'media'].includes(type)) {
-            return route.abort();
-          }
-          return route.continue();
-        });
-
-        await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
-          waitUntil: 'networkidle',
-          timeout: 60000,
-        });
-
-        const searchInput = page.getByLabel('Search by name or file number');
-        await searchInput.waitFor({ state: 'visible', timeout: 60000 });
-        await humanDelay();
-
-        await searchInput.fill('Internal Revenue Service');
-        await humanDelay();
-
-        const advancedBtn = page.getByRole('button', { name: /Advanced/i });
-        await advancedBtn.waitFor({ state: 'visible', timeout: 30000 });
-        await advancedBtn.click();
-        await humanDelay();
-
-        const fileTypeSelected = await selectFileType(page, {
-          log,
-          onFailure: () => captureFileTypeSelectionFailureDebug(page),
-        });
-
-        if (!fileTypeSelected) {
-          throw new Error('Could not find/select File Type control after opening Advanced search.');
-        }
-
-        const dateStartInput = page.getByRole('textbox', { name: 'File Date: Start' });
-        const dateEndInput = page.getByRole('textbox', { name: 'File Date: End' });
-        await dateStartInput.fill(date_start);
-        await humanDelay();
-        await dateEndInput.fill(date_end);
-        await dateEndInput.press('Tab');
-        await humanDelay();
-
-        await page.getByRole('button', { name: 'Search' }).click();
-        await page.waitForLoadState('networkidle');
-        await humanDelay();
+        await configureCASOSSearchPage(page);
+        await submitCASOSSearch(page, date_start, date_end);
 
         const resultsInfo = await waitForResultsOrNoResults(page);
         chunkRowCount = resultsInfo.rowCount;
         knownRowCount = Number.isFinite(knownRowCount)
-          ? Math.min(knownRowCount, chunkRowCount)
-          : chunkRowCount;
+          ? Math.min(knownRowCount, resultsInfo.resultCount)
+          : resultsInfo.resultCount;
 
         if (resultsInfo.hasNoResults || chunkRowCount === 0) {
           log({
@@ -549,7 +604,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
           lastErr = null;
           break;
         }
-        chunkEndExclusive = Math.min(chunkEndExclusive, chunkRowCount);
+        chunkEndExclusive = Math.min(chunkEndExclusive, knownRowCount);
 
         log({
           stage: 'chunk_results_found',

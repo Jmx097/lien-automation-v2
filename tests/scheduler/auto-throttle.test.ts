@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockScraper = vi.fn();
+const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
 
 const runs = new Map<string, any>();
@@ -12,6 +13,10 @@ vi.mock('../../src/scraper/index', () => ({
     ca_sos: mockScraper,
     nyc_acris: mockScraper,
   },
+}));
+
+vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
+  probeCASOSResultCount: mockProbeCASOSResultCount,
 }));
 
 vi.mock('../../src/sheets/push', () => ({
@@ -55,13 +60,15 @@ describe('scheduler auto-throttle', () => {
     controlState = { site: 'ca_sos', effective_max_records: 100 };
     connectivityState.clear();
     vi.clearAllMocks();
+    mockProbeCASOSResultCount.mockReset();
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';
     process.env.SCHEDULE_DEADLINE_HOUR = '23';
     process.env.SCHEDULE_DEADLINE_MINUTE = '59';
   });
 
-  it('reduces effective cap when amount coverage falls below threshold', async () => {
+  it('does not auto-throttle ca_sos after dynamic probing', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(40);
     mockScraper.mockResolvedValueOnce([
       { amount: '100', amount_reason: 'ok' },
       { amount: undefined, amount_reason: 'amount_not_found' },
@@ -79,8 +86,35 @@ describe('scheduler auto-throttle', () => {
 
     expect(result.status).toBe('success');
     expect(result.amount_coverage_pct).toBeLessThan(95);
+    expect(result.effective_max_records).toBe(40);
 
     const state = getScheduleState();
-    expect(state.ca_sos.effective_max_records).toBeLessThan(100);
+    expect(state.ca_sos.effective_max_records).toBe(100);
+    expect(state.ca_sos.auto_throttle).toBe(false);
+  });
+
+  it('continues auto-throttling nyc_acris when amount coverage falls below threshold', async () => {
+    controlState = { site: 'nyc_acris', effective_max_records: 100 };
+    mockScraper.mockResolvedValueOnce([
+      { amount: '100', amount_reason: 'ok' },
+      { amount: undefined, amount_reason: 'amount_not_found' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+
+    const { runScheduledScrape, getScheduleState } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: '2026-03-04:afternoon',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.amount_coverage_pct).toBeLessThan(95);
+
+    const state = getScheduleState();
+    expect(state.nyc_acris.effective_max_records).toBeLessThan(100);
+    expect(state.nyc_acris.auto_throttle).toBe(true);
   });
 });

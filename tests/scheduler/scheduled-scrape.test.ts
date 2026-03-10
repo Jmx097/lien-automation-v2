@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 const mockScraper = vi.fn();
+const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
 const mockLog = vi.fn();
 
@@ -15,6 +16,10 @@ vi.mock('../../src/scraper/index', () => ({
     ca_sos: mockScraper,
     nyc_acris: mockScraper,
   },
+}));
+
+vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
+  probeCASOSResultCount: mockProbeCASOSResultCount,
 }));
 
 vi.mock('../../src/sheets/push', () => ({
@@ -97,10 +102,12 @@ describe('runScheduledScrape', () => {
     controlState = null;
     connectivityState.clear();
     vi.clearAllMocks();
+    mockProbeCASOSResultCount.mockReset();
     fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
   });
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(2);
     mockScraper.mockResolvedValueOnce([
       { filing_number: '1', amount: '100', amount_reason: 'ok' },
       { filing_number: '2', amount: '200', amount_reason: 'ok' },
@@ -125,6 +132,7 @@ describe('runScheduledScrape', () => {
   });
 
   it('fails the run when sheet upload count mismatches', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
     mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
     mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 0, tab_title: 'tab-name' });
 
@@ -139,6 +147,60 @@ describe('runScheduledScrape', () => {
 
     expect(result.status).toBe('error');
     expect(result.error).toContain('sheet_upload_mismatch');
+  });
+
+  it('uses the probed CA result count as the scheduled max_records', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(31);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-03:morning',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(mockProbeCASOSResultCount).toHaveBeenCalledTimes(1);
+    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 31 }));
+  });
+
+  it('short-circuits CA scheduled runs when the probe finds zero results', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(0);
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-10:morning',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.records_scraped).toBe(0);
+    expect(mockScraper).not.toHaveBeenCalled();
+    expect(mockPushToSheetsForTab).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the seeded cap when the CA probe fails', async () => {
+    controlState = { site: 'ca_sos', effective_max_records: 55 };
+    mockProbeCASOSResultCount.mockRejectedValueOnce(new Error('probe failed'));
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-11:morning',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 55 }));
   });
 
   it('defers blocked nyc scheduled runs before scraping', async () => {

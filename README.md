@@ -90,7 +90,7 @@ Returns scheduler readiness status and checks (including env/config dependencies
 
 ### GET /schedule
 
-Returns upcoming schedule windows and persisted run history (`history`) from the scheduler store.
+Returns upcoming schedule windows and persisted run history (`history`) from the scheduler store. Each `next_runs` entry now includes the trigger time used by the external scheduler plus the target CA/NYC finish-by time.
 
 ### POST /schedule/run
 
@@ -130,10 +130,16 @@ Required environment variables:
 
 Important optional environment variables:
 
-- `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_DEADLINE_HOUR`, `SCHEDULE_CA_SOS_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TIMEZONE`
+- `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
+
+For CA SOS scheduled runs specifically:
+
+- `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are the target finish-by time.
+- `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
+- Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
 
 ## Data Schema
 
@@ -325,7 +331,7 @@ Required GitHub configuration:
 
 - **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `SCHEDULE_RUN_TOKEN`
 - **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
-- **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
+- **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
 
 ## Schedule Source of Truth
 
@@ -334,7 +340,8 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 - **Execution target:** `POST /schedule/run` only
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
 - **Timezone:** `America/New_York`
-- **Trigger times:** Tue/Wed at `09:00`
+- **CA SOS semantics:** `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
+- **Trigger times:** CA SOS Tue/Wed at `06:00` by default for a `09:00` finish-by; NYC ACRIS Tue/Wed/Thu/Fri at `14:00`
 - **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
 ### External scheduler configuration (per-site triggers)
@@ -342,8 +349,8 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 Linux cron example:
 
 ```cron
-# CA SOS Tue/Wed 09:00 America/New_York
-0 9 * * 2,3 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# CA SOS Tue/Wed 06:00 America/New_York (default 3-hour lead for a 09:00 finish-by time)
+0 6 * * 2,3 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"ca_sos","slot":"morning"}'
