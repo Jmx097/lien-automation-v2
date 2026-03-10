@@ -55,6 +55,7 @@ vi.mock('../../src/scheduler/store', () => {
 
 describe('site-aware scheduler', () => {
   beforeEach(() => {
+    vi.resetModules();
     runs.clear();
     controlState.clear();
     connectivityState.clear();

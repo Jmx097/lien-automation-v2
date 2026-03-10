@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 
 const mockScraper = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
@@ -90,10 +92,12 @@ vi.mock('../../src/scheduler/store', () => {
 
 describe('runScheduledScrape', () => {
   beforeEach(() => {
+    vi.resetModules();
     runs.clear();
     controlState = null;
     connectivityState.clear();
     vi.clearAllMocks();
+    fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
   });
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
@@ -161,5 +165,36 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('deferred');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(result.failure_class).toBe('policy_block');
+  });
+
+  it('reuses cached nyc rows when the previous failure was sheet export', async () => {
+    const cacheDir = path.join(process.cwd(), 'out', 'acris', 'scheduled-cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'nyc_acris_cached-sheet-retry_afternoon.json'),
+      JSON.stringify([{ filing_number: '1', amount: '100', amount_reason: 'ok' }], null, 2),
+      'utf8'
+    );
+
+    runs.set('nyc_acris:cached-sheet-retry:afternoon', {
+      id: 'prior-run',
+      site: 'nyc_acris',
+      idempotency_key: 'nyc_acris:cached-sheet-retry:afternoon',
+      status: 'error',
+      failure_class: 'sheet_export',
+    });
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:cached-sheet-retry:afternoon',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(mockScraper).not.toHaveBeenCalled();
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
   });
 });

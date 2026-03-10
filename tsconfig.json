@@ -13,7 +13,8 @@
     "src/**/*",
     "scripts/**/*",
     "tests/**/*",
-    "vite.config.ts"
+    "vite.config.ts",
+    "vitest.config.mts"
   ],
   "exclude": ["node_modules", "dist"]
 }

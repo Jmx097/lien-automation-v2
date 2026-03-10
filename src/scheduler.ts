@@ -401,13 +401,19 @@ function deriveFailureClass(err: unknown): NYCAcrisFailureClass {
   return classifyNYCAcrisFailure(String((err as any)?.message ?? err ?? ''));
 }
 
-function shouldUseCachedNYCRows(site: SupportedSite, existing: ScheduledRunRecord | null): boolean {
-  return site === 'nyc_acris' && existing?.failure_class === 'sheet_export';
+function shouldUseCachedNYCRows(site: SupportedSite, previousRun: ScheduledRunRecord | null): boolean {
+  return site === 'nyc_acris' && previousRun?.failure_class === 'sheet_export';
 }
 
-async function getRecordsForScheduledRun(site: SupportedSite, idempotencyKey: string, date_start: string, date_end: string, effectiveMaxRecords: number) {
-  const existing = getStore().getByIdempotencyKey(idempotencyKey);
-  if (shouldUseCachedNYCRows(site, existing)) {
+async function getRecordsForScheduledRun(
+  site: SupportedSite,
+  idempotencyKey: string,
+  date_start: string,
+  date_end: string,
+  effectiveMaxRecords: number,
+  previousRun: ScheduledRunRecord | null,
+) {
+  if (shouldUseCachedNYCRows(site, previousRun)) {
     const cached = await loadNYCCachedRecords(idempotencyKey);
     if (cached && cached.length > 0) {
       log({ stage: 'scheduled_run_cached_records_reused', site, idempotency_key: idempotencyKey, records: cached.length });
@@ -561,7 +567,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   });
 
   try {
-    const { records, reusedCache } = await getRecordsForScheduledRun(site, idempotencyKey, date_start, date_end, effectiveMaxRecords);
+    const priorRun = existing?.status === 'error' ? existing : null;
+    const { records, reusedCache } = await getRecordsForScheduledRun(site, idempotencyKey, date_start, date_end, effectiveMaxRecords, priorRun);
 
     if (site === 'nyc_acris' && !reusedCache) {
       await saveNYCCachedRecords(idempotencyKey, records as LienRecord[]);

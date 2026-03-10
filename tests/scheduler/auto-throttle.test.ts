@@ -50,12 +50,15 @@ vi.mock('../../src/scheduler/store', () => {
 
 describe('scheduler auto-throttle', () => {
   beforeEach(() => {
+    vi.resetModules();
     runs.clear();
     controlState = { site: 'ca_sos', effective_max_records: 100 };
     connectivityState.clear();
     vi.clearAllMocks();
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';
+    process.env.SCHEDULE_DEADLINE_HOUR = '23';
+    process.env.SCHEDULE_DEADLINE_MINUTE = '59';
   });
 
   it('reduces effective cap when amount coverage falls below threshold', async () => {

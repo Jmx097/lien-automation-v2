@@ -7,6 +7,89 @@ const resolvedDbPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.c
 fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
 const db = new Database(resolvedDbPath, { verbose: console.log });
 
+function recreateScheduledRunsTable() {
+  const columns = db.prepare("PRAGMA table_info('scheduled_runs')").all();
+  const hasColumn = (name) => columns.some((column) => column.name === name);
+
+  db.exec(`
+    ALTER TABLE scheduled_runs RENAME TO scheduled_runs_legacy;
+
+    CREATE TABLE scheduled_runs (
+      id TEXT PRIMARY KEY,
+      site TEXT NOT NULL DEFAULT 'ca_sos',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      slot_time TEXT NOT NULL,
+      trigger_source TEXT NOT NULL CHECK(trigger_source IN ('external', 'manual')),
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      status TEXT NOT NULL CHECK(status IN ('running', 'success', 'error', 'deferred')),
+      records_scraped INTEGER NOT NULL DEFAULT 0,
+      records_skipped INTEGER NOT NULL DEFAULT 0,
+      rows_uploaded INTEGER NOT NULL DEFAULT 0,
+      amount_found_count INTEGER NOT NULL DEFAULT 0,
+      amount_missing_count INTEGER NOT NULL DEFAULT 0,
+      amount_coverage_pct REAL NOT NULL DEFAULT 0,
+      ocr_success_pct REAL NOT NULL DEFAULT 0,
+      row_fail_pct REAL NOT NULL DEFAULT 0,
+      deadline_hit INTEGER NOT NULL DEFAULT 0,
+      effective_max_records INTEGER NOT NULL DEFAULT 0,
+      partial INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      failure_class TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  db.prepare(
+    `INSERT INTO scheduled_runs (
+      id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
+      records_scraped, records_skipped, rows_uploaded, amount_found_count, amount_missing_count,
+      amount_coverage_pct, ocr_success_pct, row_fail_pct, deadline_hit, effective_max_records,
+      partial, error, failure_class, created_at, updated_at
+    )
+    SELECT
+      id,
+      ${hasColumn('site') ? 'site' : "'ca_sos'"},
+      idempotency_key,
+      ${hasColumn('slot_time') ? 'slot_time' : 'idempotency_key'},
+      trigger_source,
+      started_at,
+      finished_at,
+      status,
+      ${hasColumn('records_scraped') ? 'records_scraped' : '0'},
+      ${hasColumn('records_skipped') ? 'records_skipped' : '0'},
+      ${hasColumn('rows_uploaded') ? 'rows_uploaded' : '0'},
+      ${hasColumn('amount_found_count') ? 'amount_found_count' : '0'},
+      ${hasColumn('amount_missing_count') ? 'amount_missing_count' : '0'},
+      ${hasColumn('amount_coverage_pct') ? 'amount_coverage_pct' : '0'},
+      ${hasColumn('ocr_success_pct') ? 'ocr_success_pct' : '0'},
+      ${hasColumn('row_fail_pct') ? 'row_fail_pct' : '0'},
+      ${hasColumn('deadline_hit') ? 'deadline_hit' : '0'},
+      ${hasColumn('effective_max_records') ? 'effective_max_records' : '0'},
+      ${hasColumn('partial') ? 'partial' : '0'},
+      error,
+      ${hasColumn('failure_class') ? 'failure_class' : 'NULL'},
+      ${hasColumn('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP'},
+      ${hasColumn('updated_at') ? 'updated_at' : 'CURRENT_TIMESTAMP'}
+    FROM scheduled_runs_legacy`
+  ).run();
+
+  db.exec(`
+    DROP TABLE scheduled_runs_legacy;
+    CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_runs_site_started_at ON scheduled_runs(site, started_at);
+  `);
+}
+
+function migrateScheduledRunsIfNeeded() {
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_runs'").get();
+  if (!table || !table.sql) return;
+  if (table.sql.includes("'deferred'") && table.sql.includes('failure_class')) return;
+  recreateScheduledRunsTable();
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS queue_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +191,8 @@ if (!schedulerAlertColumns.some((column) => column.name === 'site')) {
 if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
   db.prepare("ALTER TABLE scheduled_runs ADD COLUMN failure_class TEXT").run();
 }
+
+migrateScheduledRunsIfNeeded();
 
 db.close();
 console.log('DB inited at', resolvedDbPath);
