@@ -12,7 +12,7 @@ Located in `src/gates/pre-run-health.ts`, this gate performs several checks befo
    - `GOOGLE_SHEETS_CREDENTIALS`
    - `DATABASE_URL`
 3. Canary request succeeds (fetch simple page, <5s timeout)
-4. Playwright browsers installed
+4. Playwright is available in the local toolchain
 
 ### Usage
 

@@ -312,6 +312,7 @@ export function extractDocIdsFromResultsHtml(html: string): string[] {
     [
       ...[...html.matchAll(/DocumentImageView\?doc_id=(\d{16})/gi)].map((match) => match[1]),
       ...[...html.matchAll(/go_image\(["'](\d{16})["']\)/gi)].map((match) => match[1]),
+      ...[...html.matchAll(/go_image\((?:&quot;|&#34;)(\d{16})(?:&quot;|&#34;)\)/gi)].map((match) => match[1]),
     ]
       .filter((docId) => /^\d{16}$/.test(docId))
   );

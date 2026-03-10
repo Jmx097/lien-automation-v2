@@ -16,7 +16,11 @@ describe('Pre-run Health Check', () => {
   });
 
   it('should fail when required environment variables are missing', async () => {
-    const result = await preRunHealthCheck();
+    const execSyncImpl = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true });
+    const env = {};
+
+    const result = await preRunHealthCheck({ execSyncImpl, fetchImpl: fetchImpl as any, env });
     
     expect(result.success).toBe(false);
     expect(result.errors).toContain('Required environment variable BRIGHT_DATA_PROXY is not set');
@@ -25,21 +29,26 @@ describe('Pre-run Health Check', () => {
   });
 
   it('should pass when all environment variables are set', async () => {
-    // Set required environment variables
-    process.env.BRIGHT_DATA_PROXY = 'proxy-url';
-    process.env.GOOGLE_SHEETS_CREDENTIALS = 'credentials';
-    process.env.DATABASE_URL = 'database-url';
-    
-    // Mock docker and fetch calls
-    const mockExecSync = vi.fn();
+    const env = {
+      BRIGHT_DATA_PROXY: 'proxy-url',
+      GOOGLE_SHEETS_CREDENTIALS: 'credentials',
+      DATABASE_URL: 'database-url',
+    };
+    const mockExecSync = vi.fn().mockReturnValue('Docker version 1.0');
+    mockExecSync
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce('Up 2 minutes')
+      .mockReturnValueOnce(undefined);
     const mockFetch = vi.fn().mockResolvedValue({ ok: true });
-    
-    // We would need to mock these in a real test environment
-    // For now, we'll just check that the function runs without throwing
-    
-    const result = await preRunHealthCheck();
-    
-    // In a real test, we would assert the result based on our mocks
-    expect(result).toBeDefined();
+
+    const result = await preRunHealthCheck({
+      execSyncImpl: mockExecSync as any,
+      fetchImpl: mockFetch as any,
+      env,
+      canaryUrl: 'https://example.test/health',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.errors).toEqual([]);
   });
 });

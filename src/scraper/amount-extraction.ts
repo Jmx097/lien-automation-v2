@@ -48,6 +48,7 @@ function parseCurrencyCandidates(line: string): number[] {
   const matches =
     line.match(/\$?\s*(?:[\dOolI]{1,3}(?:[\s,][\dOolI]{3})+|[\dOolI]{4,}|[\dOolI]{1,3})(?:\.\d{1,2})?/g) ?? [];
   return matches
+    .filter((value) => /\d/.test(value))
     .map(toWholeDollar)
     .filter((value): value is number => value !== null);
 }
@@ -58,6 +59,7 @@ export function extractAmountFromText(text: string, minConfidence = 0.75): Amoun
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  const hasFallbackContext = /federal|lien|tax|irs/i.test(normalized);
 
   if (lines.length === 0) {
     return { confidence: 0, reason: 'ocr_no_text' };
@@ -82,7 +84,7 @@ export function extractAmountFromText(text: string, minConfidence = 0.75): Amoun
       continue;
     }
 
-    if (/federal|lien|tax|irs/i.test(line)) {
+    if (hasFallbackContext) {
       for (const value of values) {
         fallbackCandidates.push({ value, confidence: 0.7 });
       }

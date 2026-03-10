@@ -113,8 +113,8 @@ Authenticated endpoint for external scheduler triggers. Accepts optional `site`,
 ## SQLite Queue DB Initialization
 
 - Queue store path remains `data/db/lien-queue.db` for compatibility.
-- `SQLiteQueueStore` now auto-creates the parent directory (`data/db`) on startup if missing.
-- You still must run `node src/queue/init-db.js` (idempotent) to create/update required SQLite schema tables before queue/scheduler operations.
+- `SQLiteQueueStore` auto-creates the parent directory (`data/db`) and initializes the SQLite schema on startup.
+- `node src/queue/init-db.js` remains safe to run and can still be used as an explicit bootstrap/migration step, but queue/scheduler operations no longer depend on running it first.
 
 ## Environment Variables
 
@@ -213,8 +213,8 @@ npm run doctor
 ```
 
 - `test:selector-smoke` runs a non-production Playwright fixture test for file-type selector variants (combobox, labeled select, and DOM fallback) with no external dependencies.
-- `test:smoke` runs `scripts/smoke-health.sh` and checks the live `/health` route.
-- `doctor` runs `scripts/doctor.sh` and verifies local prerequisites before smoke/runtime checks.
+- `test:smoke` runs the cross-platform `scripts/smoke-health.js` health probe and checks the live `/health` route.
+- `doctor` runs the cross-platform `scripts/doctor.js` preflight and verifies local prerequisites before smoke/runtime checks.
 - `npm test` runs `test:types` + `test:selector-smoke` companion checks.
 
 ## Setup Troubleshooting (stale clone symptom)
