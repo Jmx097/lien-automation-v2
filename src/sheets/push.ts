@@ -6,23 +6,36 @@ import { siteExportConfig, type SupportedSite } from '../sites';
 type BusinessFlag = 'Business' | 'Personal';
 
 const INVALID_SHEET_TITLE_CHARS_REGEX = /[[\]/?*:]/g;
-const SHEET_HEADERS = [
-  'site_id',
-  'filing_date',
-  'amount',
-  'confidence_score',
-  'lead_type',
-  'lead_source',
-  'liability_type',
-  'business_personal',
-  'business_name',
-  'first_name',
-  'last_name',
-  'street',
-  'city',
-  'state',
-  'zip',
+export const FROZEN_SHEET_HEADERS = [
+  'Site Id',
+  'LienOrReceiveDate',
+  'Amount',
+  'LeadType',
+  'LeadSource',
+  'LiabilityType',
+  'BusinessPersonal',
+  'Company',
+  'FirstName',
+  'LastName',
+  'Street',
+  'City',
+  'State',
+  'Zip',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
 ];
+
+const SHEET_COLUMN_COUNT = FROZEN_SHEET_HEADERS.length;
+const HEADER_END_COLUMN = String.fromCharCode('A'.charCodeAt(0) + SHEET_COLUMN_COUNT - 1);
 
 function getPacificTimestampForTab(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -273,9 +286,9 @@ async function initializeSheetHeaderRow(
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `'${tabTitle}'!A1:O1`,
+    range: `'${tabTitle}'!A1:${HEADER_END_COLUMN}1`,
     valueInputOption: 'RAW',
-    requestBody: { values: [SHEET_HEADERS] },
+    requestBody: { values: [FROZEN_SHEET_HEADERS] },
   });
 
   await sheets.spreadsheets.batchUpdate({
@@ -298,7 +311,7 @@ async function initializeSheetHeaderRow(
               startRowIndex: 0,
               endRowIndex: 1,
               startColumnIndex: 0,
-              endColumnIndex: SHEET_HEADERS.length,
+              endColumnIndex: FROZEN_SHEET_HEADERS.length,
             },
             cell: {
               userEnteredFormat: {
@@ -329,7 +342,6 @@ export function buildRowValues(rows: LienRecord[]) {
       exportConfig.siteId,
       r.filing_date,
       r.amount ?? '',
-      r.confidence_score ?? r.amount_confidence ?? '',
       r.lead_type ?? 'Lien',
       exportConfig.leadSource,
       exportConfig.liabilityType,
@@ -341,6 +353,17 @@ export function buildRowValues(rows: LienRecord[]) {
       addrParts.city,
       addrParts.state,
       addrParts.zip,
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
     ];
   });
 }
@@ -354,6 +377,7 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
   }
 
   const sheets = getSheetsClient();
+  await initializeSheetHeaderRow(sheets, process.env.SHEET_ID, 'Records');
   const values = buildRowValues(rows);
 
   const spreadsheetId = process.env.SHEET_ID;

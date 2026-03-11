@@ -1,7 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { buildRowValues } from '../../src/sheets/push';
+import { buildRowValues, FROZEN_SHEET_HEADERS } from '../../src/sheets/push';
 
 describe('site-specific sheet export mapping', () => {
+  it('matches the frozen top row exactly', () => {
+    expect(FROZEN_SHEET_HEADERS).toEqual([
+      'Site Id',
+      'LienOrReceiveDate',
+      'Amount',
+      'LeadType',
+      'LeadSource',
+      'LiabilityType',
+      'BusinessPersonal',
+      'Company',
+      'FirstName',
+      'LastName',
+      'Street',
+      'City',
+      'State',
+      'Zip',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+    ]);
+  });
+
   it('uses the nyc site config when exporting nyc acris rows', () => {
     const rows = buildRowValues([
       {
@@ -25,12 +55,13 @@ describe('site-specific sheet export mapping', () => {
     ]);
 
     expect(rows[0][0]).toBe(12);
-    expect(rows[0][3]).toBe(0.88);
-    expect(rows[0][7]).toBe('Business');
-    expect(rows[0][8]).toBe('ACME LLC');
-    expect(rows[0][11]).toBe('123 Main St');
-    expect(rows[0][12]).toBe('New York');
-    expect(rows[0][14]).toBe('10001');
+    expect(rows[0]).toHaveLength(FROZEN_SHEET_HEADERS.length);
+    expect(rows[0][3]).toBe('Lien');
+    expect(rows[0][6]).toBe('Business');
+    expect(rows[0][7]).toBe('ACME LLC');
+    expect(rows[0][10]).toBe('123 Main St');
+    expect(rows[0][11]).toBe('New York');
+    expect(rows[0][13]).toBe('10001');
   });
 
   it('parses OCR-style addresses without commas into street city and zip', () => {
@@ -55,10 +86,10 @@ describe('site-specific sheet export mapping', () => {
       },
     ]);
 
-    expect(rows[0][11]).toBe('123 MAIN ST');
-    expect(rows[0][12]).toBe('BROOKLYN');
-    expect(rows[0][13]).toBe('NY');
-    expect(rows[0][14]).toBe('11201');
+    expect(rows[0][10]).toBe('123 MAIN ST');
+    expect(rows[0][11]).toBe('BROOKLYN');
+    expect(rows[0][12]).toBe('NY');
+    expect(rows[0][13]).toBe('11201');
   });
 
   it('trims OCR zip suffix noise before splitting structured address columns', () => {
@@ -83,10 +114,10 @@ describe('site-specific sheet export mapping', () => {
       },
     ]);
 
-    expect(rows[0][11]).toBe('160 COLUMBIA HTS APT 10C');
-    expect(rows[0][12]).toBe('BROOKLYN');
-    expect(rows[0][13]).toBe('NY');
-    expect(rows[0][14]).toBe('11201');
+    expect(rows[0][10]).toBe('160 COLUMBIA HTS APT 10C');
+    expect(rows[0][11]).toBe('BROOKLYN');
+    expect(rows[0][12]).toBe('NY');
+    expect(rows[0][13]).toBe('11201');
   });
 
   it('trims underscore OCR zip suffix noise and ignores punctuation-only name fragments', () => {
@@ -111,12 +142,12 @@ describe('site-specific sheet export mapping', () => {
       },
     ]);
 
-    expect(rows[0][9]).toBe('ALBERTO');
-    expect(rows[0][10]).toBe('');
-    expect(rows[0][11]).toBe('160 COLUMBIA HTS APT 10C');
-    expect(rows[0][12]).toBe('BROOKLYN');
-    expect(rows[0][13]).toBe('NY');
-    expect(rows[0][14]).toBe('11201');
+    expect(rows[0][8]).toBe('ALBERTO');
+    expect(rows[0][9]).toBe('');
+    expect(rows[0][10]).toBe('160 COLUMBIA HTS APT 10C');
+    expect(rows[0][11]).toBe('BROOKLYN');
+    expect(rows[0][12]).toBe('NY');
+    expect(rows[0][13]).toBe('11201');
   });
 
   it('leaves structured address fields blank when OCR address text is unusable', () => {
@@ -140,8 +171,8 @@ describe('site-specific sheet export mapping', () => {
       },
     ]);
 
+    expect(rows[0][10]).toBe('');
     expect(rows[0][11]).toBe('');
-    expect(rows[0][12]).toBe('');
-    expect(rows[0][14]).toBe('');
+    expect(rows[0][13]).toBe('');
   });
 });
