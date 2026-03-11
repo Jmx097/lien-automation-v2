@@ -6,7 +6,7 @@ A web scraper and automation tool for retrieving lien records from multiple publ
 
 This project provides an Express.js API server that scrapes lien data from the CA Secretary of State's UCC filing system and automatically pushes the results to Google Sheets for analysis and tracking.
 
-**Current Status**: Production-oriented API with live CA SOS scraping, NYC ACRIS support, queueing, schedule readiness checks, externally triggered per-site schedule runs, and persisted scheduler run history in SQLite.
+**Current Status**: Production-oriented API with live CA SOS scraping, NYC ACRIS support, queueing, schedule readiness checks, externally triggered per-site schedule runs, and persisted scheduler run history backed by SQLite locally or Postgres when `DATABASE_URL` is set.
 
 ## Planning Documents
 
@@ -22,7 +22,7 @@ This project provides an Express.js API server that scrapes lien data from the C
   - `GET /schedule/health` reports readiness checks and configuration status.
   - `GET /schedule` returns next run windows and persisted schedule history.
 - **Externally triggered schedule runs**: `POST /schedule/run` supports authenticated scheduler triggers with slot/idempotency controls.
-- **Persisted scheduler history**: scheduled run records are stored in SQLite and used for idempotency/cooldown and monitoring.
+- **Persisted scheduler history**: scheduled run records are stored in SQLite locally and can use Postgres-backed durable state in hosted environments when `DATABASE_URL` is configured.
 - **Structured logging and retry behavior**: runtime logs and scraper safeguards for operational reliability.
 
 ## Architecture
@@ -101,7 +101,7 @@ Authenticated endpoint for external scheduler triggers. Accepts optional `site`,
 ### Production-ready in this repository
 
 - API route surface and request handling (`/health`, `/version`, `/scrape`, `/enqueue`, `/scrape-all`, `/scrape-enhanced`, `/schedule/health`, `/schedule`, `/schedule/run`).
-- SQLite-backed queue + scheduler persistence, including schedule history responses and missed-run checks.
+- SQLite-backed queue persistence plus scheduler persistence that uses SQLite locally and Postgres when `DATABASE_URL` is present, including schedule history responses and missed-run checks.
 - Local validation tooling (`doctor`, type checks, selector smoke tests, and health smoke script).
 
 ### Requires credentials or external services
@@ -129,6 +129,8 @@ Required environment variables:
 - `SCHEDULE_RUN_TOKEN`: Auth token for `POST /schedule/run`
 
 Important optional environment variables:
+
+- `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
@@ -175,7 +177,7 @@ Data is exported to Google Sheets with a state column prepended.
 - **Web Framework**: Express.js
 - **Scraping**: Playwright (Chromium)
 - **API Integration**: Google Sheets API (googleapis)
-- **Orchestration**: External scheduler trigger (`POST /schedule/run`) with SQLite-backed run history
+- **Orchestration**: External scheduler trigger (`POST /schedule/run`) with durable run history backed by SQLite locally or Postgres in hosted deployments
 - **Monitoring**: Qwen cost tracking and analysis
 
 ## Server
@@ -340,9 +342,14 @@ Use GitHub as the deployment source of truth for both hosted environments:
 
 Required GitHub configuration:
 
-- **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `SCHEDULE_RUN_TOKEN`
+- **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `SCHEDULE_RUN_TOKEN`, `DATABASE_URL`, `CLOUDSQL_INSTANCE_CONNECTION_NAME`
 - **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
 - **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
+
+Cloud Run workflow expectation:
+
+- GitHub Actions deploys should preserve the Cloud SQL instance attachment, inject `DATABASE_URL`, and publish the workflow commit SHA to `/version` via `GIT_SHA`.
+- Avoid printing raw Cloud Run environment values during troubleshooting; hosted env output includes secrets such as scheduler tokens, Sheets credentials, and database credentials.
 
 ## Schedule Source of Truth
 
@@ -377,11 +384,17 @@ Cloud Scheduler equivalent: create one job per site with the appropriate schedul
 
 ### Runtime safeguards
 
-1. Run records are stored in SQLite table `scheduled_runs` (not in-memory), including `slot_time`, `started_at`, `finished_at`, `status`, `records_scraped`, `rows_uploaded`, and `error`.
+1. Run records are stored in the scheduler store table `scheduled_runs` (SQLite locally, Postgres when `DATABASE_URL` is set), including `slot_time`, `started_at`, `finished_at`, `status`, `records_scraped`, `rows_uploaded`, and `error`.
 2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`; cooldown checks also read persisted DB state.
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
-5. `GET /schedule/health` returns schedule readiness checks (required env vars, SQLite reachability, and Google Sheets credential parsing).
+5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
+
+## Monitoring Setup Notes
+
+- `scripts/cloud/setup-monitoring.sh` now treats the log-based metrics, alert policies, notification channel reuse, and uptime check as the default monitoring path.
+- BigQuery sink creation is optional and disabled by default via `ENABLE_BIGQUERY_SINK=0` because the local `bq` tool can fail independently of the app.
+- If `bq` currently crashes with `AttributeError: module 'absl.flags' has no attribute 'FLAGS'`, treat that as a local Cloud SDK tooling issue rather than a production app/runtime issue.
 
 
 ## Cloud Run Job Deployment

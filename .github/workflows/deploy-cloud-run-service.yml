@@ -76,4 +76,5 @@ jobs:
       - name: Verify deployed service endpoints
         env:
           EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_SCHEDULER_STORE: postgres
         run: bash scripts/cloud/verify-cloud-run-service.sh
