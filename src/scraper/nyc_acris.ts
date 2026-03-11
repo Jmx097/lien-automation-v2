@@ -332,7 +332,34 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-function normalizeOcrAddress(value: string | undefined): string | undefined {
+function trimTrailingAddressNoiseAfterZip(value: string): string {
+  const zipPattern = /\b\d{5}(?:-\d{4})?\b/g;
+  let match: RegExpExecArray | null;
+  let trimmed = value;
+
+  while ((match = zipPattern.exec(value)) !== null) {
+    const zipEnd = match.index + match[0].length;
+    const suffix = value.slice(zipEnd);
+    if (!suffix) {
+      trimmed = value.slice(0, zipEnd);
+      continue;
+    }
+
+    const normalizedSuffix = suffix.trim();
+    if (!normalizedSuffix) {
+      trimmed = value.slice(0, zipEnd);
+      continue;
+    }
+
+    if (/^[.,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(normalizedSuffix)) {
+      trimmed = value.slice(0, zipEnd);
+    }
+  }
+
+  return trimmed;
+}
+
+export function normalizeOcrAddress(value: string | undefined): string | undefined {
   if (!value) return undefined;
 
   const normalized = value
@@ -343,17 +370,25 @@ function normalizeOcrAddress(value: string | undefined): string | undefined {
     .replace(/[|]+/g, ' ')
     .replace(/\n+/g, ' ')
     .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
     .trim()
+    .replace(/([,.;:])(?=[A-Za-z])/g, '$1 ')
     .replace(/\s+,/g, ',')
+    .replace(/,\s*,+/g, ',')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  const cleaned = trimTrailingAddressNoiseAfterZip(normalized)
+    .replace(/\s+([,.;:])/g, '$1')
     .replace(/,\s*,+/g, ',')
     .replace(/[.;:,]+$/g, '')
     .trim();
 
-  if (!normalized) return undefined;
-  if (!/\d/.test(normalized)) return undefined;
-  if (normalized.length < 8) return undefined;
-  if (/^(tax period|important|kind of tax)\b/i.test(normalized)) return undefined;
-  return normalized;
+  if (!cleaned) return undefined;
+  if (!/\d/.test(cleaned)) return undefined;
+  if (cleaned.length < 8) return undefined;
+  if (/^(tax period|important|kind of tax)\b/i.test(cleaned)) return undefined;
+  return cleaned;
 }
 
 function extractResidenceBlock(text: string): string | undefined {

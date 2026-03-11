@@ -87,6 +87,29 @@ function splitPersonalName(name: string): { firstName: string; lastName: string 
   };
 }
 
+function normalizeAddressForParsing(raw: string): string {
+  const collapsed = raw
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/([,.;:])(?=[A-Za-z])/g, '$1 ')
+    .replace(/,\s*,+/g, ',')
+    .trim();
+
+  const zipPattern = /\b\d{5}(?:-\d{4})?\b/g;
+  let match: RegExpExecArray | null;
+  let cleaned = collapsed;
+
+  while ((match = zipPattern.exec(collapsed)) !== null) {
+    const zipEnd = match.index + match[0].length;
+    const suffix = collapsed.slice(zipEnd).trim();
+    if (!suffix || /^[.,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(suffix)) {
+      cleaned = collapsed.slice(0, zipEnd);
+    }
+  }
+
+  return cleaned.replace(/[.;:,]+$/g, '').trim();
+}
+
 function parseAddress(
   raw: string,
   stateFallback: string
@@ -100,32 +123,36 @@ function parseAddress(
   let city = '';
   let state = stateFallback;
   let zip = '';
+  const normalizedRaw = normalizeAddressForParsing(raw);
 
-  const zipMatch = raw.match(/(\d{5})(?:-\d{4})?$/);
+  const zipMatch = normalizedRaw.match(/(\d{5})(?:-\d{4})?$/);
   if (zipMatch) {
     zip = zipMatch[1];
   }
 
-  const stateMatch = raw.match(/\b([A-Z]{2})\s+\d{5}(?:-\d{4})?$/);
+  const stateMatch = normalizedRaw.match(/\b([A-Z]{2})\s+\d{5}(?:-\d{4})?$/);
   if (stateMatch) {
     state = stateMatch[1];
   }
 
-  const cityMatch = raw.match(/,\s*([^,]+),\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/);
+  const cityMatch = normalizedRaw.match(/,\s*([^,]+),\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/);
   if (cityMatch) {
     city = cityMatch[1].trim();
   }
 
   if (city) {
-    street = raw.split(',')[0].trim();
+    street = normalizedRaw.split(',')[0].trim();
     return { street, city, state, zip };
   }
 
-  const normalized = raw.replace(/\s+/g, ' ').trim();
+  const normalized = normalizedRaw.replace(/\s+/g, ' ').trim();
   const stateZipMatch = normalized.match(/^(.*)\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/);
   if (stateZipMatch) {
     const [, beforeStateZip, parsedState, parsedZip] = stateZipMatch;
-    const streetSuffixMatch = beforeStateZip.match(/^(.*\b(?:ST|STREET|AVE|AVENUE|RD|ROAD|DR|DRIVE|BLVD|BOULEVARD|LN|LANE|CT|COURT|PL|PLACE|PKWY|PARKWAY|WAY|TER|TERRACE|CIR|CIRCLE)\b)\s+(.+)$/i);
+    const cleanedBeforeStateZip = beforeStateZip.replace(/[;,]+$/g, '').trim();
+    const streetSuffixMatch = cleanedBeforeStateZip.match(
+      /^(.*\b(?:ST|STREET|AVE|AVENUE|RD|ROAD|DR|DRIVE|BLVD|BOULEVARD|LN|LANE|CT|COURT|PL|PLACE|PKWY|PARKWAY|WAY|TER|TERRACE|CIR|CIRCLE|HTS|HEIGHTS)\b(?:\s+(?:APT|UNIT|FL|FLOOR|SUITE|STE|#)\s*[A-Z0-9-]+)?)\s+(.+)$/i
+    );
     if (streetSuffixMatch) {
       const [, parsedStreet, parsedCity] = streetSuffixMatch;
       street = parsedStreet.trim().replace(/[;,]+$/g, '');

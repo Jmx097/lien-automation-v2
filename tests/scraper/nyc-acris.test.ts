@@ -9,6 +9,7 @@ import {
   inspectNYCAcrisPageReadiness,
   isPlausibleDebtorName,
   isUnexpectedViewerPageUrl,
+  normalizeOcrAddress,
   resolveNYCAcrisDelay,
   sanitizeDebtorName,
   shouldRetryViewerOpen,
@@ -173,6 +174,12 @@ describe('nyc acris fixture parsing', () => {
       taxpayerName: 'DOMINIQUE PIERRE LOUIS',
       taxpayerAddress: '340 E 31ST ST APT A2, BROOKLYN, NY 11226-7986',
     });
+  });
+
+  it('trims short OCR suffix noise after a valid zip code', () => {
+    expect(normalizeOcrAddress('160 COLUMBIA HTS APT 10C BROOKLYN, NY 11201-2189 . 1')).toBe(
+      '160 COLUMBIA HTS APT 10C BROOKLYN, NY 11201-2189'
+    );
   });
 
   it('does not invent an address when OCR only contains the residence label', () => {
