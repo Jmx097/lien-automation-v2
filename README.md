@@ -131,6 +131,7 @@ Required environment variables:
 Important optional environment variables:
 
 - `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
+- In hosted Cloud Run, the first-pass secret migration now expects `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` to be supplied via Secret Manager-backed env vars while keeping the same runtime variable names.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
@@ -342,13 +343,15 @@ Use GitHub as the deployment source of truth for both hosted environments:
 
 Required GitHub configuration:
 
-- **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `SCHEDULE_RUN_TOKEN`, `DATABASE_URL`, `CLOUDSQL_INSTANCE_CONNECTION_NAME`
+- **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SHEET_ID`, `CLOUDSQL_INSTANCE_CONNECTION_NAME`, `DATABASE_URL_SECRET_REF`, `SCHEDULE_RUN_TOKEN_SECRET_REF`, `SHEETS_KEY_SECRET_REF`, `SBR_CDP_URL_SECRET_REF`
 - **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
 - **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
 
 Cloud Run workflow expectation:
 
-- GitHub Actions deploys should preserve the Cloud SQL instance attachment, inject `DATABASE_URL`, and publish the workflow commit SHA to `/version` via `GIT_SHA`.
+- GitHub Actions deploys should preserve the Cloud SQL instance attachment, inject `DATABASE_URL` from Secret Manager, and publish the workflow commit SHA to `/version` via `GIT_SHA`.
+- The current runtime secret mapping is `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` from Secret Manager-backed env vars; `SHEET_ID` and schedule tuning remain plain env vars.
+- The Cloud Run runtime service account must have `roles/secretmanager.secretAccessor` on those runtime secrets.
 - Avoid printing raw Cloud Run environment values during troubleshooting; hosted env output includes secrets such as scheduler tokens, Sheets credentials, and database credentials.
 
 ## Schedule Source of Truth
@@ -395,6 +398,13 @@ Cloud Scheduler equivalent: create one job per site with the appropriate schedul
 - `scripts/cloud/setup-monitoring.sh` now treats the log-based metrics, alert policies, notification channel reuse, and uptime check as the default monitoring path.
 - BigQuery sink creation is optional and disabled by default via `ENABLE_BIGQUERY_SINK=0` because the local `bq` tool can fail independently of the app.
 - If `bq` currently crashes with `AttributeError: module 'absl.flags' has no attribute 'FLAGS'`, treat that as a local Cloud SDK tooling issue rather than a production app/runtime issue.
+
+## Secret Manager Notes
+
+- Local development still uses plain env vars directly; Secret Manager is only part of the hosted Cloud Run deploy path.
+- `scripts/cloud/deploy-cloud-run-service.sh` now expects Secret Manager refs for `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL`, and injects them with `--set-secrets`.
+- `scripts/cloud/sync-cloud-run-secrets-to-secret-manager.ps1` can bootstrap those runtime secrets from the currently deployed Cloud Run service without printing their values.
+- Use `DRY_RUN=1 bash scripts/cloud/deploy-cloud-run-service.sh` to validate the deploy argument shape without printing secret values.
 
 
 ## Cloud Run Job Deployment
