@@ -10,6 +10,7 @@ const SHEET_HEADERS = [
   'site_id',
   'filing_date',
   'amount',
+  'confidence_score',
   'lead_type',
   'lead_source',
   'liability_type',
@@ -117,6 +118,21 @@ function parseAddress(
 
   if (city) {
     street = raw.split(',')[0].trim();
+    return { street, city, state, zip };
+  }
+
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  const stateZipMatch = normalized.match(/^(.*)\s+([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/);
+  if (stateZipMatch) {
+    const [, beforeStateZip, parsedState, parsedZip] = stateZipMatch;
+    const streetSuffixMatch = beforeStateZip.match(/^(.*\b(?:ST|STREET|AVE|AVENUE|RD|ROAD|DR|DRIVE|BLVD|BOULEVARD|LN|LANE|CT|COURT|PL|PLACE|PKWY|PARKWAY|WAY|TER|TERRACE|CIR|CIRCLE)\b)\s+(.+)$/i);
+    if (streetSuffixMatch) {
+      const [, parsedStreet, parsedCity] = streetSuffixMatch;
+      street = parsedStreet.trim().replace(/[;,]+$/g, '');
+      city = parsedCity.trim().replace(/[;,]+$/g, '');
+      state = parsedState;
+      zip = parsedZip;
+    }
   }
 
   return { street, city, state, zip };
@@ -226,7 +242,7 @@ async function initializeSheetHeaderRow(
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `'${tabTitle}'!A1:N1`,
+    range: `'${tabTitle}'!A1:O1`,
     valueInputOption: 'RAW',
     requestBody: { values: [SHEET_HEADERS] },
   });
@@ -282,6 +298,7 @@ export function buildRowValues(rows: LienRecord[]) {
       exportConfig.siteId,
       r.filing_date,
       r.amount ?? '',
+      r.confidence_score ?? r.amount_confidence ?? '',
       r.lead_type ?? 'Lien',
       exportConfig.leadSource,
       exportConfig.liabilityType,

@@ -4,12 +4,12 @@ import { log } from '../utils/logger';
 import { SQLiteQueueStore } from '../queue/sqlite';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import { captureFileTypeSelectionFailureDebug } from './file_type_debug';
 import { selectFileType } from './selectors/fileType';
 import { extractAmountFromText as extractAmountByConfidence, AmountReason } from './amount-extraction';
-import { checkOCRRuntime } from './ocr-runtime';
+import { checkOCRRuntime, getOCRBinaryCommands } from './ocr-runtime';
 import { createIsolatedBrowserContext } from '../browser/transport';
 
 interface ScrapeOptions {
@@ -101,32 +101,28 @@ interface PdfExtraction {
 
 let ocrToolingChecked = false;
 
-function hasCommand(cmd: string): boolean {
-  try {
-    const checker = process.platform === 'win32' ? 'where' : 'command -v';
-    execSync(`${checker} ${cmd}`, { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function ocrPdf(pdfPath: string): string {
   const dir = path.dirname(pdfPath);
   const base = path.basename(pdfPath, '.pdf');
   const imgPrefix = path.join(dir, `${base}_page`);
   const ocrOutput = path.join(dir, `${base}_ocr`);
+  const commands = getOCRBinaryCommands();
 
   try {
     if (!ocrToolingChecked) {
-      const tesseractInstalled = hasCommand('tesseract');
-      const pdftoppmInstalled = hasCommand('pdftoppm');
-      log({ stage: 'ocr_tooling_check', tesseract_installed: tesseractInstalled, pdftoppm_installed: pdftoppmInstalled });
+      const runtime = checkOCRRuntime();
+      log({
+        stage: 'ocr_tooling_check',
+        tesseract_installed: !runtime.missing.includes('tesseract'),
+        pdftoppm_installed: !runtime.missing.includes('pdftoppm'),
+        tesseract_command: runtime.commands?.tesseract,
+        pdftoppm_command: runtime.commands?.pdftoppm,
+      });
       ocrToolingChecked = true;
-      if (!tesseractInstalled || !pdftoppmInstalled) return '';
+      if (!runtime.ok) return '';
     }
 
-    execSync(`pdftoppm -png -r 300 "${pdfPath}" "${imgPrefix}"`, { timeout: 15000 });
+    execFileSync(commands.pdftoppm, ['-png', '-r', '300', pdfPath, imgPrefix], { stdio: 'ignore', timeout: 15000 });
 
     const imgFiles = fs.readdirSync(dir)
       .filter(f => f.startsWith(`${base}_page`) && f.endsWith('.png'))
@@ -137,7 +133,7 @@ function ocrPdf(pdfPath: string): string {
 
     let fullText = '';
     for (const imgFile of imgFiles) {
-      execSync(`tesseract "${imgFile}" "${ocrOutput}" --psm 6 2>/dev/null`, { timeout: 30000 });
+      execFileSync(commands.tesseract, [imgFile, ocrOutput, '--psm', '6'], { stdio: 'ignore', timeout: 30000 });
       if (fs.existsSync(`${ocrOutput}.txt`)) {
         fullText += fs.readFileSync(`${ocrOutput}.txt`, 'utf-8') + '\n';
         fs.unlinkSync(`${ocrOutput}.txt`);
@@ -497,6 +493,7 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
       amount: pdfData.amount,
       amount_confidence: pdfData.amountConfidence,
       amount_reason: pdfData.amountReason,
+      confidence_score: pdfData.amountConfidence,
       lead_type: pdfData.leadType,
     };
 

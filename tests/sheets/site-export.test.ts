@@ -20,12 +20,70 @@ describe('site-specific sheet export mapping', () => {
         document_type: 'FEDERAL LIEN-IRS',
         pdf_filename: '',
         processed: true,
+        confidence_score: 0.88,
       },
     ]);
 
     expect(rows[0][0]).toBe(12);
-    expect(rows[0][6]).toBe('Business');
-    expect(rows[0][7]).toBe('ACME LLC');
+    expect(rows[0][3]).toBe(0.88);
+    expect(rows[0][7]).toBe('Business');
+    expect(rows[0][8]).toBe('ACME LLC');
+    expect(rows[0][11]).toBe('123 Main St');
+    expect(rows[0][12]).toBe('New York');
+    expect(rows[0][14]).toBe('10001');
+  });
+
+  it('parses OCR-style addresses without commas into street city and zip', () => {
+    const rows = buildRowValues([
+      {
+        state: 'NY',
+        source: 'nyc_acris',
+        county: 'New York City',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'DOMINIQUE PIERRE LOUIS',
+        debtor_address: '123 MAIN ST BROOKLYN NY 11201',
+        file_number: '2026030600410003',
+        secured_party_name: 'Internal Revenue Service',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '03/06/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'FEDERAL LIEN-IRS',
+        pdf_filename: '',
+        processed: true,
+        confidence_score: 0.98,
+      },
+    ]);
+
+    expect(rows[0][11]).toBe('123 MAIN ST');
+    expect(rows[0][12]).toBe('BROOKLYN');
+    expect(rows[0][13]).toBe('NY');
+    expect(rows[0][14]).toBe('11201');
+  });
+
+  it('leaves structured address fields blank when OCR address text is unusable', () => {
+    const rows = buildRowValues([
+      {
+        state: 'NY',
+        source: 'nyc_acris',
+        county: 'New York City',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'ACME HOLDINGS LLC',
+        debtor_address: '',
+        file_number: '2026030600410004',
+        secured_party_name: 'Internal Revenue Service',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '03/06/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'FEDERAL LIEN-IRS',
+        pdf_filename: '',
+        processed: true,
+      },
+    ]);
+
+    expect(rows[0][11]).toBe('');
+    expect(rows[0][12]).toBe('');
+    expect(rows[0][14]).toBe('');
   });
 });
-

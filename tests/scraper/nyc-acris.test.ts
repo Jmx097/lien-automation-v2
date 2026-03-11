@@ -2,10 +2,16 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+  chooseBetterDebtorName,
+  extractNYCAcrisFieldsFromText,
   extractDocIdsFromResultsHtml,
   extractViewerArtifactFromHtml,
   inspectNYCAcrisPageReadiness,
+  isPlausibleDebtorName,
+  isUnexpectedViewerPageUrl,
   resolveNYCAcrisDelay,
+  sanitizeDebtorName,
+  shouldRetryViewerOpen,
 } from '../../src/scraper/nyc_acris';
 
 const fixtureDir = path.join(process.cwd(), 'tests', 'fixtures', 'acris');
@@ -103,6 +109,110 @@ describe('nyc acris fixture parsing', () => {
       hasViewerIframe: true,
       reason: 'viewer_iframe_present',
     });
+  });
+
+  it('detects transient chrome error viewer pages for retry', () => {
+    expect(isUnexpectedViewerPageUrl('chrome-error://chromewebdata/')).toBe(true);
+    expect(
+      shouldRetryViewerOpen({
+        ok: false,
+        finalUrl: 'chrome-error://chromewebdata/',
+        reason: 'unexpected_url',
+      })
+    ).toBe(true);
+    expect(
+      shouldRetryViewerOpen({
+        ok: true,
+        finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=1',
+        reason: 'viewer_iframe_present',
+      })
+    ).toBe(false);
+  });
+
+  it('extracts NYC OCR lead type and taxpayer name from text', () => {
+    const text = `
+      NOTICE OF FEDERAL TAX LIEN
+      Name of Taxpayer ACME HOLDINGS LLC
+      Residence 123 MAIN ST
+      Total Amount Due $123,456.78
+    `;
+
+    expect(extractNYCAcrisFieldsFromText(text)).toEqual({
+      leadType: 'Lien',
+      taxpayerName: 'ACME HOLDINGS LLC',
+      taxpayerAddress: '123 MAIN ST',
+    });
+  });
+
+  it('extracts OCR residence text until the next known form section', () => {
+    const text = `
+      NOTICE OF FEDERAL TAX LIEN
+      Name of Taxpayer DOMINIQUE PIERRE LOUIS
+      Residence 123 MAIN ST BROOKLYN NY 11201
+      Tax Period 2024
+      Kind of Tax 1040
+    `;
+
+    expect(extractNYCAcrisFieldsFromText(text)).toEqual({
+      leadType: 'Lien',
+      taxpayerName: 'DOMINIQUE PIERRE LOUIS',
+      taxpayerAddress: '123 MAIN ST BROOKLYN NY 11201',
+    });
+  });
+
+  it('preserves a multiline residence block as street plus city state zip', () => {
+    const text = `
+      Name of Taxpayer DOMINIQUE PIERRE LOUIS
+      Residence 340 E 31ST ST APT A2
+      BROOKLYN, NY 11226-7986
+      IMPORTANT RELEASE INFORMATION
+    `;
+
+    expect(extractNYCAcrisFieldsFromText(text)).toEqual({
+      leadType: undefined,
+      taxpayerName: 'DOMINIQUE PIERRE LOUIS',
+      taxpayerAddress: '340 E 31ST ST APT A2, BROOKLYN, NY 11226-7986',
+    });
+  });
+
+  it('does not invent an address when OCR only contains the residence label', () => {
+    const text = `
+      NOTICE OF FEDERAL TAX LIEN
+      Name of Taxpayer ACME HOLDINGS LLC
+      Residence
+      IMPORTANT - SEE REVERSE
+    `;
+
+    expect(extractNYCAcrisFieldsFromText(text)).toEqual({
+      leadType: 'Lien',
+      taxpayerName: 'ACME HOLDINGS LLC',
+      taxpayerAddress: undefined,
+    });
+  });
+
+  it('still blanks pure timestamp-like debtor names from result rows', () => {
+    expect(sanitizeDebtorName('03/11/2026 11:59:59 PM')).toBe('');
+    expect(sanitizeDebtorName('Recorded: 03/11/2026 11:59:59 PM')).toBe('');
+    expect(isPlausibleDebtorName('Last Updated: 03/11/2026 11:59:59 PM')).toBe(false);
+  });
+
+  it('keeps plausible business and personal debtor names', () => {
+    expect(sanitizeDebtorName('ACME HOLDINGS LLC')).toBe('ACME HOLDINGS LLC');
+    expect(sanitizeDebtorName('John Q Smith')).toBe('John Q Smith');
+    expect(isPlausibleDebtorName('ACME HOLDINGS LLC')).toBe(true);
+    expect(isPlausibleDebtorName('John Q Smith')).toBe(true);
+  });
+
+  it('prefers OCR taxpayer names only when they improve the debtor value', () => {
+    expect(chooseBetterDebtorName('03/11/2026 11:59:59 PM', 'ACME HOLDINGS LLC')).toBe('ACME HOLDINGS LLC');
+    expect(chooseBetterDebtorName('ACME LLC', 'Recorded: 03/11/2026')).toBe('ACME LLC');
+    expect(chooseBetterDebtorName('ACME LLC', 'ACME HOLDINGS LLC')).toBe('ACME HOLDINGS LLC');
+  });
+
+  it('keeps lower-confidence debtor detail instead of blanking it when useful text remains', () => {
+    expect(sanitizeDebtorName('Party 1: Dominique Pierre Louis')).toBe('Dominique Pierre Louis');
+    expect(sanitizeDebtorName('Taxpayer Name: Sami Rabiaa')).toBe('Sami Rabiaa');
+    expect(sanitizeDebtorName('Recorded owner Dominique Pierre Louis')).toBe('owner Dominique Pierre Louis');
   });
 
   it('rejects partial html that lacks shell markers and token', () => {

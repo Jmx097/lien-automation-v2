@@ -134,12 +134,23 @@ Important optional environment variables:
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
+- `TESSERACT_PATH`, `PDFTOPPM_PATH`, `REQUIRE_OCR_TOOLS`
 
 For CA SOS scheduled runs specifically:
 
 - `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are the target finish-by time.
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
+
+## OCR Runtime Notes
+
+- OCR-backed amount extraction requires both `tesseract` and `pdftoppm`.
+- By default the app looks for those binaries on `PATH`.
+- On Windows/dev machines you can also point directly at the binaries with:
+  - `TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe`
+  - `PDFTOPPM_PATH=C:\path\to\poppler\Library\bin\pdftoppm.exe`
+- `GET /schedule/health` reports `ocr_runtime_ready=false` when those binaries are missing or not executable.
+- `REQUIRE_OCR_TOOLS=1` keeps scheduled readiness strict. Set `REQUIRE_OCR_TOOLS=0` only if you intentionally want to allow runs without OCR-backed extraction.
 
 ## Data Schema
 

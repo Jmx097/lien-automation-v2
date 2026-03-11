@@ -18,5 +18,6 @@ export interface LienRecord {
   amount?: string;            // Total from PDF, whole dollars only (cents parsed then truncated)
   amount_confidence?: number; // Extraction confidence [0,1]
   amount_reason?: string;     // Extraction reason code
+  confidence_score?: number;  // Overall record confidence [0,1]
   lead_type?: string;         // "Lien" or "Release" from PDF header
 }

@@ -2,7 +2,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import Bottleneck from 'bottleneck';
 import type { BrowserContext, Page } from 'playwright';
+import { execFileSync } from 'child_process';
 import { createIsolatedBrowserContext, type BrowserTransportMode } from '../browser/transport';
+import { extractAmountFromText, type AmountReason } from './amount-extraction';
+import { checkOCRRuntime, getOCRBinaryCommands } from './ocr-runtime';
 import type { NYCAcrisFailureClass, SiteConnectivityStatus } from '../scheduler/connectivity';
 import { classifyNYCAcrisFailure } from '../scheduler/connectivity';
 import type { LienRecord } from '../types';
@@ -44,6 +47,8 @@ const NYC_ACRIS_DOC_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_DOC_DELAY_MAX_MS
 const NYC_ACRIS_PAGE_DELAY_MIN_MS = Number(process.env.NYC_ACRIS_PAGE_DELAY_MIN_MS ?? '15000');
 const NYC_ACRIS_PAGE_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_PAGE_DELAY_MAX_MS ?? '30000');
 const NYC_ACRIS_SESSION_MAX_MINUTES = Number(process.env.NYC_ACRIS_SESSION_MAX_MINUTES ?? '20');
+const NYC_ACRIS_IMAGE_VIEW_RETRIES = Number(process.env.NYC_ACRIS_IMAGE_VIEW_RETRIES ?? '2');
+const NYC_ACRIS_OCR_MAX_PAGES = Number(process.env.NYC_ACRIS_OCR_MAX_PAGES ?? '2');
 const nycAcrisLimiter = new Bottleneck({ maxConcurrent: 1 });
 
 export interface ScrapeOptions {
@@ -81,6 +86,13 @@ interface ViewerArtifact {
   viewerSrc: string | null;
   imageUrls: string[];
   title: string;
+  totalPages?: number;
+  amount?: string;
+  amountConfidence?: number;
+  amountReason?: AmountReason;
+  leadType?: string;
+  taxpayerName?: string;
+  taxpayerAddress?: string;
 }
 
 interface NetworkEvent {
@@ -151,6 +163,15 @@ interface ProbeResult {
   transportMode: BrowserTransportMode;
 }
 
+interface OcrExtraction {
+  amount?: string;
+  amountConfidence?: number;
+  amountReason: AmountReason;
+  leadType?: string;
+  taxpayerName?: string;
+  taxpayerAddress?: string;
+}
+
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
@@ -162,6 +183,17 @@ function nowIso(): string {
 export function resolveNYCAcrisDelay(minMs: number, maxMs: number, randomValue = Math.random()): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.round((maxMs - minMs) * randomValue);
+}
+
+export function isUnexpectedViewerPageUrl(url: string): boolean {
+  return /^chrome-error:\/\//i.test(url) || /^about:error/i.test(url);
+}
+
+export function shouldRetryViewerOpen(
+  diagnostic: Pick<PageReadyDiagnostic, 'finalUrl' | 'reason' | 'ok'>,
+): boolean {
+  if (diagnostic.ok) return false;
+  return isUnexpectedViewerPageUrl(diagnostic.finalUrl) || diagnostic.reason === 'unexpected_url';
 }
 
 export function inspectNYCAcrisPageReadiness(
@@ -300,6 +332,177 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeOcrAddress(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+
+  const normalized = value
+    .replace(/\r/g, '\n')
+    .replace(/\b(?:total\s+amount\s+due|tax\s+period|important|kind\s+of\s+tax|serial\s+number|unpaid\s+balance)\b[\s\S]*$/i, ' ')
+    .replace(/\bResidence\b[:\-\s]*/gi, ' ')
+    .replace(/\b(Address|Taxpayer Address)\b[:\-\s]*/gi, ' ')
+    .replace(/[|]+/g, ' ')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,+/g, ',')
+    .replace(/[.;:,]+$/g, '')
+    .trim();
+
+  if (!normalized) return undefined;
+  if (!/\d/.test(normalized)) return undefined;
+  if (normalized.length < 8) return undefined;
+  if (/^(tax period|important|kind of tax)\b/i.test(normalized)) return undefined;
+  return normalized;
+}
+
+function extractResidenceBlock(text: string): string | undefined {
+  const lines = text
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[|]+/g, ' ').trim())
+    .filter(Boolean);
+
+  const stopPattern = /^(important|tax period|kind of tax|serial number|unpaid balance|place of filing|this notice was prepared|recording and endorsement cover page|document id:|fees and taxes|property data|cross reference data)\b/i;
+  const cityStateZipPattern = /^[A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i;
+  const cityStateZipNoCommaPattern = /^[A-Z][A-Z .'-]+\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const residenceMatch = line.match(/\b(?:Residence|Address|Taxpayer Address)\b[:\-\s]*(.*)$/i);
+    if (!residenceMatch) continue;
+
+    const collected: string[] = [];
+    const remainder = residenceMatch[1]?.trim();
+    if (remainder) {
+      collected.push(remainder);
+    }
+
+    for (let nextIndex = index + 1; nextIndex < lines.length && collected.length < 3; nextIndex++) {
+      const nextLine = lines[nextIndex];
+      if (stopPattern.test(nextLine)) break;
+      if (!/[A-Za-z]/.test(nextLine)) break;
+
+      if (cityStateZipPattern.test(nextLine) || cityStateZipNoCommaPattern.test(nextLine)) {
+        collected.push(nextLine);
+        break;
+      }
+
+      if (/\d/.test(nextLine) || /\b(?:APT|UNIT|FL|FLOOR|SUITE|STE|PO BOX)\b/i.test(nextLine)) {
+        collected.push(nextLine);
+        continue;
+      }
+
+      break;
+    }
+
+    if (collected.length === 0) continue;
+
+    const rawAddress =
+      collected.length >= 2 && (cityStateZipPattern.test(collected[1]) || cityStateZipNoCommaPattern.test(collected[1]))
+        ? `${collected[0]}, ${collected[1]}`
+        : collected.join(' ');
+
+    const normalized = normalizeOcrAddress(rawAddress);
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
+
+export function isPlausibleDebtorName(value: string): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) return false;
+  if (/[:;]/.test(normalized)) return false;
+  if (/\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(normalized)) return false;
+  if (/\b\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/i.test(normalized)) return false;
+  if (/(?:^|\s)\d{5,}(?:\s|$)/.test(normalized)) return false;
+  if ((normalized.match(/\d/g) ?? []).length >= 4) return false;
+  if (!/^[A-Za-z0-9&.,'()\-\/ ]+$/.test(normalized)) return false;
+
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''))
+    .filter(Boolean);
+
+  if (tokens.length === 0) return false;
+
+  const alphaTokens = tokens.filter((token) => /[A-Za-z]/.test(token));
+  if (alphaTokens.length === 0) return false;
+
+  const businessSuffixes = new Set([
+    'LLC', 'INC', 'INC.', 'CORP', 'CORP.', 'CORPORATION', 'CO', 'CO.', 'COMPANY', 'LTD', 'LTD.', 'LP', 'LLP', 'LLLP',
+    'PLLC', 'PC', 'P.C.', 'TRUST', 'HOLDINGS', 'GROUP', 'PARTNERS', 'PARTNERSHIP', 'VENTURES', 'ENTERPRISES',
+    'ENTERPRISE', 'ASSOCIATES', 'PROPERTIES', 'REALTY', 'FUND', 'BANK',
+  ]);
+  const honorifics = new Set(['MR', 'MRS', 'MS', 'MISS', 'DR', 'JR', 'SR', 'II', 'III', 'IV']);
+  const hasBusinessSuffix = alphaTokens.some((token) => businessSuffixes.has(token.toUpperCase()));
+  const longAlphaTokens = alphaTokens.filter((token) => token.replace(/[^A-Za-z]/g, '').length >= 2);
+  const hasPersonLikeShape =
+    longAlphaTokens.length >= 2 &&
+    alphaTokens.every((token) => token.length > 1 || /^[A-Z]$/i.test(token) || honorifics.has(token.toUpperCase()));
+
+  return hasBusinessSuffix || hasPersonLikeShape;
+}
+
+function stripDebtorNoiseLabels(value: string): string {
+  return value
+    .replace(/\b(?:name of taxpayer|taxpayer name|recorded|filed|doc(?:ument)?\s+date|party\s*[12]|remarks)\b[:\-\s]*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function sanitizeDebtorName(value: string): string {
+  const normalized = stripDebtorNoiseLabels(normalizeText(value));
+  if (!normalized) return '';
+  if (/^(0|n\/a|null)$/i.test(normalized)) return '';
+  if (!/[a-z]/i.test(normalized)) return '';
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{1,2}:\d{2}:\d{2}\s*[AP]M)?$/i.test(normalized)) return '';
+  if (/^\d{16}$/.test(normalized)) return '';
+  if (/\d/.test(normalized) && normalized.length > 80) return '';
+  if (normalized.length > 120) return '';
+  if (/^(view|all boroughs|internal revenue service|irs)$/i.test(normalized)) {
+    return '';
+  }
+  if (/^(?:last updated|updated)\b/i.test(normalized)) return '';
+  return normalized;
+}
+
+function scoreDebtorNameConfidence(value: string): number {
+  if (!value) return 0.2;
+  if (isPlausibleDebtorName(value)) return 0.8;
+  if (/[a-z]/i.test(value) && !/\b\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/i.test(value)) return 0.55;
+  return 0.3;
+}
+
+function resolveRecordConfidenceScore(
+  rowDebtorName: string,
+  artifact?: Pick<ViewerArtifact, 'amountConfidence' | 'amountReason' | 'taxpayerName' | 'taxpayerAddress'>
+): number | undefined {
+  const candidates: number[] = [];
+
+  if (typeof artifact?.amountConfidence === 'number') {
+    candidates.push(artifact.amountConfidence);
+  } else if (artifact?.amountReason === 'ok') {
+    candidates.push(0.75);
+  } else if (artifact?.amountReason === 'amount_low_confidence') {
+    candidates.push(0.5);
+  }
+
+  if (artifact?.taxpayerName) {
+    candidates.push(isPlausibleDebtorName(artifact.taxpayerName) ? 0.85 : 0.65);
+  } else {
+    candidates.push(scoreDebtorNameConfidence(rowDebtorName));
+  }
+
+  if (artifact?.taxpayerAddress) {
+    candidates.push(/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/i.test(artifact.taxpayerAddress) ? 0.85 : 0.7);
+  }
+
+  if (candidates.length === 0) return undefined;
+  return Math.max(...candidates);
+}
+
 function buildSearchPayload(pageNum: number, profile: SearchProfile = { ...SEARCH_PROFILE }): Record<string, string> {
   return {
     ...profile,
@@ -388,6 +591,21 @@ function formatDiagnostic(diag: PageReadyDiagnostic): string {
   });
 }
 
+function parseViewerTotalPages(viewerSrc: string | null): number {
+  if (!viewerSrc) return 1;
+
+  try {
+    const resolved = new URL(viewerSrc, BASE);
+    const raw = resolved.searchParams.get('searchCriteriaStringValue');
+    if (!raw) return 1;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const total = Number(parsed.hid_TotalPages ?? 1);
+    return Number.isFinite(total) && total > 0 ? total : 1;
+  } catch {
+    return 1;
+  }
+}
+
 async function collectPageReadyDiagnostic(
   page: Page,
   step: string,
@@ -442,6 +660,120 @@ async function submitHiddenPostForm(page: Page, actionUrl: string, fields: Recor
     },
     { actionUrl, fields }
   );
+}
+
+async function fetchBinaryFromPage(page: Page, url: string): Promise<Buffer | null> {
+  const b64 = await page.evaluate(async (resourceUrl: string) => {
+    try {
+      const response = await fetch(resourceUrl, { credentials: 'include' });
+      if (!response.ok) return '';
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let index = 0; index < bytes.length; index++) {
+        binary += String.fromCharCode(bytes[index]);
+      }
+      return btoa(binary);
+    } catch {
+      return '';
+    }
+  }, url).catch(() => '');
+
+  if (!b64) return null;
+  return Buffer.from(b64, 'base64');
+}
+
+async function ocrImageFile(imagePath: string): Promise<string> {
+  const outputBase = imagePath.replace(/\.[^.]+$/, '_ocr');
+  const { tesseract } = getOCRBinaryCommands();
+  try {
+    execFileSync(tesseract, [imagePath, outputBase, '--psm', '6'], { stdio: 'ignore', timeout: 30000 });
+    const textPath = `${outputBase}.txt`;
+    const text = await fs.readFile(textPath, 'utf8').catch(() => '');
+    await fs.rm(textPath, { force: true }).catch(() => null);
+    return text;
+  } catch {
+    await fs.rm(`${outputBase}.txt`, { force: true }).catch(() => null);
+    return '';
+  }
+}
+
+export function extractNYCAcrisFieldsFromText(text: string): Pick<OcrExtraction, 'leadType' | 'taxpayerName' | 'taxpayerAddress'> {
+  let leadType: string | undefined;
+  if (/certificate\s+of\s+release\s+of\s+federal/i.test(text) || /form\s+668\s*\(?\s*z\s*\)?/i.test(text)) {
+    leadType = 'Release';
+  } else if (/notice\s+of\s+federal\s+tax\s+li/i.test(text) || /form\s+668\s*\(?\s*y\s*\)?/i.test(text)) {
+    leadType = 'Lien';
+  }
+
+  const taxpayerMatch =
+    text.match(/name\s+of\s+taxpayer\s+(.+?)(?:\n|residence|address)/is) ??
+    text.match(/taxpayer\s+name\s*[:\-]?\s*(.+?)(?:\n|residence|address)/is);
+  const taxpayerName = taxpayerMatch?.[1]?.replace(/\s+/g, ' ').trim();
+
+  const taxpayerAddress = extractResidenceBlock(text);
+
+  return {
+    leadType,
+    taxpayerName: taxpayerName || undefined,
+    taxpayerAddress,
+  };
+}
+
+export function chooseBetterDebtorName(currentName: string, candidateName: string | undefined): string {
+  if (!candidateName) return sanitizeDebtorName(currentName);
+  const current = sanitizeDebtorName(currentName);
+  const candidate = sanitizeDebtorName(candidateName);
+  if (!candidate) return current;
+  if (!current) return candidate;
+  if (!isPlausibleDebtorName(current) && isPlausibleDebtorName(candidate)) return candidate;
+  if (isPlausibleDebtorName(current) && !isPlausibleDebtorName(candidate)) return current;
+  if (candidate.length >= current.length + 6 && /\s/.test(candidate)) return candidate;
+  return current;
+}
+
+async function extractOcrFromViewer(page: Page, artifact: ViewerArtifact, manifest?: RunManifest): Promise<OcrExtraction> {
+  const runtime = checkOCRRuntime();
+  if (!runtime.ok) {
+    return { amountReason: 'ocr_missing' };
+  }
+
+  const totalPages = Math.max(1, Math.min(artifact.totalPages ?? 1, NYC_ACRIS_OCR_MAX_PAGES));
+  const ocrDir = path.join(OUT_DIR, 'ocr');
+  await ensureDir(ocrDir);
+
+  let fullText = '';
+  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    const imageUrl = `${BASE}/DS/DocumentSearch/GetImage?doc_id=${artifact.docId}&page=${pageNum}`;
+    const buffer = await fetchBinaryFromPage(page, imageUrl);
+    if (!buffer || buffer.length < 50) {
+      manifest?.warnings.push(`viewer_ocr_image_missing ${artifact.docId} page=${pageNum}`);
+      continue;
+    }
+
+    const imagePath = path.join(ocrDir, `${artifact.docId}_page${pageNum}.png`);
+    await fs.writeFile(imagePath, buffer);
+    const text = await ocrImageFile(imagePath);
+    await fs.rm(imagePath, { force: true }).catch(() => null);
+    if (text.trim()) {
+      fullText += `${text}\n`;
+    }
+  }
+
+  if (!fullText.trim()) {
+    return { amountReason: 'ocr_no_text' };
+  }
+
+  const amountResult = extractAmountFromText(fullText, Number(process.env.AMOUNT_MIN_CONFIDENCE ?? '0.75'));
+  const fields = extractNYCAcrisFieldsFromText(fullText);
+  return {
+    amount: amountResult.amount,
+    amountConfidence: amountResult.confidence,
+    amountReason: amountResult.reason,
+    leadType: fields.leadType,
+    taxpayerName: fields.taxpayerName,
+    taxpayerAddress: fields.taxpayerAddress,
+  };
 }
 
 async function submitHiddenPostUntilReady(
@@ -507,6 +839,11 @@ async function submitHiddenPostToImageView(
     step,
     kind: 'image_view',
   });
+}
+
+async function recoverResultsSession(page: Page, state: SearchState, manifest?: RunManifest): Promise<void> {
+  await initializeSearchSession(page, state, manifest);
+  await loadResultPage(page, state.pageNum || 1, state, manifest);
 }
 
 async function gotoPageUntilReady(
@@ -675,17 +1012,19 @@ async function extractResultRows(page: Page): Promise<ResultRowCandidate[]> {
         (value) => /^irs$/i.test(value),
       ]) || 'Internal Revenue Service';
       const debtorName = selectAuthoritativeCell(normalizedCells, [
-        (value) => !/^\d{16}$/.test(value) &&
+        (value) => /[a-z]/i.test(value) &&
+          !/^\d{16}$/.test(value) &&
           !/^\d{2}\/\d{2}\/\d{4}$/.test(value) &&
           !/federal lien-irs/i.test(value) &&
           !/internal revenue service|^irs$/i.test(value) &&
-          !/all boroughs/i.test(value),
+          !/all boroughs/i.test(value) &&
+          !/\b(view|borough|block|reel|file|crfn|lot|partial|doc\s+date|recorded|filed|pages|party|remarks|doc\s+amount)\b/i.test(value),
       ]);
 
       return {
         docId: row.docId,
         filingDate,
-        debtorName,
+        debtorName: sanitizeDebtorName(debtorName),
         securedPartyName,
         documentType,
         rowText: normalizeText(row.rowText),
@@ -714,17 +1053,46 @@ async function extractResultRows(page: Page): Promise<ResultRowCandidate[]> {
 }
 
 async function openImageViewFromResults(page: Page, state: SearchState, docId: string, manifest?: RunManifest): Promise<Record<string, string>> {
-  await waitForActionDelay();
-  const token = await getToken(page);
-  const currentFields = await collectHiddenFields(page);
-  const imageViewFields = {
-    ...currentFields,
-    ...buildSearchPayload(state.pageNum, state.profile),
-    __RequestVerificationToken: token,
-  };
+  let lastError: unknown;
 
-  await submitHiddenPostToImageView(page, manifest, `${BASE}${PATHS.imageView}?doc_id=${docId}`, imageViewFields, `open_image_view_${docId}`);
-  return imageViewFields;
+  for (let attempt = 1; attempt <= NYC_ACRIS_IMAGE_VIEW_RETRIES + 1; attempt++) {
+    try {
+      await waitForActionDelay();
+      const token = await getToken(page);
+      const currentFields = await collectHiddenFields(page);
+      const imageViewFields = {
+        ...currentFields,
+        ...buildSearchPayload(state.pageNum, state.profile),
+        __RequestVerificationToken: token,
+      };
+
+      const diagnostic = await submitHiddenPostToImageView(
+        page,
+        manifest,
+        `${BASE}${PATHS.imageView}?doc_id=${docId}`,
+        imageViewFields,
+        `open_image_view_${docId}`
+      );
+
+      if (shouldRetryViewerOpen(diagnostic) && attempt <= NYC_ACRIS_IMAGE_VIEW_RETRIES) {
+        manifest?.warnings.push(`viewer_open_transient ${docId} attempt=${attempt} url=${diagnostic.finalUrl}`);
+        await recoverResultsSession(page, state, manifest);
+        continue;
+      }
+
+      return imageViewFields;
+    } catch (err: unknown) {
+      lastError = err;
+      const message = sanitizeErrorMessage(err);
+      manifest?.warnings.push(`viewer_open_transient ${docId} attempt=${attempt} error=${message}`);
+      if (attempt > NYC_ACRIS_IMAGE_VIEW_RETRIES) {
+        break;
+      }
+      await recoverResultsSession(page, state, manifest).catch(() => null);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(`viewer_open_transient ${docId}`);
 }
 
 async function returnToResultsFromViewer(page: Page, docId: string, manifest?: RunManifest): Promise<void> {
@@ -781,7 +1149,16 @@ async function extractViewerArtifactInSession(page: Page, state: SearchState, do
     viewerSrc,
     imageUrls,
     title,
+    totalPages: parseViewerTotalPages(viewerSrc),
   };
+
+  const ocr = await extractOcrFromViewer(page, artifact, manifest);
+  artifact.amount = ocr.amount;
+  artifact.amountConfidence = ocr.amountConfidence;
+  artifact.amountReason = ocr.amountReason;
+  artifact.leadType = ocr.leadType;
+  artifact.taxpayerName = ocr.taxpayerName;
+  artifact.taxpayerAddress = ocr.taxpayerAddress;
 
   await returnToResultsFromViewer(page, docId, manifest);
   return artifact;
@@ -820,14 +1197,16 @@ async function hardenContext(context: BrowserContext, manifest: RunManifest): Pr
   });
 }
 
-function toLienRecord(row: ResultRowCandidate): LienRecord {
+function toLienRecord(row: ResultRowCandidate, artifact?: ViewerArtifact): LienRecord {
+  const debtorName = chooseBetterDebtorName(row.debtorName, artifact?.taxpayerName);
+  const debtorAddress = normalizeOcrAddress(artifact?.taxpayerAddress) ?? '';
   return {
     state: 'NY',
     source: 'nyc_acris',
     county: 'New York City',
     ucc_type: 'Federal Tax Lien',
-    debtor_name: row.debtorName,
-    debtor_address: '',
+    debtor_name: debtorName,
+    debtor_address: debtorAddress,
     file_number: row.docId,
     secured_party_name: row.securedPartyName,
     secured_party_address: '',
@@ -838,7 +1217,11 @@ function toLienRecord(row: ResultRowCandidate): LienRecord {
     pdf_filename: '',
     processed: true,
     error: '',
-    lead_type: 'Lien',
+    amount: artifact?.amount,
+    amount_confidence: artifact?.amountConfidence,
+    amount_reason: artifact?.amountReason ?? 'ocr_missing',
+    confidence_score: resolveRecordConfidenceScore(debtorName, artifact),
+    lead_type: artifact?.leadType ?? 'Lien',
   };
 }
 
@@ -1063,6 +1446,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
       }
 
       await clearCheckpoint(options);
+      const artifactsByDocId = new Map(manifest.documents.map((artifact) => [artifact.docId, artifact]));
       manifest.finishedAt = nowIso();
       manifest.sessionDurationMs = Date.now() - startedAtMs;
       const manifestFile = await writeManifest({
@@ -1087,7 +1471,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
         session_duration_ms: manifest.sessionDurationMs,
       });
 
-      return selectedRows.map(toLienRecord);
+      return selectedRows.map((row) => toLienRecord(row, artifactsByDocId.get(row.docId)));
     } catch (err: unknown) {
       const message = sanitizeErrorMessage(err);
       manifest.finishedAt = nowIso();
