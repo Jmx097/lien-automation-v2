@@ -95,6 +95,26 @@ interface ValidationStep {
   detail?: string;
 }
 
+type NYCAcrisPageKind = 'index' | 'document_type' | 'results' | 'image_view';
+
+interface PageReadyDiagnostic {
+  step: string;
+  attempt: number;
+  kind: NYCAcrisPageKind;
+  expectedPath: string;
+  finalUrl: string;
+  title: string;
+  readyState: string;
+  htmlLength: number;
+  bodyTextLength: number;
+  hasToken: boolean;
+  hasShellMarker: boolean;
+  hasResultMarker: boolean;
+  hasViewerIframe: boolean;
+  ok: boolean;
+  reason: string;
+}
+
 interface CheckpointState {
   version: 1;
   pageNum: number;
@@ -112,6 +132,7 @@ interface RunManifest {
   warnings: string[];
   failures: string[];
   network: NetworkEvent[];
+  navigationDiagnostics?: PageReadyDiagnostic[];
   validationSteps?: ValidationStep[];
   failureClass?: NYCAcrisFailureClass;
   sessionDurationMs?: number;
@@ -141,6 +162,112 @@ function nowIso(): string {
 export function resolveNYCAcrisDelay(minMs: number, maxMs: number, randomValue = Math.random()): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.round((maxMs - minMs) * randomValue);
+}
+
+export function inspectNYCAcrisPageReadiness(
+  html: string,
+  kind: NYCAcrisPageKind,
+): Pick<PageReadyDiagnostic, 'htmlLength' | 'bodyTextLength' | 'hasToken' | 'hasShellMarker' | 'hasResultMarker' | 'hasViewerIframe' | 'ok' | 'reason'> {
+  const normalized = html.toLowerCase();
+  const bodyText = normalizeText(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+  );
+  const hasToken = /name=["'](?:__RequestVerificationToken|RequestVerificationToken)["']/i.test(html);
+  const hasShellMarker =
+    /document search/i.test(html) ||
+    /new york web public inquiry/i.test(html) ||
+    /\/ds\/scripts\/global\.js/i.test(normalized) ||
+    /\/ds\/scripts\/login\.js/i.test(normalized) ||
+    /\/ds\/scripts\/menu\.js/i.test(normalized);
+  const hasResultMarker =
+    /documenttyperesult/i.test(html) ||
+    /documentimageview\?doc_id=\d{16}/i.test(html) ||
+    /go_image\(["']\d{16}["']\)/i.test(html) ||
+    /name=["']hid_page["']/i.test(html);
+  const hasViewerIframe = /<iframe[^>]+name=["']mainframe["']/i.test(html);
+  const htmlLength = html.length;
+  const bodyTextLength = bodyText.length;
+
+  if (kind === 'document_type') {
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok: hasToken,
+      reason: hasToken ? 'token_present' : 'missing_token',
+    };
+  }
+
+  if (kind === 'results') {
+    const ok = hasResultMarker && hasToken;
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok,
+      reason: ok ? 'result_markers_present' : 'missing_result_markers',
+    };
+  }
+
+  if (kind === 'image_view') {
+    const ok = hasViewerIframe || /documentimageview/i.test(html);
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok,
+      reason: ok ? (hasViewerIframe ? 'viewer_iframe_present' : 'image_view_shell_present') : 'missing_viewer_iframe',
+    };
+  }
+
+  if (hasShellMarker) {
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok: true,
+      reason: 'shell_marker_present',
+    };
+  }
+
+  if (htmlLength >= 1000 || bodyTextLength >= 200) {
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok: true,
+      reason: 'sufficient_page_content',
+    };
+  }
+
+  return {
+    htmlLength,
+    bodyTextLength,
+    hasToken,
+    hasShellMarker,
+    hasResultMarker,
+    hasViewerIframe,
+    ok: false,
+    reason: 'insufficient_page_content',
+  };
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -241,38 +368,207 @@ async function getToken(page: Page): Promise<string> {
   return token;
 }
 
-async function submitHiddenPost(page: Page, actionUrl: string, fields: Record<string, string>): Promise<void> {
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }),
-    page.evaluate(
-      ({ actionUrl, fields }) => {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = actionUrl;
-        form.style.display = 'none';
-
-        for (const [name, value] of Object.entries(fields)) {
-          const input = document.createElement('input');
-          input.type = 'hidden';
-          input.name = name;
-          input.value = value ?? '';
-          form.appendChild(input);
-        }
-
-        document.body.appendChild(form);
-        form.submit();
-      },
-      { actionUrl, fields }
-    ),
-  ]);
+function formatDiagnostic(diag: PageReadyDiagnostic): string {
+  return JSON.stringify({
+    step: diag.step,
+    attempt: diag.attempt,
+    kind: diag.kind,
+    expectedPath: diag.expectedPath,
+    finalUrl: diag.finalUrl,
+    title: diag.title,
+    readyState: diag.readyState,
+    htmlLength: diag.htmlLength,
+    bodyTextLength: diag.bodyTextLength,
+    hasToken: diag.hasToken,
+    hasShellMarker: diag.hasShellMarker,
+    hasResultMarker: diag.hasResultMarker,
+    hasViewerIframe: diag.hasViewerIframe,
+    ok: diag.ok,
+    reason: diag.reason,
+  });
 }
 
-async function gotoDocumentType(page: Page): Promise<void> {
-  await page.goto(`${BASE}${PATHS.index}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await page.goto(`${BASE}${PATHS.documentType}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+async function collectPageReadyDiagnostic(
+  page: Page,
+  step: string,
+  kind: NYCAcrisPageKind,
+  expectedPath: string,
+  attempt: number,
+): Promise<PageReadyDiagnostic> {
+  const html = await page.content().catch(() => '');
+  const title = await page.title().catch(() => '');
+  const readyState = await page.evaluate(() => document.readyState).catch(() => 'unavailable');
+  const readiness = inspectNYCAcrisPageReadiness(html, kind);
+  const finalUrl = page.url();
+  const pathReached = finalUrl.toLowerCase().includes(expectedPath.toLowerCase());
+
+  return {
+    step,
+    attempt,
+    kind,
+    expectedPath,
+    finalUrl,
+    title,
+    readyState,
+    htmlLength: readiness.htmlLength,
+    bodyTextLength: readiness.bodyTextLength,
+    hasToken: readiness.hasToken,
+    hasShellMarker: readiness.hasShellMarker,
+    hasResultMarker: readiness.hasResultMarker,
+    hasViewerIframe: readiness.hasViewerIframe,
+    ok: pathReached && readiness.ok,
+    reason: pathReached ? readiness.reason : 'unexpected_url',
+  };
 }
 
-async function loadResultPage(page: Page, pageNum: number, state: SearchState): Promise<void> {
+async function submitHiddenPostForm(page: Page, actionUrl: string, fields: Record<string, string>): Promise<void> {
+  await page.evaluate(
+    ({ actionUrl, fields }) => {
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = actionUrl;
+      form.style.display = 'none';
+
+      for (const [name, value] of Object.entries(fields)) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value ?? '';
+        form.appendChild(input);
+      }
+
+      document.body.appendChild(form);
+      form.submit();
+    },
+    { actionUrl, fields }
+  );
+}
+
+async function submitHiddenPostUntilReady(
+  page: Page,
+  manifest: RunManifest | undefined,
+  options: {
+    actionUrl: string;
+    fields: Record<string, string>;
+    expectedPath: string;
+    step: string;
+    kind: NYCAcrisPageKind;
+    readyTimeoutMs?: number;
+  },
+): Promise<PageReadyDiagnostic> {
+  const readyTimeoutMs = options.readyTimeoutMs ?? 45000;
+  await submitHiddenPostForm(page, options.actionUrl, options.fields);
+
+  const deadline = Date.now() + readyTimeoutMs;
+  let lastDiagnostic: PageReadyDiagnostic | null = null;
+  while (Date.now() <= deadline) {
+    lastDiagnostic = await collectPageReadyDiagnostic(page, options.step, options.kind, options.expectedPath, 1);
+    manifest?.navigationDiagnostics?.push(lastDiagnostic);
+    if (lastDiagnostic.ok) {
+      return lastDiagnostic;
+    }
+    await sleep(750);
+  }
+
+  if (lastDiagnostic) {
+    throw new Error(`NYC ${options.step} page not ready: ${formatDiagnostic(lastDiagnostic)}`);
+  }
+
+  throw new Error(`NYC ${options.step} page not ready after submit`);
+}
+
+async function submitHiddenPostToResults(
+  page: Page,
+  manifest: RunManifest | undefined,
+  actionUrl: string,
+  fields: Record<string, string>,
+  step: string,
+): Promise<PageReadyDiagnostic> {
+  return submitHiddenPostUntilReady(page, manifest, {
+    actionUrl,
+    fields,
+    expectedPath: PATHS.result,
+    step,
+    kind: 'results',
+  });
+}
+
+async function submitHiddenPostToImageView(
+  page: Page,
+  manifest: RunManifest | undefined,
+  actionUrl: string,
+  fields: Record<string, string>,
+  step: string,
+): Promise<PageReadyDiagnostic> {
+  return submitHiddenPostUntilReady(page, manifest, {
+    actionUrl,
+    fields,
+    expectedPath: PATHS.imageView,
+    step,
+    kind: 'image_view',
+  });
+}
+
+async function gotoPageUntilReady(
+  page: Page,
+  manifest: RunManifest | undefined,
+  options: {
+    url: string;
+    expectedPath: string;
+    step: string;
+    kind: NYCAcrisPageKind;
+    attempts?: number;
+    gotoTimeoutMs?: number;
+    readyTimeoutMs?: number;
+  },
+): Promise<PageReadyDiagnostic> {
+  const attempts = options.attempts ?? 2;
+  const gotoTimeoutMs = options.gotoTimeoutMs ?? 30000;
+  const readyTimeoutMs = options.readyTimeoutMs ?? 15000;
+  let lastDiagnostic: PageReadyDiagnostic | null = null;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await page.goto(options.url, { waitUntil: 'commit', timeout: gotoTimeoutMs });
+    } catch (err: unknown) {
+      lastError = err;
+    }
+
+    const deadline = Date.now() + readyTimeoutMs;
+    while (Date.now() <= deadline) {
+      lastDiagnostic = await collectPageReadyDiagnostic(page, options.step, options.kind, options.expectedPath, attempt);
+      manifest?.navigationDiagnostics?.push(lastDiagnostic);
+      if (lastDiagnostic.ok) {
+        return lastDiagnostic;
+      }
+      await sleep(750);
+    }
+  }
+
+  if (lastDiagnostic) {
+    throw new Error(`NYC ${options.step} page not ready: ${formatDiagnostic(lastDiagnostic)}`);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? `Failed to load ${options.url}`));
+}
+
+async function gotoDocumentType(page: Page, manifest?: RunManifest): Promise<void> {
+  await gotoPageUntilReady(page, manifest, {
+    url: `${BASE}${PATHS.index}`,
+    expectedPath: PATHS.index,
+    step: 'load_index_page',
+    kind: 'index',
+  });
+  await gotoPageUntilReady(page, manifest, {
+    url: `${BASE}${PATHS.documentType}`,
+    expectedPath: PATHS.documentType,
+    step: 'load_document_type_page',
+    kind: 'document_type',
+  });
+}
+
+async function loadResultPage(page: Page, pageNum: number, state: SearchState, manifest?: RunManifest): Promise<void> {
   if (pageNum > 1) {
     await waitForNextPageDelay();
   } else {
@@ -280,11 +576,10 @@ async function loadResultPage(page: Page, pageNum: number, state: SearchState): 
   }
   const token = await getToken(page);
   const profile = state.profile;
-  await submitHiddenPost(page, `${BASE}${PATHS.result}`, {
+  await submitHiddenPostToResults(page, manifest, `${BASE}${PATHS.result}`, {
     __RequestVerificationToken: token,
     ...buildSearchPayload(pageNum, profile),
-  });
-  await page.waitForURL(/\/DS\/DocumentSearch\/DocumentTypeResult/i, { timeout: 45000 });
+  }, `submit_result_page_${pageNum}`);
   state.pageNum = pageNum;
 }
 
@@ -418,7 +713,7 @@ async function extractResultRows(page: Page): Promise<ResultRowCandidate[]> {
   }));
 }
 
-async function openImageViewFromResults(page: Page, state: SearchState, docId: string): Promise<Record<string, string>> {
+async function openImageViewFromResults(page: Page, state: SearchState, docId: string, manifest?: RunManifest): Promise<Record<string, string>> {
   await waitForActionDelay();
   const token = await getToken(page);
   const currentFields = await collectHiddenFields(page);
@@ -428,12 +723,11 @@ async function openImageViewFromResults(page: Page, state: SearchState, docId: s
     __RequestVerificationToken: token,
   };
 
-  await submitHiddenPost(page, `${BASE}${PATHS.imageView}?doc_id=${docId}`, imageViewFields);
-  await page.waitForURL(new RegExp(`/DocumentImageView\\?doc_id=${docId}`, 'i'), { timeout: 45000 });
+  await submitHiddenPostToImageView(page, manifest, `${BASE}${PATHS.imageView}?doc_id=${docId}`, imageViewFields, `open_image_view_${docId}`);
   return imageViewFields;
 }
 
-async function returnToResultsFromViewer(page: Page, docId: string): Promise<void> {
+async function returnToResultsFromViewer(page: Page, docId: string, manifest?: RunManifest): Promise<void> {
   await waitForActionDelay();
   const token = await getToken(page);
   const hiddenFields = await collectHiddenFields(page);
@@ -449,8 +743,13 @@ async function returnToResultsFromViewer(page: Page, docId: string): Promise<voi
   delete returnFields.hid_Sup;
   delete returnFields.hid_Tax;
 
-  await submitHiddenPost(page, `${BASE}${PATHS.result}?page=${hiddenFields.hid_page || '1'}`, returnFields);
-  await page.waitForURL(/\/DS\/DocumentSearch\/DocumentTypeResult/i, { timeout: 45000 });
+  await submitHiddenPostToResults(
+    page,
+    manifest,
+    `${BASE}${PATHS.result}?page=${hiddenFields.hid_page || '1'}`,
+    returnFields,
+    `return_to_results_${docId}`
+  );
 
   const html = await page.content();
   if (!html.includes(docId) && !html.includes('DocumentTypeResult')) {
@@ -458,8 +757,8 @@ async function returnToResultsFromViewer(page: Page, docId: string): Promise<voi
   }
 }
 
-async function extractViewerArtifactInSession(page: Page, state: SearchState, docId: string): Promise<ViewerArtifact> {
-  await openImageViewFromResults(page, state, docId);
+async function extractViewerArtifactInSession(page: Page, state: SearchState, docId: string, manifest?: RunManifest): Promise<ViewerArtifact> {
+  await openImageViewFromResults(page, state, docId, manifest);
 
   const viewerSrc = (await page.locator('iframe[name="mainframe"]').getAttribute('src').catch(() => null)) ?? null;
   const title = await page.title();
@@ -484,7 +783,7 @@ async function extractViewerArtifactInSession(page: Page, state: SearchState, do
     title,
   };
 
-  await returnToResultsFromViewer(page, docId);
+  await returnToResultsFromViewer(page, docId, manifest);
   return artifact;
 }
 
@@ -558,8 +857,8 @@ function resolveSafeRunLimits(requestedMaxRecords?: number): { maxRecords: numbe
   };
 }
 
-async function initializeSearchSession(page: Page, state: SearchState): Promise<void> {
-  await gotoDocumentType(page);
+async function initializeSearchSession(page: Page, state: SearchState, manifest?: RunManifest): Promise<void> {
+  await gotoDocumentType(page, manifest);
   state.profile = { ...SEARCH_PROFILE };
 }
 
@@ -588,6 +887,7 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
       warnings: [],
       failures: [],
       network: [],
+      navigationDiagnostics: [],
       validationSteps: [],
       attemptedDocs: 0,
       completedDocs: 0,
@@ -607,11 +907,11 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
     try {
       await hardenContext(handle.context, manifest);
       throwIfSessionBudgetExceeded(startedAtMs);
-      await initializeSearchSession(page, state);
+      await initializeSearchSession(page, state, manifest);
       manifest.validationSteps?.push({ step: 'open_document_type', ok: true });
 
       throwIfSessionBudgetExceeded(startedAtMs);
-      await loadResultPage(page, 1, state);
+      await loadResultPage(page, 1, state, manifest);
       manifest.resultPagesVisited = 1;
       manifest.validationSteps?.push({ step: 'load_result_page', ok: true });
 
@@ -628,7 +928,7 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
         throwIfSessionBudgetExceeded(startedAtMs);
         const row = targetRows[index];
         manifest.attemptedDocs = index + 1;
-        const artifact = await extractViewerArtifactInSession(page, state, row.docId);
+        const artifact = await extractViewerArtifactInSession(page, state, row.docId, manifest);
         manifest.documents.push(artifact);
         manifest.completedDocs = manifest.documents.length;
         manifest.validationSteps?.push({ step: `viewer_roundtrip_${row.docId}`, ok: true });
@@ -640,7 +940,7 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
 
       if (MAX_RESULT_PAGES > 1) {
         throwIfSessionBudgetExceeded(startedAtMs);
-        await loadResultPage(page, 1, state);
+        await loadResultPage(page, 1, state, manifest);
         manifest.validationSteps?.push({ step: 'reload_result_page_after_viewer', ok: true });
       }
 
@@ -679,6 +979,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
       warnings: [],
       failures: [],
       network: [],
+      navigationDiagnostics: [],
       attemptedDocs: 0,
       completedDocs: 0,
       connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
@@ -698,7 +999,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
     try {
       await hardenContext(handle.context, manifest);
       throwIfSessionBudgetExceeded(startedAtMs);
-      await initializeSearchSession(page, state);
+      await initializeSearchSession(page, state, manifest);
 
       const collectedRows: ResultRowCandidate[] = [];
       for (let pageNum = 1; pageNum <= limits.maxPages; pageNum++) {
@@ -709,7 +1010,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
           break;
         }
 
-        await loadResultPage(page, pageNum, state);
+        await loadResultPage(page, pageNum, state, manifest);
         manifest.resultPagesVisited = pageNum;
         const rows = await extractResultRows(page);
         const freshRows = rows.filter((row) => !collectedRows.some((existing) => existing.docId === row.docId));
@@ -742,7 +1043,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
 
         try {
           manifest.attemptedDocs = index + 1;
-          const artifact = await extractViewerArtifactInSession(page, state, selectedRows[index].docId);
+          const artifact = await extractViewerArtifactInSession(page, state, selectedRows[index].docId, manifest);
           manifest.documents.push(artifact);
           manifest.completedDocs = manifest.documents.length;
           await saveCheckpoint(options, {
@@ -804,16 +1105,35 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
 
 export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
   return nycAcrisLimiter.schedule(async () => {
+    const manifest: RunManifest = {
+      startedAt: nowIso(),
+      transportMode: 'local',
+      resultPagesVisited: 0,
+      docIds: [],
+      documents: [],
+      warnings: [],
+      failures: [],
+      network: [],
+      navigationDiagnostics: [],
+    };
     const handle = await createAcrisContext();
+    manifest.transportMode = handle.mode;
     const page = await handle.context.newPage();
     page.setDefaultTimeout(30000);
 
     try {
-      await page.goto(`${BASE}${PATHS.index}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      const html = await page.content();
+      await hardenContext(handle.context, manifest);
+      const diagnostic = await gotoPageUntilReady(page, manifest, {
+        url: `${BASE}${PATHS.index}`,
+        expectedPath: PATHS.index,
+        step: 'probe_index_page',
+        kind: 'index',
+        gotoTimeoutMs: 30000,
+        readyTimeoutMs: 15000,
+      });
       return {
-        ok: /Document Search/i.test(html) || html.length > 1000,
-        detail: `loaded ${page.url()}`,
+        ok: true,
+        detail: `loaded ${diagnostic.finalUrl} ${formatDiagnostic(diagnostic)}`,
         transportMode: handle.mode,
       };
     } catch (err: unknown) {

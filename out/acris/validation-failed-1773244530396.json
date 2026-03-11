@@ -1,0 +1,71 @@
+{
+  "startedAt": "2026-03-11T15:54:44.658Z",
+  "transportMode": "brightdata-browser-api",
+  "resultPagesVisited": 0,
+  "docIds": [],
+  "documents": [],
+  "warnings": [],
+  "failures": [
+    "page.goto: Timeout 45000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"https://a836-acris.nyc.gov/DS/DocumentSearch/Index\", waiting until \"domcontentloaded\"\u001b[22m\n"
+  ],
+  "network": [
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/Index",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/login.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/jquery-1.5.1.min.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/iSearch.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/divider_rule.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    }
+  ],
+  "validationSteps": [
+    {
+      "step": "validation_failed",
+      "ok": false,
+      "detail": "page.goto: Timeout 45000ms exceeded.\nCall log:\n\u001b[2m  - navigating to \"https://a836-acris.nyc.gov/DS/DocumentSearch/Index\", waiting until \"domcontentloaded\"\u001b[22m\n"
+    }
+  ],
+  "attemptedDocs": 0,
+  "completedDocs": 0,
+  "connectivityStatusAtStart": "healthy",
+  "finishedAt": "2026-03-11T15:55:30.324Z",
+  "failureClass": "timeout_or_navigation",
+  "sessionDurationMs": 45667
+}
