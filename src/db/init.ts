@@ -33,6 +33,10 @@ function recreateScheduledRunsTable(db: Database.Database): void {
       partial INTEGER NOT NULL DEFAULT 0,
       error TEXT,
       failure_class TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 1,
+      max_attempts INTEGER NOT NULL DEFAULT 1,
+      retried INTEGER NOT NULL DEFAULT 0,
+      retry_exhausted INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -43,7 +47,7 @@ function recreateScheduledRunsTable(db: Database.Database): void {
       id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
       records_scraped, records_skipped, rows_uploaded, amount_found_count, amount_missing_count,
       amount_coverage_pct, ocr_success_pct, row_fail_pct, deadline_hit, effective_max_records,
-      partial, error, failure_class, created_at, updated_at
+      partial, error, failure_class, attempt_count, max_attempts, retried, retry_exhausted, created_at, updated_at
     )
     SELECT
       id,
@@ -67,6 +71,10 @@ function recreateScheduledRunsTable(db: Database.Database): void {
       ${hasColumn('partial') ? 'partial' : '0'},
       error,
       ${hasColumn('failure_class') ? 'failure_class' : 'NULL'},
+      ${hasColumn('attempt_count') ? 'attempt_count' : '1'},
+      ${hasColumn('max_attempts') ? 'max_attempts' : '1'},
+      ${hasColumn('retried') ? 'retried' : '0'},
+      ${hasColumn('retry_exhausted') ? 'retry_exhausted' : '0'},
       ${hasColumn('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP'},
       ${hasColumn('updated_at') ? 'updated_at' : 'CURRENT_TIMESTAMP'}
     FROM scheduled_runs_legacy`
@@ -86,7 +94,12 @@ function migrateScheduledRunsIfNeeded(db: Database.Database): void {
     | undefined;
 
   if (!table?.sql) return;
-  if (table.sql.includes("'deferred'") && table.sql.includes('failure_class')) return;
+  if (
+    table.sql.includes("'deferred'") &&
+    table.sql.includes('failure_class') &&
+    table.sql.includes('attempt_count') &&
+    table.sql.includes('retry_exhausted')
+  ) return;
 
   recreateScheduledRunsTable(db);
 }
@@ -143,6 +156,10 @@ export function ensureDatabaseReady(): string {
         partial INTEGER NOT NULL DEFAULT 0,
         error TEXT,
         failure_class TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        max_attempts INTEGER NOT NULL DEFAULT 1,
+        retried INTEGER NOT NULL DEFAULT 0,
+        retry_exhausted INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -204,6 +221,18 @@ export function ensureDatabaseReady(): string {
 
   if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
     db.prepare("ALTER TABLE scheduled_runs ADD COLUMN failure_class TEXT").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'attempt_count')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 1").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'max_attempts')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'retried')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retried INTEGER NOT NULL DEFAULT 0").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'retry_exhausted')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retry_exhausted INTEGER NOT NULL DEFAULT 0").run();
   }
 
   migrateScheduledRunsIfNeeded(db);

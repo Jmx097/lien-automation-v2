@@ -45,7 +45,12 @@ vi.mock('pg', () => {
     async query(sql: string, params: unknown[] = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
 
-      if (/^BEGIN$|^COMMIT$|^ROLLBACK$/.test(normalized) || normalized.startsWith('CREATE TABLE') || normalized.startsWith('CREATE INDEX')) {
+      if (
+        /^BEGIN$|^COMMIT$|^ROLLBACK$/.test(normalized) ||
+        normalized.startsWith('CREATE TABLE') ||
+        normalized.startsWith('CREATE INDEX') ||
+        normalized.startsWith('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS')
+      ) {
         return { rows: [] };
       }
 
@@ -77,6 +82,10 @@ vi.mock('pg', () => {
           partial: Number(params[18]),
           error: params[19] == null ? undefined : String(params[19]),
           failure_class: params[20] == null ? undefined : String(params[20]),
+          attempt_count: Number(params[21]),
+          max_attempts: Number(params[22]),
+          retried: Number(params[23]),
+          retry_exhausted: Number(params[24]),
           created_at: nowIso(),
           updated_at: nowIso(),
         };
@@ -85,7 +94,7 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('UPDATE scheduled_runs')) {
-        const existing = pgState.runs.get(String(params[16]));
+        const existing = pgState.runs.get(String(params[20]));
         if (existing) {
           pgState.runs.set(existing.id, {
             ...existing,
@@ -105,6 +114,10 @@ vi.mock('pg', () => {
             partial: Number(params[13]),
             error: params[14] == null ? undefined : String(params[14]),
             failure_class: params[15] == null ? undefined : String(params[15]),
+            attempt_count: Number(params[16]),
+            max_attempts: Number(params[17]),
+            retried: Number(params[18]),
+            retry_exhausted: Number(params[19]),
             updated_at: nowIso(),
           });
         }

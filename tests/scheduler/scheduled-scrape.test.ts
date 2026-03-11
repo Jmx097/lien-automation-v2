@@ -104,6 +104,9 @@ describe('runScheduledScrape', () => {
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
     fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
+    process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '3';
+    process.env.SCHEDULE_RUN_BASE_DELAY_MS = '0';
+    process.env.SCHEDULE_RUN_MAX_DELAY_MS = '0';
   });
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
@@ -258,5 +261,88 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('success');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries transient scraper failures and succeeds within the run budget', async () => {
+    mockScraper
+      .mockRejectedValueOnce(new Error('viewer did not return to acris result page'))
+      .mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:retry-success',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.retried).toBe(1);
+    expect(result.attempt_count).toBe(2);
+    expect(mockScraper).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries transient sheet export failures by reusing cached nyc rows', async () => {
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab
+      .mockRejectedValueOnce(new Error('googleapis sheets 503'))
+      .mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:sheet-retry',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.retried).toBe(1);
+    expect(result.attempt_count).toBe(2);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry non-retryable selector failures', async () => {
+    mockScraper.mockRejectedValueOnce(new Error('No ACRIS rows found during live selector validation'));
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:selector-fail',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failure_class).toBe('selector_or_empty_results');
+    expect(result.retry_exhausted).toBe(0);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks retry exhaustion after repeated transient failures', async () => {
+    process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '2';
+    mockScraper
+      .mockRejectedValueOnce(new Error('viewer did not return to acris result page'))
+      .mockRejectedValueOnce(new Error('viewer did not return to acris result page'));
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:retry-exhausted',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failure_class).toBe('viewer_roundtrip');
+    expect(result.retry_exhausted).toBe(1);
+    expect(result.attempt_count).toBe(2);
+    expect(mockScraper).toHaveBeenCalledTimes(2);
   });
 });

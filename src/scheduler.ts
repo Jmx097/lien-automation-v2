@@ -32,6 +32,9 @@ const SCHEDULE_AUTO_THROTTLE = process.env.SCHEDULE_AUTO_THROTTLE !== '0';
 const SCHEDULE_MAX_RECORDS = Number(process.env.SCHEDULE_MAX_RECORDS ?? '1000');
 const SCHEDULE_MAX_RECORDS_FLOOR = Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '25');
 const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000');
+const SCHEDULE_RUN_MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
+const SCHEDULE_RUN_BASE_DELAY_MS = Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
+const SCHEDULE_RUN_MAX_DELAY_MS = Math.max(SCHEDULE_RUN_BASE_DELAY_MS, Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
 
 type Slot = 'morning' | 'afternoon';
 type TriggerSource = 'external' | 'manual';
@@ -96,6 +99,11 @@ function getStore(): ScheduledRunStore {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatClock(hour: number, minute: number): string {
@@ -244,6 +252,27 @@ function computeQualityMetrics(records: any[], effectiveMaxRecords: number, dead
     rowFailPct: Math.max(rowFailPct, 0),
     partial: deadlineHit || records.length < effectiveMaxRecords ? 1 : 0,
   };
+}
+
+function isRetryableScheduledFailure(site: SupportedSite, failureClass: NYCAcrisFailureClass, errorMessage: string): boolean {
+  if (failureClass === 'policy_block' || failureClass === 'selector_or_empty_results') {
+    return false;
+  }
+
+  if (failureClass === 'sheet_export') {
+    return !/sheet_upload_mismatch/i.test(errorMessage);
+  }
+
+  return (
+    failureClass === 'timeout_or_navigation' ||
+    failureClass === 'viewer_roundtrip' ||
+    failureClass === 'token_or_session_state'
+  );
+}
+
+function getRetryDelayMs(attempt: number): number {
+  const raw = SCHEDULE_RUN_BASE_DELAY_MS * Math.pow(2, Math.max(attempt - 1, 0));
+  return Math.min(raw, SCHEDULE_RUN_MAX_DELAY_MS);
 }
 
 function getSiteRecordBounds(site: SupportedSite): { min: number; max: number } {
@@ -421,8 +450,8 @@ function deriveFailureClass(err: unknown): NYCAcrisFailureClass {
   return classifyNYCAcrisFailure(String((err as any)?.message ?? err ?? ''));
 }
 
-function shouldUseCachedNYCRows(site: SupportedSite, previousRun: ScheduledRunRecord | null): boolean {
-  return site === 'nyc_acris' && previousRun?.failure_class === 'sheet_export';
+function shouldUseCachedNYCRows(site: SupportedSite, previousFailureClass?: string): boolean {
+  return site === 'nyc_acris' && previousFailureClass === 'sheet_export';
 }
 
 async function getRecordsForScheduledRun(
@@ -431,9 +460,9 @@ async function getRecordsForScheduledRun(
   date_start: string,
   date_end: string,
   effectiveMaxRecords: number,
-  previousRun: ScheduledRunRecord | null,
+  previousFailureClass?: string,
 ) {
-  if (shouldUseCachedNYCRows(site, previousRun)) {
+  if (shouldUseCachedNYCRows(site, previousFailureClass)) {
     const cached = await loadNYCCachedRecords(idempotencyKey);
     if (cached && cached.length > 0) {
       log({ stage: 'scheduled_run_cached_records_reused', site, idempotency_key: idempotencyKey, records: cached.length });
@@ -563,6 +592,10 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     partial: 0,
     error: undefined,
     failure_class: undefined,
+    attempt_count: 1,
+    max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+    retried: 0,
+    retry_exhausted: 0,
     finished_at: undefined,
   };
 
@@ -639,68 +672,159 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       return run;
     }
 
-    const priorRun = existing?.status === 'error' ? existing : null;
-    const { records, reusedCache } = await getRecordsForScheduledRun(site, idempotencyKey, date_start, date_end, effectiveMaxRecords, priorRun);
+    let previousFailureClass = existing?.status === 'error' ? existing.failure_class : undefined;
+    for (let attempt = 1; attempt <= SCHEDULE_RUN_MAX_ATTEMPTS; attempt++) {
+      run.attempt_count = attempt;
+      run.max_attempts = SCHEDULE_RUN_MAX_ATTEMPTS;
+      run.retried = attempt > 1 ? 1 : 0;
+      run.retry_exhausted = 0;
+      run.status = 'running';
+      run.finished_at = undefined;
+      await getStore().updateRun(run);
 
-    if (site === 'nyc_acris' && !reusedCache) {
-      await saveNYCCachedRecords(idempotencyKey, records as LienRecord[]);
+      log({
+        stage: 'scheduled_run_attempt_start',
+        site,
+        run_id: runId,
+        idempotency_key: idempotencyKey,
+        attempt,
+        max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+      });
+
+      try {
+        const { records, reusedCache } = await getRecordsForScheduledRun(
+          site,
+          idempotencyKey,
+          date_start,
+          date_end,
+          effectiveMaxRecords,
+          previousFailureClass,
+        );
+
+        if (site === 'nyc_acris' && !reusedCache) {
+          await saveNYCCachedRecords(idempotencyKey, records as LienRecord[]);
+        }
+
+        const tabTitle = formatRunTabName(`Scheduled_${site}_${slot}_${runId}`, date_start, date_end, new Date());
+        const uploadResult = await pushToSheetsForTab(records, tabTitle);
+        if (uploadResult.uploaded !== records.length) {
+          throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
+        }
+
+        const deadlineHit = isPastDeadline(site, new Date());
+        const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
+
+        run.records_scraped = records.length;
+        run.rows_uploaded = uploadResult.uploaded;
+        run.amount_found_count = quality.amountFound;
+        run.amount_missing_count = quality.amountMissing;
+        run.amount_coverage_pct = quality.amountCoveragePct;
+        run.ocr_success_pct = quality.ocrSuccessPct;
+        run.row_fail_pct = quality.rowFailPct;
+        run.deadline_hit = deadlineHit ? 1 : 0;
+        run.partial = quality.partial;
+        run.status = 'success';
+        run.error = undefined;
+        run.failure_class = undefined;
+        run.retry_exhausted = 0;
+        run.finished_at = new Date().toISOString();
+
+        await getStore().updateRun(run);
+        await clearNYCCachedRecords(idempotencyKey).catch(() => null);
+        await applyNYCAcrisSuccess(site, 'run');
+
+        let nextCap = effectiveMaxRecords;
+        if (site !== 'ca_sos') {
+          nextCap = deadlineHit || records.length === 0
+            ? effectiveMaxRecords
+            : await maybeAdjustEffectiveMaxRecords(site, effectiveMaxRecords, run.amount_coverage_pct);
+          await getStore().upsertControlState(site, nextCap);
+        }
+
+        log({
+          stage: 'scheduled_run_complete',
+          site,
+          run_id: runId,
+          idempotency_key: idempotencyKey,
+          attempt,
+          max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+          records_scraped: records.length,
+          rows_uploaded: uploadResult.uploaded,
+          amount_coverage_pct: run.amount_coverage_pct,
+          ocr_success_pct: run.ocr_success_pct,
+          row_fail_pct: run.row_fail_pct,
+          deadline_hit: run.deadline_hit,
+          effective_max_records: nextCap,
+          partial: run.partial,
+          retried: run.retried,
+          tab_title: uploadResult.tab_title,
+        });
+
+        return run;
+      } catch (err: any) {
+        const failureClass = deriveFailureClass(err);
+        const errorMessage = String(err?.stack ?? err?.message ?? err);
+
+        run.error = errorMessage;
+        run.failure_class = failureClass;
+        previousFailureClass = failureClass;
+
+        await applyNYCAcrisFailure(site, failureClass, errorMessage);
+
+        const connectivityAfterFailure = site === 'nyc_acris'
+          ? await getConnectivityState(site)
+          : null;
+        const retryBlockedByCircuit = Boolean(
+          connectivityAfterFailure &&
+          (connectivityAfterFailure.status === 'blocked' || connectivityAfterFailure.status === 'probing')
+        );
+        const retryable = isRetryableScheduledFailure(site, failureClass, errorMessage);
+        const hasRemainingAttempts = attempt < SCHEDULE_RUN_MAX_ATTEMPTS;
+
+        if (retryable && hasRemainingAttempts && !retryBlockedByCircuit) {
+          const delayMs = getRetryDelayMs(attempt);
+          await getStore().updateRun(run);
+          log({
+            stage: 'scheduled_run_retry_scheduled',
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            attempt,
+            max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+            failure_class: failureClass,
+            backoff_delay_ms: delayMs,
+          });
+          await sleep(delayMs);
+          continue;
+        }
+
+        run.status = 'error';
+        run.retry_exhausted = retryable && !retryBlockedByCircuit && !hasRemainingAttempts ? 1 : 0;
+        run.finished_at = new Date().toISOString();
+        await getStore().updateRun(run);
+        log({
+          stage: 'scheduled_run_error',
+          site,
+          run_id: runId,
+          idempotency_key: idempotencyKey,
+          attempt,
+          max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+          failure_class: failureClass,
+          retryable,
+          retry_exhausted: run.retry_exhausted,
+          retry_blocked_by_circuit: retryBlockedByCircuit,
+          error: run.error,
+        });
+        return run;
+      }
     }
-
-    const tabTitle = formatRunTabName(`Scheduled_${site}_${slot}_${runId}`, date_start, date_end, new Date());
-    const uploadResult = await pushToSheetsForTab(records, tabTitle);
-    if (uploadResult.uploaded !== records.length) {
-      throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
-    }
-
-    const deadlineHit = isPastDeadline(site, new Date());
-    const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
-
-    run.records_scraped = records.length;
-    run.rows_uploaded = uploadResult.uploaded;
-    run.amount_found_count = quality.amountFound;
-    run.amount_missing_count = quality.amountMissing;
-    run.amount_coverage_pct = quality.amountCoveragePct;
-    run.ocr_success_pct = quality.ocrSuccessPct;
-    run.row_fail_pct = quality.rowFailPct;
-    run.deadline_hit = deadlineHit ? 1 : 0;
-    run.partial = quality.partial;
-    run.status = 'success';
-    run.failure_class = undefined;
-    run.finished_at = new Date().toISOString();
-
-    await getStore().updateRun(run);
-    await clearNYCCachedRecords(idempotencyKey).catch(() => null);
-    await applyNYCAcrisSuccess(site, 'run');
-
-    let nextCap = effectiveMaxRecords;
-    if (site !== 'ca_sos') {
-      nextCap = deadlineHit || records.length === 0
-        ? effectiveMaxRecords
-        : await maybeAdjustEffectiveMaxRecords(site, effectiveMaxRecords, run.amount_coverage_pct);
-      await getStore().upsertControlState(site, nextCap);
-    }
-
-    log({
-      stage: 'scheduled_run_complete',
-      site,
-      run_id: runId,
-      idempotency_key: idempotencyKey,
-      records_scraped: records.length,
-      rows_uploaded: uploadResult.uploaded,
-      amount_coverage_pct: run.amount_coverage_pct,
-      ocr_success_pct: run.ocr_success_pct,
-      row_fail_pct: run.row_fail_pct,
-      deadline_hit: run.deadline_hit,
-      effective_max_records: nextCap,
-      partial: run.partial,
-      tab_title: uploadResult.tab_title,
-    });
   } catch (err: any) {
     const failureClass = deriveFailureClass(err);
     run.status = 'error';
     run.error = String(err?.stack ?? err?.message ?? err);
     run.failure_class = failureClass;
     run.finished_at = new Date().toISOString();
+    run.retry_exhausted = 1;
     await getStore().updateRun(run);
     await applyNYCAcrisFailure(site, failureClass, run.error);
     log({ stage: 'scheduled_run_error', site, run_id: runId, idempotency_key: idempotencyKey, error: run.error });

@@ -26,6 +26,10 @@ export interface ScheduledRunRecord {
   partial: number;
   error?: string;
   failure_class?: string;
+  attempt_count?: number;
+  max_attempts?: number;
+  retried?: number;
+  retry_exhausted?: number;
 }
 
 interface MissedAlertRecord {
@@ -104,6 +108,10 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     partial: toNumber(row.partial),
     error: row.error == null ? undefined : String(row.error),
     failure_class: row.failure_class == null ? undefined : String(row.failure_class),
+    attempt_count: toNumber(row.attempt_count || 1),
+    max_attempts: toNumber(row.max_attempts || 1),
+    retried: toNumber(row.retried || 0),
+    retry_exhausted: toNumber(row.retry_exhausted || 0),
   };
 }
 
@@ -179,6 +187,10 @@ function createCommonSchemaSql(): string[] {
         partial INTEGER NOT NULL DEFAULT 0,
         error TEXT,
         failure_class TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        max_attempts INTEGER NOT NULL DEFAULT 1,
+        retried INTEGER NOT NULL DEFAULT 0,
+        retry_exhausted INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -267,6 +279,18 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN failure_class TEXT").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'attempt_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 1").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'max_attempts')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'retried')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retried INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'retry_exhausted')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retry_exhausted INTEGER NOT NULL DEFAULT 0").run();
+    }
   }
 
   async insertRun(run: ScheduledRunRecord): Promise<void> {
@@ -275,8 +299,9 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
         id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
         records_scraped, records_skipped, rows_uploaded,
         amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
-        deadline_hit, effective_max_records, partial, error, failure_class
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        deadline_hit, effective_max_records, partial, error, failure_class,
+        attempt_count, max_attempts, retried, retry_exhausted
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       run.id,
       run.site,
@@ -298,7 +323,11 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       run.effective_max_records,
       run.partial,
       run.error ?? null,
-      run.failure_class ?? null
+      run.failure_class ?? null,
+      run.attempt_count ?? 1,
+      run.max_attempts ?? 1,
+      run.retried ?? 0,
+      run.retry_exhausted ?? 0
     );
   }
 
@@ -307,7 +336,8 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       `UPDATE scheduled_runs
        SET site = ?, finished_at = ?, status = ?, records_scraped = ?, records_skipped = ?, rows_uploaded = ?,
            amount_found_count = ?, amount_missing_count = ?, amount_coverage_pct = ?, ocr_success_pct = ?, row_fail_pct = ?,
-           deadline_hit = ?, effective_max_records = ?, partial = ?, error = ?, failure_class = ?, updated_at = CURRENT_TIMESTAMP
+           deadline_hit = ?, effective_max_records = ?, partial = ?, error = ?, failure_class = ?,
+           attempt_count = ?, max_attempts = ?, retried = ?, retry_exhausted = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
     ).run(
       run.site,
@@ -326,6 +356,10 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       run.partial,
       run.error ?? null,
       run.failure_class ?? null,
+      run.attempt_count ?? 1,
+      run.max_attempts ?? 1,
+      run.retried ?? 0,
+      run.retry_exhausted ?? 0,
       run.id
     );
   }
@@ -500,10 +534,18 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           partial INTEGER NOT NULL DEFAULT 0,
           error TEXT,
           failure_class TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 1,
+          max_attempts INTEGER NOT NULL DEFAULT 1,
+          retried INTEGER NOT NULL DEFAULT 0,
+          retry_exhausted INTEGER NOT NULL DEFAULT 0,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
+      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 1');
+      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 1');
+      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retried INTEGER NOT NULL DEFAULT 0');
+      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retry_exhausted INTEGER NOT NULL DEFAULT 0');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at DESC)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_site_started_at ON scheduled_runs(site, started_at DESC)');
@@ -569,10 +611,11 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
         records_scraped, records_skipped, rows_uploaded,
         amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
-        deadline_hit, effective_max_records, partial, error, failure_class
+        deadline_hit, effective_max_records, partial, error, failure_class,
+        attempt_count, max_attempts, retried, retry_exhausted
       ) VALUES (
         $1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8,
-        $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+        $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
       )`,
       [
         run.id,
@@ -596,6 +639,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         run.partial,
         run.error ?? null,
         run.failure_class ?? null,
+        run.attempt_count ?? 1,
+        run.max_attempts ?? 1,
+        run.retried ?? 0,
+        run.retry_exhausted ?? 0,
       ]
     );
   }
@@ -619,8 +666,12 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
            partial = $14,
            error = $15,
            failure_class = $16,
+           attempt_count = $17,
+           max_attempts = $18,
+           retried = $19,
+           retry_exhausted = $20,
            updated_at = NOW()
-       WHERE id = $17`,
+       WHERE id = $21`,
       [
         run.site,
         run.finished_at ?? null,
@@ -638,6 +689,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         run.partial,
         run.error ?? null,
         run.failure_class ?? null,
+        run.attempt_count ?? 1,
+        run.max_attempts ?? 1,
+        run.retried ?? 0,
+        run.retry_exhausted ?? 0,
         run.id,
       ]
     );
