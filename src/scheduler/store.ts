@@ -32,11 +32,31 @@ export interface ScheduledRunRecord {
   retry_exhausted?: number;
 }
 
+export type SchedulerAlertType = 'missed_run' | 'quality_anomaly';
+
 interface MissedAlertRecord {
   site: SupportedSite;
   idempotency_key: string;
   slot: 'morning' | 'afternoon';
   expected_by: string;
+}
+
+export interface QualityAnomalyAlertRecord {
+  site: SupportedSite;
+  idempotency_key: string;
+  run_id: string;
+  slot: 'morning' | 'afternoon';
+  metrics_triggered: string[];
+  summary: string;
+  baseline_records_scraped: number;
+  baseline_amount_coverage_pct: number;
+  baseline_ocr_success_pct: number;
+  baseline_row_fail_pct: number;
+  records_scraped: number;
+  amount_coverage_pct: number;
+  ocr_success_pct: number;
+  row_fail_pct: number;
+  detected_at: string;
 }
 
 export interface ScheduleControlState {
@@ -70,6 +90,8 @@ interface SchedulerStoreBackend {
   listConnectivityStates(): Promise<SiteConnectivityState[]>;
   insertMissedAlert(alert: MissedAlertRecord): Promise<void>;
   getMissedAlertByKey(idempotencyKey: string): Promise<MissedAlertRecord | null>;
+  insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void>;
+  getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null>;
 }
 
 function toIso(value: unknown): string | undefined {
@@ -154,6 +176,37 @@ function normalizeMissedAlertRecord(row: Record<string, unknown> | undefined): M
   };
 }
 
+function parseMetricsTriggered(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim() === '') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeQualityAnomalyAlertRecord(row: Record<string, unknown> | undefined): QualityAnomalyAlertRecord | null {
+  if (!row) return null;
+  return {
+    site: String(row.site) as SupportedSite,
+    idempotency_key: String(row.idempotency_key),
+    run_id: String(row.run_id),
+    slot: String(row.slot) as QualityAnomalyAlertRecord['slot'],
+    metrics_triggered: parseMetricsTriggered(row.metrics_triggered),
+    summary: String(row.summary ?? ''),
+    baseline_records_scraped: toNumber(row.baseline_records_scraped),
+    baseline_amount_coverage_pct: toNumber(row.baseline_amount_coverage_pct),
+    baseline_ocr_success_pct: toNumber(row.baseline_ocr_success_pct),
+    baseline_row_fail_pct: toNumber(row.baseline_row_fail_pct),
+    records_scraped: toNumber(row.records_scraped),
+    amount_coverage_pct: toNumber(row.amount_coverage_pct),
+    ocr_success_pct: toNumber(row.ocr_success_pct),
+    row_fail_pct: toNumber(row.row_fail_pct),
+    detected_at: toIso(row.detected_at) ?? '',
+  };
+}
+
 function hasDatabaseUrl(): boolean {
   return Boolean(process.env.DATABASE_URL?.trim());
 }
@@ -204,8 +257,20 @@ function createCommonSchemaSql(): string[] {
         site TEXT NOT NULL DEFAULT 'ca_sos',
         idempotency_key TEXT NOT NULL,
         slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
-        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run')),
+        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
         expected_by TEXT NOT NULL,
+        run_id TEXT,
+        metrics_triggered TEXT,
+        summary TEXT,
+        baseline_records_scraped REAL,
+        baseline_amount_coverage_pct REAL,
+        baseline_ocr_success_pct REAL,
+        baseline_row_fail_pct REAL,
+        records_scraped REAL,
+        amount_coverage_pct REAL,
+        ocr_success_pct REAL,
+        row_fail_pct REAL,
+        detected_at TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(idempotency_key, alert_type)
       )
@@ -237,6 +302,69 @@ function createCommonSchemaSql(): string[] {
       )
     `,
   ];
+}
+
+function recreateSchedulerAlertsTable(db: Database.Database): void {
+  const columns = db.prepare("PRAGMA table_info('scheduler_alerts')").all() as Array<{ name: string }>;
+  const hasColumn = (name: string) => columns.some((column) => column.name === name);
+
+  db.exec(`
+    ALTER TABLE scheduler_alerts RENAME TO scheduler_alerts_legacy;
+
+    CREATE TABLE scheduler_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site TEXT NOT NULL DEFAULT 'ca_sos',
+      idempotency_key TEXT NOT NULL,
+      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      expected_by TEXT NOT NULL,
+      run_id TEXT,
+      metrics_triggered TEXT,
+      summary TEXT,
+      baseline_records_scraped REAL,
+      baseline_amount_coverage_pct REAL,
+      baseline_ocr_success_pct REAL,
+      baseline_row_fail_pct REAL,
+      records_scraped REAL,
+      amount_coverage_pct REAL,
+      ocr_success_pct REAL,
+      row_fail_pct REAL,
+      detected_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(idempotency_key, alert_type)
+    );
+  `);
+
+  db.prepare(
+    `INSERT INTO scheduler_alerts (
+      id, site, idempotency_key, slot, alert_type, expected_by, run_id, metrics_triggered, summary,
+      baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+      records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at, created_at
+    )
+    SELECT
+      id,
+      ${hasColumn('site') ? 'site' : "'ca_sos'"},
+      idempotency_key,
+      slot,
+      alert_type,
+      expected_by,
+      ${hasColumn('run_id') ? 'run_id' : 'NULL'},
+      ${hasColumn('metrics_triggered') ? 'metrics_triggered' : 'NULL'},
+      ${hasColumn('summary') ? 'summary' : 'NULL'},
+      ${hasColumn('baseline_records_scraped') ? 'baseline_records_scraped' : 'NULL'},
+      ${hasColumn('baseline_amount_coverage_pct') ? 'baseline_amount_coverage_pct' : 'NULL'},
+      ${hasColumn('baseline_ocr_success_pct') ? 'baseline_ocr_success_pct' : 'NULL'},
+      ${hasColumn('baseline_row_fail_pct') ? 'baseline_row_fail_pct' : 'NULL'},
+      ${hasColumn('records_scraped') ? 'records_scraped' : 'NULL'},
+      ${hasColumn('amount_coverage_pct') ? 'amount_coverage_pct' : 'NULL'},
+      ${hasColumn('ocr_success_pct') ? 'ocr_success_pct' : 'NULL'},
+      ${hasColumn('row_fail_pct') ? 'row_fail_pct' : 'NULL'},
+      ${hasColumn('detected_at') ? 'detected_at' : 'NULL'},
+      ${hasColumn('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP'}
+    FROM scheduler_alerts_legacy`
+  ).run();
+
+  db.exec('DROP TABLE scheduler_alerts_legacy;');
 }
 
 class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
@@ -272,8 +400,55 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     }
 
     const alertColumns = db.prepare("PRAGMA table_info('scheduler_alerts')").all() as Array<{ name: string }>;
-    if (!alertColumns.some((column) => column.name === 'site')) {
+    const alertsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduler_alerts'").get() as
+      | { sql: string | null }
+      | undefined;
+    const alertsNeedRecreate = !alertsTable?.sql ||
+      !alertsTable.sql.includes("'quality_anomaly'") ||
+      !alertColumns.some((column) => column.name === 'run_id') ||
+      !alertColumns.some((column) => column.name === 'detected_at');
+    if (alertsNeedRecreate) {
+      recreateSchedulerAlertsTable(db);
+    }
+    const refreshedAlertColumns = db.prepare("PRAGMA table_info('scheduler_alerts')").all() as Array<{ name: string }>;
+    if (!refreshedAlertColumns.some((column) => column.name === 'site')) {
       db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN site TEXT NOT NULL DEFAULT 'ca_sos'").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'run_id')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN run_id TEXT").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'metrics_triggered')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN metrics_triggered TEXT").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'summary')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN summary TEXT").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'baseline_records_scraped')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_records_scraped REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'baseline_amount_coverage_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_amount_coverage_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'baseline_ocr_success_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_ocr_success_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'baseline_row_fail_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_row_fail_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'records_scraped')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN records_scraped REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'amount_coverage_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN amount_coverage_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'ocr_success_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN ocr_success_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'row_fail_pct')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN row_fail_pct REAL").run();
+    }
+    if (!refreshedAlertColumns.some((column) => column.name === 'detected_at')) {
+      db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN detected_at TEXT").run();
     }
 
     if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
@@ -490,6 +665,46 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       .get(idempotencyKey) as Record<string, unknown> | undefined;
     return normalizeMissedAlertRecord(row);
   }
+
+  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+    this.getDb().prepare(
+      `INSERT OR IGNORE INTO scheduler_alerts (
+        site, idempotency_key, slot, expected_by, alert_type, run_id, metrics_triggered, summary,
+        baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+        records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+      ) VALUES (?, ?, ?, ?, 'quality_anomaly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      alert.site,
+      alert.idempotency_key,
+      alert.slot,
+      alert.detected_at,
+      alert.run_id,
+      JSON.stringify(alert.metrics_triggered),
+      alert.summary,
+      alert.baseline_records_scraped,
+      alert.baseline_amount_coverage_pct,
+      alert.baseline_ocr_success_pct,
+      alert.baseline_row_fail_pct,
+      alert.records_scraped,
+      alert.amount_coverage_pct,
+      alert.ocr_success_pct,
+      alert.row_fail_pct,
+      alert.detected_at
+    );
+  }
+
+  async getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null> {
+    const row = this.getDb().prepare(
+      `SELECT site, idempotency_key, run_id, slot, metrics_triggered, summary,
+              baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+              records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+       FROM scheduler_alerts
+       WHERE site = ? AND alert_type = 'quality_anomaly'
+       ORDER BY COALESCE(detected_at, created_at) DESC
+       LIMIT 1`
+    ).get(site) as Record<string, unknown> | undefined;
+    return normalizeQualityAnomalyAlertRecord(row);
+  }
 }
 
 class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
@@ -555,12 +770,36 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           site TEXT NOT NULL DEFAULT 'ca_sos',
           idempotency_key TEXT NOT NULL,
           slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
-          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run')),
+          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
           expected_by TIMESTAMPTZ NOT NULL,
+          run_id TEXT,
+          metrics_triggered TEXT,
+          summary TEXT,
+          baseline_records_scraped DOUBLE PRECISION,
+          baseline_amount_coverage_pct DOUBLE PRECISION,
+          baseline_ocr_success_pct DOUBLE PRECISION,
+          baseline_row_fail_pct DOUBLE PRECISION,
+          records_scraped DOUBLE PRECISION,
+          amount_coverage_pct DOUBLE PRECISION,
+          ocr_success_pct DOUBLE PRECISION,
+          row_fail_pct DOUBLE PRECISION,
+          detected_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           UNIQUE(idempotency_key, alert_type)
         )
       `);
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS run_id TEXT');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS metrics_triggered TEXT');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS summary TEXT');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS baseline_records_scraped DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS baseline_amount_coverage_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS baseline_ocr_success_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS baseline_row_fail_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS records_scraped DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS amount_coverage_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS ocr_success_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS row_fail_pct DOUBLE PRECISION');
+      await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ');
       await client.query(`
         CREATE TABLE IF NOT EXISTS scheduler_site_control_state (
           site TEXT PRIMARY KEY,
@@ -847,6 +1086,54 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       )
     );
   }
+
+  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO scheduler_alerts (
+         site, idempotency_key, slot, expected_by, alert_type, run_id, metrics_triggered, summary,
+         baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+         records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+       )
+       VALUES (
+         $1, $2, $3, $4::timestamptz, 'quality_anomaly', $5, $6, $7,
+         $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz
+       )
+       ON CONFLICT(idempotency_key, alert_type) DO NOTHING`,
+      [
+        alert.site,
+        alert.idempotency_key,
+        alert.slot,
+        alert.detected_at,
+        alert.run_id,
+        JSON.stringify(alert.metrics_triggered),
+        alert.summary,
+        alert.baseline_records_scraped,
+        alert.baseline_amount_coverage_pct,
+        alert.baseline_ocr_success_pct,
+        alert.baseline_row_fail_pct,
+        alert.records_scraped,
+        alert.amount_coverage_pct,
+        alert.ocr_success_pct,
+        alert.row_fail_pct,
+        alert.detected_at,
+      ]
+    );
+  }
+
+  async getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null> {
+    return normalizeQualityAnomalyAlertRecord(
+      await this.queryRow<Record<string, unknown>>(
+        `SELECT site, idempotency_key, run_id, slot, metrics_triggered, summary,
+                baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+                records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+         FROM scheduler_alerts
+         WHERE site = $1 AND alert_type = 'quality_anomaly'
+         ORDER BY COALESCE(detected_at, created_at) DESC
+         LIMIT 1`,
+        [site]
+      )
+    );
+  }
 }
 
 export class ScheduledRunStore {
@@ -937,6 +1224,16 @@ export class ScheduledRunStore {
   async getMissedAlertByKey(idempotencyKey: string): Promise<MissedAlertRecord | null> {
     await this.ensureReady();
     return this.backend.getMissedAlertByKey(idempotencyKey);
+  }
+
+  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+    await this.ensureReady();
+    await this.backend.insertQualityAnomalyAlert(alert);
+  }
+
+  async getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null> {
+    await this.ensureReady();
+    return this.backend.getLatestQualityAnomalyAlert(site);
   }
 }
 

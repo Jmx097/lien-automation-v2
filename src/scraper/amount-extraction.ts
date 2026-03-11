@@ -12,6 +12,13 @@ export interface AmountExtractionResult {
   reason: AmountReason;
 }
 
+interface AmountCandidate {
+  value: number;
+  confidence: number;
+  lineIndex: number;
+  hasDollarSign: boolean;
+}
+
 const KEYWORD_REGEX =
   /\b(total|amount\s+due|total\s+amount|amount|balance|liability|tax\s+due)\b/i;
 
@@ -65,20 +72,22 @@ export function extractAmountFromText(text: string, minConfidence = 0.75): Amoun
     return { confidence: 0, reason: 'ocr_no_text' };
   }
 
-  const keywordCandidates: Array<{ value: number; confidence: number }> = [];
-  const fallbackCandidates: Array<{ value: number; confidence: number }> = [];
+  const keywordCandidates: AmountCandidate[] = [];
+  const fallbackCandidates: AmountCandidate[] = [];
 
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     const values = parseCurrencyCandidates(line);
     if (values.length === 0) continue;
 
     const hasKeyword = KEYWORD_REGEX.test(line);
+    const hasDollarSign = line.includes('$');
     if (hasKeyword) {
       for (const value of values) {
-        const hasDollarSign = line.includes('$');
         keywordCandidates.push({
           value,
           confidence: hasDollarSign ? 0.98 : 0.9,
+          lineIndex,
+          hasDollarSign,
         });
       }
       continue;
@@ -86,13 +95,29 @@ export function extractAmountFromText(text: string, minConfidence = 0.75): Amoun
 
     if (hasFallbackContext) {
       for (const value of values) {
-        fallbackCandidates.push({ value, confidence: 0.7 });
+        fallbackCandidates.push({
+          value,
+          confidence: hasDollarSign ? 0.82 : 0.7,
+          lineIndex,
+          hasDollarSign,
+        });
       }
     }
   }
 
   if (keywordCandidates.length > 0) {
-    const best = keywordCandidates.sort((a, b) => b.value - a.value)[0];
+    const bestKeyword = keywordCandidates.sort((a, b) => b.value - a.value)[0];
+    const nearbyDollarFallback = fallbackCandidates
+      .filter((candidate) => candidate.hasDollarSign && Math.abs(candidate.lineIndex - bestKeyword.lineIndex) <= 1)
+      .sort((a, b) => b.value - a.value)[0];
+
+    const best =
+      nearbyDollarFallback &&
+      bestKeyword.value < 1000 &&
+      nearbyDollarFallback.value >= bestKeyword.value * 10
+        ? nearbyDollarFallback
+        : bestKeyword;
+
     if (best.confidence < minConfidence) {
       return { confidence: best.confidence, reason: 'amount_low_confidence' };
     }

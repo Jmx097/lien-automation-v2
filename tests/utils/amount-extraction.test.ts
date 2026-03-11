@@ -19,6 +19,15 @@ describe('extractAmountFromText', () => {
     expect(result.reason).toBe('ok');
   });
 
+  it('prefers a nearby larger dollar amount over a tiny stray keyword-line number', () => {
+    const text = 'NOTICE OF FEDERAL TAX LIEN\nTOTAL AMOUNT 11\n$8,882.07';
+    const result = extractAmountFromText(text, 0.75);
+
+    expect(result.amount).toBe('8882');
+    expect(result.reason).toBe('ok');
+    expect(result.confidence).toBeGreaterThanOrEqual(0.8);
+  });
+
   it('returns low-confidence when only fallback number exists', () => {
     const text = 'federal tax lien\nvalue 987654';
     const result = extractAmountFromText(text, 0.75);

@@ -4,7 +4,7 @@ import path from 'path';
 import { log } from './utils/logger';
 import { scrapers } from './scraper/index';
 import { probeCASOSResultCount } from './scraper/ca_sos_enhanced';
-import { ScheduledRunStore, ScheduledRunRecord } from './scheduler/store';
+import { ScheduledRunStore, ScheduledRunRecord, type QualityAnomalyAlertRecord } from './scheduler/store';
 import {
   classifyNYCAcrisFailure,
   createDefaultConnectivityState,
@@ -35,6 +35,12 @@ const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEI
 const SCHEDULE_RUN_MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
 const SCHEDULE_RUN_BASE_DELAY_MS = Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
 const SCHEDULE_RUN_MAX_DELAY_MS = Math.max(SCHEDULE_RUN_BASE_DELAY_MS, Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
+const SCHEDULE_ANOMALY_BASELINE_RUNS = Math.max(3, Number(process.env.SCHEDULE_ANOMALY_BASELINE_RUNS ?? '5'));
+const SCHEDULE_ANOMALY_MIN_BASELINE_RUNS = Math.max(1, Number(process.env.SCHEDULE_ANOMALY_MIN_BASELINE_RUNS ?? '3'));
+const SCHEDULE_ANOMALY_RECORDS_DROP_PCT = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_RECORDS_DROP_PCT ?? '40'));
+const SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS ?? '15'));
+const SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS ?? '20'));
+const SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS ?? '20'));
 export const SCHEDULE_FAILURE_INJECTION_ENABLED = process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
 
 type Slot = 'morning' | 'afternoon';
@@ -84,6 +90,14 @@ export interface SiteScheduleState {
     deadline_hit: number;
     effective_max_records: number;
   }>;
+  latest_anomaly?: {
+    run_id: string;
+    idempotency_key: string;
+    slot: Slot;
+    metrics_triggered: string[];
+    summary: string;
+    detected_at: string;
+  };
 }
 
 export type ScheduleState = Record<SupportedSite, SiteScheduleState>;
@@ -94,6 +108,20 @@ interface RunScheduledScrapeOptions {
   slot?: Slot;
   triggerSource?: TriggerSource;
   testFailureClass?: RetryableScheduledFailureClass;
+}
+
+interface QualityAnomalyBaseline {
+  records_scraped: number;
+  amount_coverage_pct: number;
+  ocr_success_pct: number;
+  row_fail_pct: number;
+  sample_size: number;
+}
+
+interface QualityAnomalyEvaluation {
+  metricsTriggered: string[];
+  baseline: QualityAnomalyBaseline;
+  summary: string;
 }
 
 let storeInstance: ScheduledRunStore | null = null;
@@ -258,6 +286,68 @@ function computeQualityMetrics(records: any[], effectiveMaxRecords: number, dead
     ocrSuccessPct,
     rowFailPct: Math.max(rowFailPct, 0),
     partial: deadlineHit || records.length < effectiveMaxRecords ? 1 : 0,
+  };
+}
+
+function roundMetric(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+async function evaluateQualityAnomaly(site: SupportedSite, currentRun: ScheduledRun): Promise<QualityAnomalyEvaluation | null> {
+  const recent = await getStore().getRecentSuccessfulRuns(site, SCHEDULE_ANOMALY_BASELINE_RUNS + 1);
+  const eligibleBaseline = recent
+    .filter((run) => run.id !== currentRun.id && run.partial === 0 && run.deadline_hit === 0)
+    .slice(0, SCHEDULE_ANOMALY_BASELINE_RUNS);
+
+  if (eligibleBaseline.length < SCHEDULE_ANOMALY_MIN_BASELINE_RUNS) {
+    log({
+      stage: 'scheduled_run_anomaly_skipped',
+      site,
+      run_id: currentRun.id,
+      idempotency_key: currentRun.idempotency_key,
+      reason: 'insufficient_baseline',
+      baseline_sample_size: eligibleBaseline.length,
+      min_baseline_runs: SCHEDULE_ANOMALY_MIN_BASELINE_RUNS,
+    });
+    return null;
+  }
+
+  const baseline: QualityAnomalyBaseline = {
+    records_scraped: roundMetric(average(eligibleBaseline.map((run) => run.records_scraped))),
+    amount_coverage_pct: roundMetric(average(eligibleBaseline.map((run) => run.amount_coverage_pct))),
+    ocr_success_pct: roundMetric(average(eligibleBaseline.map((run) => run.ocr_success_pct))),
+    row_fail_pct: roundMetric(average(eligibleBaseline.map((run) => run.row_fail_pct))),
+    sample_size: eligibleBaseline.length,
+  };
+
+  const metricsTriggered: string[] = [];
+  const recordsDropPct = baseline.records_scraped > 0
+    ? ((baseline.records_scraped - currentRun.records_scraped) / baseline.records_scraped) * 100
+    : 0;
+  if (baseline.records_scraped > 0 && recordsDropPct >= SCHEDULE_ANOMALY_RECORDS_DROP_PCT) {
+    metricsTriggered.push('records_scraped');
+  }
+  if ((baseline.amount_coverage_pct - currentRun.amount_coverage_pct) >= SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS) {
+    metricsTriggered.push('amount_coverage_pct');
+  }
+  if ((baseline.ocr_success_pct - currentRun.ocr_success_pct) >= SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS) {
+    metricsTriggered.push('ocr_success_pct');
+  }
+  if ((currentRun.row_fail_pct - baseline.row_fail_pct) >= SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS) {
+    metricsTriggered.push('row_fail_pct');
+  }
+
+  if (metricsTriggered.length === 0) return null;
+
+  return {
+    metricsTriggered,
+    baseline,
+    summary: `Quality anomaly for ${site}: ${metricsTriggered.join(', ')}`,
   };
 }
 
@@ -437,6 +527,52 @@ async function sendConnectivityAlert(site: SupportedSite, state: SiteConnectivit
     }
   } catch (err: any) {
     log({ stage: 'connectivity_alert_error', site, reason, error: String(err?.message ?? err) });
+  }
+}
+
+async function sendQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<{ attempted: boolean; delivered: boolean }> {
+  const webhook = process.env.SCHEDULE_ALERT_WEBHOOK_URL;
+  if (!webhook) {
+    return { attempted: false, delivered: false };
+  }
+
+  try {
+    const res = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: alert.summary,
+        site: alert.site,
+        slot: alert.slot,
+        run_id: alert.run_id,
+        idempotency_key: alert.idempotency_key,
+        metrics_triggered: alert.metrics_triggered,
+        detected_at: alert.detected_at,
+        baseline: {
+          records_scraped: alert.baseline_records_scraped,
+          amount_coverage_pct: alert.baseline_amount_coverage_pct,
+          ocr_success_pct: alert.baseline_ocr_success_pct,
+          row_fail_pct: alert.baseline_row_fail_pct,
+        },
+        current: {
+          records_scraped: alert.records_scraped,
+          amount_coverage_pct: alert.amount_coverage_pct,
+          ocr_success_pct: alert.ocr_success_pct,
+          row_fail_pct: alert.row_fail_pct,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      log({ stage: 'quality_anomaly_alert_failed', site: alert.site, run_id: alert.run_id, status: res.status, response: body });
+      return { attempted: true, delivered: false };
+    }
+
+    return { attempted: true, delivered: true };
+  } catch (err: any) {
+    log({ stage: 'quality_anomaly_alert_error', site: alert.site, run_id: alert.run_id, error: String(err?.message ?? err) });
+    return { attempted: true, delivered: false };
   }
 }
 
@@ -777,9 +913,65 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.retry_exhausted = 0;
         run.finished_at = new Date().toISOString();
 
+        const anomaly = await evaluateQualityAnomaly(site, run);
         await getStore().updateRun(run);
         await clearNYCCachedRecords(idempotencyKey).catch(() => null);
         await applyNYCAcrisSuccess(site, 'run');
+
+        if (anomaly) {
+          const anomalyAlert: QualityAnomalyAlertRecord = {
+            site,
+            idempotency_key: idempotencyKey,
+            run_id: runId,
+            slot,
+            metrics_triggered: anomaly.metricsTriggered,
+            summary: anomaly.summary,
+            baseline_records_scraped: anomaly.baseline.records_scraped,
+            baseline_amount_coverage_pct: anomaly.baseline.amount_coverage_pct,
+            baseline_ocr_success_pct: anomaly.baseline.ocr_success_pct,
+            baseline_row_fail_pct: anomaly.baseline.row_fail_pct,
+            records_scraped: run.records_scraped,
+            amount_coverage_pct: run.amount_coverage_pct,
+            ocr_success_pct: run.ocr_success_pct,
+            row_fail_pct: run.row_fail_pct,
+            detected_at: run.finished_at,
+          };
+
+          let alertResult = { attempted: false, delivered: false };
+          try {
+            await getStore().insertQualityAnomalyAlert(anomalyAlert);
+            alertResult = await sendQualityAnomalyAlert(anomalyAlert);
+          } catch (alertErr: any) {
+            log({
+              stage: 'quality_anomaly_persist_error',
+              site,
+              run_id: runId,
+              idempotency_key: idempotencyKey,
+              error: String(alertErr?.message ?? alertErr),
+            });
+          }
+
+          log({
+            stage: 'scheduled_run_anomaly_detected',
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            attempt,
+            attempt_count: run.attempt_count,
+            metrics_triggered: anomaly.metricsTriggered,
+            baseline_sample_size: anomaly.baseline.sample_size,
+            baseline_records_scraped: anomaly.baseline.records_scraped,
+            baseline_amount_coverage_pct: anomaly.baseline.amount_coverage_pct,
+            baseline_ocr_success_pct: anomaly.baseline.ocr_success_pct,
+            baseline_row_fail_pct: anomaly.baseline.row_fail_pct,
+            records_scraped: run.records_scraped,
+            amount_coverage_pct: run.amount_coverage_pct,
+            ocr_success_pct: run.ocr_success_pct,
+            row_fail_pct: run.row_fail_pct,
+            webhook_attempted: alertResult.attempted,
+            webhook_delivered: alertResult.delivered,
+          });
+        }
 
         let nextCap = effectiveMaxRecords;
         if (site !== 'ca_sos') {
@@ -894,6 +1086,7 @@ export async function getScheduleState(): Promise<ScheduleState> {
       const effectiveMax = control?.effective_max_records ?? clamp(defaultMax, bounds.min, bounds.max);
       const recent = await getStore().getRecentSuccessfulRuns(site, 4);
       const connectivity = await getConnectivityState(site);
+      const latestAnomaly = await getStore().getLatestQualityAnomalyAlert(site);
 
       const state: SiteScheduleState = {
         effective_max_records: effectiveMax,
@@ -916,6 +1109,16 @@ export async function getScheduleState(): Promise<ScheduleState> {
           deadline_hit: run.deadline_hit,
           effective_max_records: run.effective_max_records,
         })),
+        latest_anomaly: latestAnomaly
+          ? {
+            run_id: latestAnomaly.run_id,
+            idempotency_key: latestAnomaly.idempotency_key,
+            slot: latestAnomaly.slot,
+            metrics_triggered: latestAnomaly.metrics_triggered,
+            summary: latestAnomaly.summary,
+            detected_at: latestAnomaly.detected_at,
+          }
+          : undefined,
       };
 
       return [site, state] as const;
