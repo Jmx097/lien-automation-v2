@@ -9,10 +9,11 @@ set -euo pipefail
 : "${CANARY_SITE:=nyc_acris}"
 : "${CANARY_SLOT:=afternoon}"
 : "${CANARY_IDEMPOTENCY_KEY:=nyc_acris:2026-03-11:afternoon:prod-canary}"
+: "${CANARY_TEST_RETRY_FAILURE_CLASS:=}"
 
 SERVICE_URL="${SERVICE_URL:-$(gcloud run services describe "${SERVICE_NAME}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --format='value(status.url)')}"
 
-payload="$(node -e "console.log(JSON.stringify({site: process.env.CANARY_SITE, slot: process.env.CANARY_SLOT, idempotency_key: process.env.CANARY_IDEMPOTENCY_KEY}))")"
+payload="$(node -e "const payload = {site: process.env.CANARY_SITE, slot: process.env.CANARY_SLOT, idempotency_key: process.env.CANARY_IDEMPOTENCY_KEY}; if (process.env.CANARY_TEST_RETRY_FAILURE_CLASS) payload.test_retry_failure_class = process.env.CANARY_TEST_RETRY_FAILURE_CLASS; console.log(JSON.stringify(payload));")"
 
 curl -fsS -X POST "${SERVICE_URL}/schedule/run" \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \

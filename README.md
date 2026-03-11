@@ -96,6 +96,8 @@ Returns upcoming schedule windows and persisted run history (`history`) from the
 
 Authenticated endpoint for external scheduler triggers. Accepts optional `site`, `slot` (`morning`/`afternoon`), and `idempotency_key`. Scheduled runs create a brand-new sheet tab per run.
 
+When `ENABLE_SCHEDULE_FAILURE_INJECTION=1`, operators may also send `test_retry_failure_class` with one of `timeout_or_navigation`, `viewer_roundtrip`, `token_or_session_state`, or `sheet_export` to force exactly one retryable failure on the first attempt of that logical run. This is intended for controlled canaries only.
+
 ## What is production-ready vs requires credentials/external dependencies
 
 ### Production-ready in this repository
@@ -135,6 +137,7 @@ Important optional environment variables:
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
 - `SCHEDULE_RUN_BASE_DELAY_MS` sets the initial retry backoff between retryable scheduled-run attempts. Default: `1000`.
 - `SCHEDULE_RUN_MAX_DELAY_MS` caps the scheduler retry backoff. Default: `10000`.
+- `ENABLE_SCHEDULE_FAILURE_INJECTION=1` enables a canary-only test hook for `POST /schedule/run`. Leave it unset for normal production operation.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`

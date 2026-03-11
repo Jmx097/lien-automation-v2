@@ -107,6 +107,7 @@ describe('runScheduledScrape', () => {
     process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '3';
     process.env.SCHEDULE_RUN_BASE_DELAY_MS = '0';
     process.env.SCHEDULE_RUN_MAX_DELAY_MS = '0';
+    delete process.env.ENABLE_SCHEDULE_FAILURE_INJECTION;
   });
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
@@ -344,5 +345,47 @@ describe('runScheduledScrape', () => {
     expect(result.retry_exhausted).toBe(1);
     expect(result.attempt_count).toBe(2);
     expect(mockScraper).toHaveBeenCalledTimes(2);
+  });
+
+  it('injects one transient viewer failure and succeeds on retry', async () => {
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:injected-viewer-retry',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+      testFailureClass: 'viewer_roundtrip',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.attempt_count).toBe(2);
+    expect(result.retried).toBe(1);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('injects one transient sheet export failure and succeeds from cached nyc rows', async () => {
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:injected-sheet-retry',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+      testFailureClass: 'sheet_export',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.attempt_count).toBe(2);
+    expect(result.retried).toBe(1);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
   });
 });

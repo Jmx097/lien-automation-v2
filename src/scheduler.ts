@@ -35,9 +35,15 @@ const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEI
 const SCHEDULE_RUN_MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
 const SCHEDULE_RUN_BASE_DELAY_MS = Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
 const SCHEDULE_RUN_MAX_DELAY_MS = Math.max(SCHEDULE_RUN_BASE_DELAY_MS, Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
+export const SCHEDULE_FAILURE_INJECTION_ENABLED = process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
 
 type Slot = 'morning' | 'afternoon';
 type TriggerSource = 'external' | 'manual';
+export type RetryableScheduledFailureClass =
+  | 'timeout_or_navigation'
+  | 'viewer_roundtrip'
+  | 'token_or_session_state'
+  | 'sheet_export';
 
 interface SiteScheduleConfig {
   site: SupportedSite;
@@ -87,6 +93,7 @@ interface RunScheduledScrapeOptions {
   idempotencyKey?: string;
   slot?: Slot;
   triggerSource?: TriggerSource;
+  testFailureClass?: RetryableScheduledFailureClass;
 }
 
 let storeInstance: ScheduledRunStore | null = null;
@@ -273,6 +280,19 @@ function isRetryableScheduledFailure(site: SupportedSite, failureClass: NYCAcris
 function getRetryDelayMs(attempt: number): number {
   const raw = SCHEDULE_RUN_BASE_DELAY_MS * Math.pow(2, Math.max(attempt - 1, 0));
   return Math.min(raw, SCHEDULE_RUN_MAX_DELAY_MS);
+}
+
+function buildInjectedFailureError(failureClass: RetryableScheduledFailureClass): Error {
+  switch (failureClass) {
+    case 'timeout_or_navigation':
+      return new Error('Injected test failure: navigation timeout while loading scheduled scrape results');
+    case 'viewer_roundtrip':
+      return new Error('Injected test failure: viewer did not return to acris result page');
+    case 'token_or_session_state':
+      return new Error('Injected test failure: session expired while opening scheduled scrape results');
+    case 'sheet_export':
+      return new Error('Injected test failure: googleapis sheets 503');
+  }
 }
 
 function getSiteRecordBounds(site: SupportedSite): { min: number; max: number } {
@@ -513,6 +533,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const slot = options.slot ?? schedule.slot;
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
   const triggerSource = options.triggerSource ?? 'external';
+  const testFailureClass = options.testFailureClass;
   const connectivityAtStart = await getConnectivityState(site);
 
   const existing = await getStore().getByIdempotencyKey(idempotencyKey);
@@ -673,6 +694,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     }
 
     let previousFailureClass = existing?.status === 'error' ? existing.failure_class : undefined;
+    let injectedFailureConsumed = false;
     for (let attempt = 1; attempt <= SCHEDULE_RUN_MAX_ATTEMPTS; attempt++) {
       run.attempt_count = attempt;
       run.max_attempts = SCHEDULE_RUN_MAX_ATTEMPTS;
@@ -692,6 +714,19 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       });
 
       try {
+        if (testFailureClass && !injectedFailureConsumed && testFailureClass !== 'sheet_export') {
+          injectedFailureConsumed = true;
+          log({
+            stage: 'scheduled_run_test_failure_injected',
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            attempt,
+            failure_class: testFailureClass,
+          });
+          throw buildInjectedFailureError(testFailureClass);
+        }
+
         const { records, reusedCache } = await getRecordsForScheduledRun(
           site,
           idempotencyKey,
@@ -703,6 +738,19 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
         if (site === 'nyc_acris' && !reusedCache) {
           await saveNYCCachedRecords(idempotencyKey, records as LienRecord[]);
+        }
+
+        if (testFailureClass === 'sheet_export' && !injectedFailureConsumed) {
+          injectedFailureConsumed = true;
+          log({
+            stage: 'scheduled_run_test_failure_injected',
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            attempt,
+            failure_class: testFailureClass,
+          });
+          throw buildInjectedFailureError(testFailureClass);
         }
 
         const tabTitle = formatRunTabName(`Scheduled_${site}_${slot}_${runId}`, date_start, date_end, new Date());

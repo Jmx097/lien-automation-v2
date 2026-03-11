@@ -4,7 +4,16 @@ import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
-import { checkMissedRuns, checkSiteConnectivity, getNextRuns, getRunHistory, getScheduleState, runScheduledScrape } from "./scheduler";
+import {
+  checkMissedRuns,
+  checkSiteConnectivity,
+  getNextRuns,
+  getRunHistory,
+  getScheduleState,
+  runScheduledScrape,
+  SCHEDULE_FAILURE_INJECTION_ENABLED,
+  type RetryableScheduledFailureClass,
+} from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
 import { ensureDatabaseReady } from "./db/init";
 
@@ -40,6 +49,13 @@ function isMissingRuntimeConfigError(err: unknown): boolean {
 function errorStatusFor(err: unknown): number {
   return isMissingRuntimeConfigError(err) ? 503 : 500;
 }
+
+const allowedInjectedFailureClasses = new Set<RetryableScheduledFailureClass>([
+  'timeout_or_navigation',
+  'viewer_roundtrip',
+  'token_or_session_state',
+  'sheet_export',
+]);
 
 app.post("/scrape", async (req, res) => {
   const startTime = Date.now();
@@ -221,12 +237,25 @@ app.post("/schedule/run", async (req, res) => {
     const slot = req.body?.slot === 'morning' || req.body?.slot === 'afternoon' ? req.body.slot : undefined;
     const site = typeof req.body?.site === 'string' ? req.body.site : undefined;
     const idempotencyKey = typeof req.body?.idempotency_key === 'string' ? req.body.idempotency_key : undefined;
+    const requestedTestFailureClass = typeof req.body?.test_retry_failure_class === 'string'
+      ? req.body.test_retry_failure_class
+      : undefined;
+    const testFailureClass = requestedTestFailureClass as RetryableScheduledFailureClass | undefined;
+
+    if (requestedTestFailureClass && !allowedInjectedFailureClasses.has(testFailureClass!)) {
+      return res.status(400).json({ error: 'Invalid test_retry_failure_class' });
+    }
+
+    if (requestedTestFailureClass && !SCHEDULE_FAILURE_INJECTION_ENABLED) {
+      return res.status(400).json({ error: 'ENABLE_SCHEDULE_FAILURE_INJECTION is not enabled' });
+    }
 
     const result = await runScheduledScrape({
       site: site as any,
       slot,
       idempotencyKey,
       triggerSource: 'external',
+      testFailureClass,
     });
     return res.json(result);
   } catch (err: any) {
