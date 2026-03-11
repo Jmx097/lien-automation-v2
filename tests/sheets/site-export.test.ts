@@ -89,6 +89,36 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][14]).toBe('11201');
   });
 
+  it('trims underscore OCR zip suffix noise and ignores punctuation-only name fragments', () => {
+    const rows = buildRowValues([
+      {
+        state: 'NY',
+        source: 'nyc_acris',
+        county: 'New York City',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'ALBERTO :',
+        debtor_address: '160 COLUMBIA HTS APT 10C BROOKLYN, NY 11201-2189 _',
+        file_number: '2026030600410002',
+        secured_party_name: 'Internal Revenue Service',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '03/06/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'FEDERAL LIEN-IRS',
+        pdf_filename: '',
+        processed: true,
+        confidence_score: 0.92,
+      },
+    ]);
+
+    expect(rows[0][9]).toBe('ALBERTO');
+    expect(rows[0][10]).toBe('');
+    expect(rows[0][11]).toBe('160 COLUMBIA HTS APT 10C');
+    expect(rows[0][12]).toBe('BROOKLYN');
+    expect(rows[0][13]).toBe('NY');
+    expect(rows[0][14]).toBe('11201');
+  });
+
   it('leaves structured address fields blank when OCR address text is unusable', () => {
     const rows = buildRowValues([
       {

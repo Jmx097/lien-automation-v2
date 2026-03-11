@@ -351,7 +351,7 @@ function trimTrailingAddressNoiseAfterZip(value: string): string {
       continue;
     }
 
-    if (/^[.,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(normalizedSuffix)) {
+    if (/^[._,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(normalizedSuffix)) {
       trimmed = value.slice(0, zipEnd);
     }
   }
@@ -367,6 +367,7 @@ export function normalizeOcrAddress(value: string | undefined): string | undefin
     .replace(/\b(?:total\s+amount\s+due|tax\s+period|important|kind\s+of\s+tax|serial\s+number|unpaid\s+balance)\b[\s\S]*$/i, ' ')
     .replace(/\bResidence\b[:\-\s]*/gi, ' ')
     .replace(/\b(Address|Taxpayer Address)\b[:\-\s]*/gi, ' ')
+    .replace(/_+/g, ' ')
     .replace(/[|]+/g, ' ')
     .replace(/\n+/g, ' ')
     .replace(/\s+/g, ' ')

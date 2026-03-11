@@ -78,7 +78,10 @@ function splitPersonalName(name: string): { firstName: string; lastName: string 
     .replace(/\b(JR|SR|II|III|IV|V)\b\.?/gi, '')
     .trim();
 
-  const parts = cleaned.split(/\s+/).filter(Boolean);
+  const parts = cleaned
+    .split(/\s+/)
+    .map((part) => part.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''))
+    .filter((part) => /[A-Za-z0-9]/.test(part));
   if (parts.length === 0) return { firstName: '', lastName: '' };
   if (parts.length === 1) return { firstName: parts[0], lastName: '' };
   return {
@@ -89,6 +92,7 @@ function splitPersonalName(name: string): { firstName: string; lastName: string 
 
 function normalizeAddressForParsing(raw: string): string {
   const collapsed = raw
+    .replace(/_+/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/\s+([,.;:])/g, '$1')
     .replace(/([,.;:])(?=[A-Za-z])/g, '$1 ')
@@ -102,7 +106,7 @@ function normalizeAddressForParsing(raw: string): string {
   while ((match = zipPattern.exec(collapsed)) !== null) {
     const zipEnd = match.index + match[0].length;
     const suffix = collapsed.slice(zipEnd).trim();
-    if (!suffix || /^[.,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(suffix)) {
+    if (!suffix || /^[._,;:|/\\()\-[\]\s]*\d{0,2}[A-Za-z]?$/.test(suffix)) {
       cleaned = collapsed.slice(0, zipEnd);
     }
   }
