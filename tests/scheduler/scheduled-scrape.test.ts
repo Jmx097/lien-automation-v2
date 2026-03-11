@@ -6,10 +6,12 @@ const mockScraper = vi.fn();
 const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
 const mockLog = vi.fn();
+const mockFetch = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
 const connectivityState = new Map<string, any>();
+const anomalyAlerts = new Map<string, any>();
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -88,6 +90,15 @@ vi.mock('../../src/scheduler/store', () => {
     getMissedAlertByKey() {
       return null;
     }
+
+    insertQualityAnomalyAlert(alert: any) {
+      anomalyAlerts.set(`${alert.idempotency_key}:quality_anomaly`, { ...alert });
+    }
+
+    getLatestQualityAnomalyAlert(site: string) {
+      const alerts = Array.from(anomalyAlerts.values()).filter((alert: any) => alert.site === site);
+      return alerts[alerts.length - 1] ?? null;
+    }
   }
 
   return {
@@ -101,14 +112,55 @@ describe('runScheduledScrape', () => {
     runs.clear();
     controlState = null;
     connectivityState.clear();
+    anomalyAlerts.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
+    mockFetch.mockReset();
+    vi.stubGlobal('fetch', mockFetch);
     fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
     process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '3';
     process.env.SCHEDULE_RUN_BASE_DELAY_MS = '0';
     process.env.SCHEDULE_RUN_MAX_DELAY_MS = '0';
+    delete process.env.SCHEDULE_ALERT_WEBHOOK_URL;
     delete process.env.ENABLE_SCHEDULE_FAILURE_INJECTION;
   });
+
+  async function seedSuccessfulBaseline(site: 'ca_sos' | 'nyc_acris', metrics: Array<{
+    id: string;
+    records_scraped: number;
+    amount_coverage_pct: number;
+    ocr_success_pct: number;
+    row_fail_pct: number;
+    partial?: number;
+    deadline_hit?: number;
+  }>) {
+    const { ScheduledRunStore } = await import('../../src/scheduler/store');
+    const store = new ScheduledRunStore();
+    for (const [index, metric] of metrics.entries()) {
+      const day = String(index + 1).padStart(2, '0');
+      await store.insertRun({
+        id: metric.id,
+        site,
+        idempotency_key: `${site}:${metric.id}`,
+        slot_time: `${site}:${metric.id}`,
+        trigger_source: 'manual',
+        started_at: new Date(`2026-03-${day}T12:00:00.000Z`).toISOString(),
+        finished_at: new Date(`2026-03-${day}T12:05:00.000Z`).toISOString(),
+        status: 'success',
+        records_scraped: metric.records_scraped,
+        records_skipped: 0,
+        rows_uploaded: metric.records_scraped,
+        amount_found_count: Math.round((metric.records_scraped * metric.amount_coverage_pct) / 100),
+        amount_missing_count: Math.max(metric.records_scraped - Math.round((metric.records_scraped * metric.amount_coverage_pct) / 100), 0),
+        amount_coverage_pct: metric.amount_coverage_pct,
+        ocr_success_pct: metric.ocr_success_pct,
+        row_fail_pct: metric.row_fail_pct,
+        deadline_hit: metric.deadline_hit ?? 0,
+        effective_max_records: metric.records_scraped,
+        partial: metric.partial ?? 0,
+      });
+    }
+  }
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
     mockProbeCASOSResultCount.mockResolvedValueOnce(2);
@@ -387,5 +439,207 @@ describe('runScheduledScrape', () => {
     expect(result.retried).toBe(1);
     expect(mockScraper).toHaveBeenCalledTimes(1);
     expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips anomaly detection when there are fewer than three eligible baseline runs', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-1', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-2', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0, partial: 1 },
+    ]);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:anomaly-skip',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(anomalyAlerts.size).toBe(0);
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'scheduled_run_anomaly_skipped',
+      reason: 'insufficient_baseline',
+    }));
+  });
+
+  it('detects a sharp records_scraped regression without failing the run', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-11', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-12', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-13', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: '200', amount_reason: 'ok' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:records-regression',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(anomalyAlerts.get('nyc_acris:2026-03-11:records-regression:quality_anomaly')?.metrics_triggered)
+      .toContain('records_scraped');
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'scheduled_run_anomaly_detected',
+      metrics_triggered: expect.arrayContaining(['records_scraped']),
+    }));
+  });
+
+  it('detects amount coverage regressions', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-21', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-22', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-23', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: null, amount_reason: 'missing' },
+      { filing_number: '2', amount: null, amount_reason: 'missing' },
+      { filing_number: '3', amount: null, amount_reason: 'missing' },
+      { filing_number: '4', amount: null, amount_reason: 'missing' },
+      { filing_number: '5', amount: '500', amount_reason: 'ok' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 5, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:amount-regression',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(anomalyAlerts.get('nyc_acris:2026-03-11:amount-regression:quality_anomaly')?.metrics_triggered)
+      .toContain('amount_coverage_pct');
+  });
+
+  it('detects OCR success regressions', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-31', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-32', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-33', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ocr_missing' },
+      { filing_number: '2', amount: '200', amount_reason: 'ocr_missing' },
+      { filing_number: '3', amount: '300', amount_reason: 'ocr_missing' },
+      { filing_number: '4', amount: '400', amount_reason: 'ocr_missing' },
+      { filing_number: '5', amount: '500', amount_reason: 'ok' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 5, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:ocr-regression',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(anomalyAlerts.get('nyc_acris:2026-03-11:ocr-regression:quality_anomaly')?.metrics_triggered)
+      .toContain('ocr_success_pct');
+  });
+
+  it('detects row failure regressions', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-41', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-42', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-43', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:row-fail-regression',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(anomalyAlerts.get('nyc_acris:2026-03-11:row-fail-regression:quality_anomaly')?.metrics_triggered)
+      .toContain('row_fail_pct');
+  });
+
+  it('does not alert on normal variance', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-51', records_scraped: 5, amount_coverage_pct: 95, ocr_success_pct: 95, row_fail_pct: 5 },
+      { id: 'baseline-52', records_scraped: 5, amount_coverage_pct: 96, ocr_success_pct: 96, row_fail_pct: 4 },
+      { id: 'baseline-53', records_scraped: 5, amount_coverage_pct: 97, ocr_success_pct: 97, row_fail_pct: 3 },
+    ]);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: '200', amount_reason: 'ok' },
+      { filing_number: '3', amount: '300', amount_reason: 'ok' },
+      { filing_number: '4', amount: '400', amount_reason: 'ok' },
+      { filing_number: '5', amount: '500', amount_reason: 'ok' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 5, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:normal-variance',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(anomalyAlerts.size).toBe(0);
+  });
+
+  it('continues successfully when anomaly webhook delivery fails', async () => {
+    process.env.SCHEDULE_ALERT_WEBHOOK_URL = 'https://example.invalid/webhook';
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom' });
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-61', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-62', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-63', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:webhook-failure',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'scheduled_run_anomaly_detected',
+      webhook_attempted: true,
+      webhook_delivered: false,
+    }));
+  });
+
+  it('writes at most one anomaly alert record per run', async () => {
+    await seedSuccessfulBaseline('nyc_acris', [
+      { id: 'baseline-71', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-72', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+      { id: 'baseline-73', records_scraped: 5, amount_coverage_pct: 100, ocr_success_pct: 100, row_fail_pct: 0 },
+    ]);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:dedupe',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(anomalyAlerts.size).toBe(1);
   });
 });

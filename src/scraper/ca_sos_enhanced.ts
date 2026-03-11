@@ -101,6 +101,126 @@ interface PdfExtraction {
 
 let ocrToolingChecked = false;
 
+function clampConfidence(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeText(value?: string): string {
+  return (value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeComparableText(value?: string): string {
+  return normalizeText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isPlausiblePartyName(value: string): boolean {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return false;
+  if (/[:;]/.test(normalized)) return false;
+  if (/\b\d{1,2}\/\d{1,2}\/\d{4}\b/.test(normalized)) return false;
+  if (/\b\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/i.test(normalized)) return false;
+  if ((normalized.match(/\d/g) ?? []).length >= 4) return false;
+
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, ''))
+    .filter(Boolean);
+
+  if (tokens.length === 0) return false;
+
+  const alphaTokens = tokens.filter((token) => /[A-Z]/.test(token));
+  if (alphaTokens.length === 0) return false;
+
+  const businessSuffixes = new Set([
+    'LLC', 'INC', 'INC.', 'CORP', 'CORP.', 'CORPORATION', 'CO', 'CO.', 'COMPANY', 'LTD', 'LTD.', 'LP', 'LLP', 'PLLC',
+    'PC', 'P.C.', 'TRUST', 'HOLDINGS', 'GROUP', 'PARTNERS', 'PARTNERSHIP', 'VENTURES', 'ENTERPRISES', 'REALTY',
+  ]);
+  const honorifics = new Set(['MR', 'MRS', 'MS', 'MISS', 'DR', 'JR', 'SR', 'II', 'III', 'IV']);
+  const hasBusinessSuffix = alphaTokens.some((token) => businessSuffixes.has(token.toUpperCase()));
+  const longAlphaTokens = alphaTokens.filter((token) => token.replace(/[^A-Z]/g, '').length >= 2);
+  const hasPersonLikeShape =
+    longAlphaTokens.length >= 2 &&
+    alphaTokens.every((token) => token.length > 1 || /^[A-Z]$/i.test(token) || honorifics.has(token.toUpperCase()));
+
+  return hasBusinessSuffix || hasPersonLikeShape;
+}
+
+function scorePartyNameConfidence(value?: string): number {
+  const normalized = normalizeText(value);
+  if (!normalized) return 0.2;
+  if (isPlausiblePartyName(normalized)) return 0.8;
+  if (/[A-Za-z]/.test(normalized) && !/\b\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/i.test(normalized)) return 0.55;
+  return 0.3;
+}
+
+function scoreAddressConfidence(value?: string): number {
+  const normalized = normalizeText(value);
+  if (!normalized) return 0.2;
+  if (/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/i.test(normalized)) return 0.85;
+  if (/\d/.test(normalized) && /[A-Za-z]/.test(normalized) && /,/.test(normalized)) return 0.72;
+  if (/\d/.test(normalized) && /[A-Za-z]/.test(normalized)) return 0.62;
+  return 0.45;
+}
+
+function scoreNameAgreement(primary?: string, secondary?: string): number | undefined {
+  const left = normalizeComparableText(primary);
+  const right = normalizeComparableText(secondary);
+  if (!left || !right) return undefined;
+  if (left === right) return 0.92;
+
+  const leftTokens = new Set(left.split(/\s+/).filter(Boolean));
+  const rightTokens = new Set(right.split(/\s+/).filter(Boolean));
+  const shared = Array.from(leftTokens).filter((token) => rightTokens.has(token));
+  const denominator = Math.max(leftTokens.size, rightTokens.size, 1);
+  const overlap = shared.length / denominator;
+
+  if (overlap >= 0.75) return 0.86;
+  if (overlap >= 0.5) return 0.75;
+  return undefined;
+}
+
+export function resolveCARecordConfidenceScore(
+  debtorName: string,
+  debtorAddress: string,
+  pdfData: Pick<PdfExtraction, 'amountConfidence' | 'amountReason' | 'taxpayerName' | 'residence'>
+): number | undefined {
+  const candidates: number[] = [];
+
+  if (typeof pdfData.amountConfidence === 'number') {
+    candidates.push(pdfData.amountConfidence);
+  } else if (pdfData.amountReason === 'ok') {
+    candidates.push(0.75);
+  } else if (pdfData.amountReason === 'amount_low_confidence') {
+    candidates.push(0.5);
+  }
+
+  const ocrName = normalizeText(pdfData.taxpayerName);
+  const ocrResidence = normalizeText(pdfData.residence);
+
+  if (ocrName) {
+    candidates.push(scorePartyNameConfidence(ocrName) + 0.05);
+    const agreement = scoreNameAgreement(debtorName, ocrName);
+    if (typeof agreement === 'number') candidates.push(agreement);
+  } else {
+    candidates.push(scorePartyNameConfidence(debtorName));
+  }
+
+  if (ocrResidence) {
+    candidates.push(scoreAddressConfidence(ocrResidence));
+  } else {
+    candidates.push(scoreAddressConfidence(debtorAddress));
+  }
+
+  if (candidates.length === 0) return undefined;
+  return Number(clampConfidence(Math.max(...candidates)).toFixed(2));
+}
+
 function ocrPdf(pdfPath: string): string {
   const dir = path.dirname(pdfPath);
   const base = path.basename(pdfPath, '.pdf');
@@ -493,7 +613,7 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
       amount: pdfData.amount,
       amount_confidence: pdfData.amountConfidence,
       amount_reason: pdfData.amountReason,
-      confidence_score: pdfData.amountConfidence,
+      confidence_score: resolveCARecordConfidenceScore(debtorName, debtorAddress, pdfData),
       lead_type: pdfData.leadType,
     };
 

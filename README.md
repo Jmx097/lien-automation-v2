@@ -137,6 +137,9 @@ Important optional environment variables:
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
 - `SCHEDULE_RUN_BASE_DELAY_MS` sets the initial retry backoff between retryable scheduled-run attempts. Default: `1000`.
 - `SCHEDULE_RUN_MAX_DELAY_MS` caps the scheduler retry backoff. Default: `10000`.
+- `SCHEDULE_ANOMALY_BASELINE_RUNS` controls how many recent successful runs are inspected when building the anomaly baseline. Default: `5`.
+- `SCHEDULE_ANOMALY_MIN_BASELINE_RUNS` is the minimum number of eligible successful runs required before anomaly detection activates. Default: `3`.
+- `SCHEDULE_ANOMALY_RECORDS_DROP_PCT`, `SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS`, `SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS`, and `SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS` tune successful-run anomaly thresholds. Defaults: `40`, `15`, `20`, and `20`.
 - `ENABLE_SCHEDULE_FAILURE_INJECTION=1` enables a canary-only test hook for `POST /schedule/run`. Leave it unset for normal production operation.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
@@ -396,9 +399,10 @@ Cloud Scheduler equivalent: create one job per site with the appropriate schedul
 1. Run records are stored in the scheduler store table `scheduled_runs` (SQLite locally, Postgres when `DATABASE_URL` is set), including `slot_time`, `started_at`, `finished_at`, `status`, `records_scraped`, `rows_uploaded`, and `error`.
 2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`; cooldown checks also read persisted DB state.
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
-4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`.
+4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`. It is used for missed runs, connectivity alerts, and successful-run quality anomalies.
 5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
 6. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
+7. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
 
 ## Monitoring Setup Notes
 

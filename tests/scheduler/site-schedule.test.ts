@@ -6,6 +6,7 @@ const mockPushToSheetsForTab = vi.fn();
 const runs = new Map<string, any>();
 const controlState = new Map<string, any>();
 const connectivityState = new Map<string, any>();
+const anomalyAlerts = new Map<string, any>();
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -53,6 +54,11 @@ vi.mock('../../src/scheduler/store', () => {
     listConnectivityStates() { return Array.from(connectivityState.values()); }
     insertMissedAlert() {}
     getMissedAlertByKey() { return null; }
+    insertQualityAnomalyAlert(alert: any) { anomalyAlerts.set(`${alert.idempotency_key}:quality_anomaly`, { ...alert }); }
+    getLatestQualityAnomalyAlert(site: string) {
+      const alerts = Array.from(anomalyAlerts.values()).filter((alert: any) => alert.site === site);
+      return alerts[alerts.length - 1] ?? null;
+    }
   }
 
   return { ScheduledRunStore };
@@ -64,6 +70,7 @@ describe('site-aware scheduler', () => {
     runs.clear();
     controlState.clear();
     connectivityState.clear();
+    anomalyAlerts.clear();
     mockScraper.mockReset();
     mockProbeCASOSResultCount.mockReset();
     mockPushToSheetsForTab.mockReset();
@@ -96,8 +103,29 @@ describe('site-aware scheduler', () => {
     const state = await getScheduleState();
     expect(state.ca_sos).toBeDefined();
     expect(state.nyc_acris).toBeDefined();
+    expect(state.ca_sos.latest_anomaly).toBeUndefined();
     expect(Array.from(runs.keys())).toEqual(
       expect.arrayContaining(['ca_sos:2026-03-03:morning', 'nyc_acris:2026-03-03:afternoon'])
     );
+  });
+
+  it('includes latest anomaly state when present', async () => {
+    anomalyAlerts.set('nyc_acris:2026-03-03:afternoon:quality_anomaly', {
+      site: 'nyc_acris',
+      idempotency_key: 'nyc_acris:2026-03-03:afternoon',
+      run_id: 'sched_nyc_1',
+      slot: 'afternoon',
+      metrics_triggered: ['records_scraped'],
+      summary: 'Quality anomaly for nyc_acris: records_scraped',
+      detected_at: '2026-03-03T18:00:00.000Z',
+    });
+
+    const { getScheduleState } = await import('../../src/scheduler');
+    const state = await getScheduleState();
+
+    expect(state.nyc_acris.latest_anomaly).toEqual(expect.objectContaining({
+      run_id: 'sched_nyc_1',
+      metrics_triggered: ['records_scraped'],
+    }));
   });
 });

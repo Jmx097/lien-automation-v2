@@ -48,6 +48,8 @@ vi.mock('../../src/scheduler/store', () => {
     listConnectivityStates() { return Array.from(connectivityState.values()); }
     insertMissedAlert() {}
     getMissedAlertByKey() { return null; }
+    insertQualityAnomalyAlert() {}
+    getLatestQualityAnomalyAlert() { return null; }
   }
 
   return { ScheduledRunStore };

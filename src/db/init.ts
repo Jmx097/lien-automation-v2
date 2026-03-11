@@ -104,6 +104,84 @@ function migrateScheduledRunsIfNeeded(db: Database.Database): void {
   recreateScheduledRunsTable(db);
 }
 
+function recreateSchedulerAlertsTable(db: Database.Database): void {
+  const columns = db.prepare("PRAGMA table_info('scheduler_alerts')").all() as Array<{ name: string }>;
+  const hasColumn = (name: string) => columns.some((column) => column.name === name);
+
+  db.exec(`
+    ALTER TABLE scheduler_alerts RENAME TO scheduler_alerts_legacy;
+
+    CREATE TABLE scheduler_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site TEXT NOT NULL DEFAULT 'ca_sos',
+      idempotency_key TEXT NOT NULL,
+      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      expected_by TEXT NOT NULL,
+      run_id TEXT,
+      metrics_triggered TEXT,
+      summary TEXT,
+      baseline_records_scraped REAL,
+      baseline_amount_coverage_pct REAL,
+      baseline_ocr_success_pct REAL,
+      baseline_row_fail_pct REAL,
+      records_scraped REAL,
+      amount_coverage_pct REAL,
+      ocr_success_pct REAL,
+      row_fail_pct REAL,
+      detected_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(idempotency_key, alert_type)
+    );
+  `);
+
+  db.prepare(
+    `INSERT INTO scheduler_alerts (
+      id, site, idempotency_key, slot, alert_type, expected_by, run_id, metrics_triggered, summary,
+      baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+      records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at, created_at
+    )
+    SELECT
+      id,
+      ${hasColumn('site') ? 'site' : "'ca_sos'"},
+      idempotency_key,
+      slot,
+      alert_type,
+      expected_by,
+      ${hasColumn('run_id') ? 'run_id' : 'NULL'},
+      ${hasColumn('metrics_triggered') ? 'metrics_triggered' : 'NULL'},
+      ${hasColumn('summary') ? 'summary' : 'NULL'},
+      ${hasColumn('baseline_records_scraped') ? 'baseline_records_scraped' : 'NULL'},
+      ${hasColumn('baseline_amount_coverage_pct') ? 'baseline_amount_coverage_pct' : 'NULL'},
+      ${hasColumn('baseline_ocr_success_pct') ? 'baseline_ocr_success_pct' : 'NULL'},
+      ${hasColumn('baseline_row_fail_pct') ? 'baseline_row_fail_pct' : 'NULL'},
+      ${hasColumn('records_scraped') ? 'records_scraped' : 'NULL'},
+      ${hasColumn('amount_coverage_pct') ? 'amount_coverage_pct' : 'NULL'},
+      ${hasColumn('ocr_success_pct') ? 'ocr_success_pct' : 'NULL'},
+      ${hasColumn('row_fail_pct') ? 'row_fail_pct' : 'NULL'},
+      ${hasColumn('detected_at') ? 'detected_at' : 'NULL'},
+      ${hasColumn('created_at') ? 'created_at' : 'CURRENT_TIMESTAMP'}
+    FROM scheduler_alerts_legacy`
+  ).run();
+
+  db.exec('DROP TABLE scheduler_alerts_legacy;');
+}
+
+function migrateSchedulerAlertsIfNeeded(db: Database.Database): void {
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduler_alerts'").get() as
+    | { sql: string | null }
+    | undefined;
+
+  if (!table?.sql) return;
+  if (
+    table.sql.includes("'quality_anomaly'") &&
+    table.sql.includes('run_id') &&
+    table.sql.includes('detected_at')
+  ) return;
+
+  recreateSchedulerAlertsTable(db);
+}
+
 export function resolveDbPath(): string {
   const configured = process.env.SQLITE_DB_PATH?.trim();
   const raw = configured && configured.length > 0 ? configured : DEFAULT_DB_PATH;
@@ -172,8 +250,20 @@ export function ensureDatabaseReady(): string {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
       expected_by TEXT NOT NULL,
+      run_id TEXT,
+      metrics_triggered TEXT,
+      summary TEXT,
+      baseline_records_scraped REAL,
+      baseline_amount_coverage_pct REAL,
+      baseline_ocr_success_pct REAL,
+      baseline_row_fail_pct REAL,
+      records_scraped REAL,
+      amount_coverage_pct REAL,
+      ocr_success_pct REAL,
+      row_fail_pct REAL,
+      detected_at TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(idempotency_key, alert_type)
     );
@@ -218,6 +308,42 @@ export function ensureDatabaseReady(): string {
   if (!schedulerAlertColumns.some((column) => column.name === 'site')) {
     db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN site TEXT NOT NULL DEFAULT 'ca_sos'").run();
   }
+  if (!schedulerAlertColumns.some((column) => column.name === 'run_id')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN run_id TEXT").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'metrics_triggered')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN metrics_triggered TEXT").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'summary')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN summary TEXT").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'baseline_records_scraped')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_records_scraped REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'baseline_amount_coverage_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_amount_coverage_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'baseline_ocr_success_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_ocr_success_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'baseline_row_fail_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN baseline_row_fail_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'records_scraped')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN records_scraped REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'amount_coverage_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN amount_coverage_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'ocr_success_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN ocr_success_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'row_fail_pct')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN row_fail_pct REAL").run();
+  }
+  if (!schedulerAlertColumns.some((column) => column.name === 'detected_at')) {
+    db.prepare("ALTER TABLE scheduler_alerts ADD COLUMN detected_at TEXT").run();
+  }
 
   if (!scheduledRunColumns.some((column) => column.name === 'failure_class')) {
     db.prepare("ALTER TABLE scheduled_runs ADD COLUMN failure_class TEXT").run();
@@ -236,6 +362,7 @@ export function ensureDatabaseReady(): string {
   }
 
   migrateScheduledRunsIfNeeded(db);
+  migrateSchedulerAlertsIfNeeded(db);
 
   db.close();
   return dbPath;

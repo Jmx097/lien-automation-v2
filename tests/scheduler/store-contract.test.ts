@@ -11,7 +11,26 @@ const pgState = {
   runs: new Map<string, StoredRunRow>(),
   control: new Map<string, { site: string; effective_max_records: number; updated_at: string }>(),
   connectivity: new Map<string, SiteConnectivityState>(),
-  alerts: new Map<string, { site: string; idempotency_key: string; slot: 'morning' | 'afternoon'; expected_by: string }>(),
+  alerts: new Map<string, {
+    site: string;
+    idempotency_key: string;
+    slot: 'morning' | 'afternoon';
+    expected_by: string;
+    alert_type: 'missed_run' | 'quality_anomaly';
+    run_id?: string;
+    metrics_triggered?: string;
+    summary?: string;
+    baseline_records_scraped?: number;
+    baseline_amount_coverage_pct?: number;
+    baseline_ocr_success_pct?: number;
+    baseline_row_fail_pct?: number;
+    records_scraped?: number;
+    amount_coverage_pct?: number;
+    ocr_success_pct?: number;
+    row_fail_pct?: number;
+    detected_at?: string;
+    created_at?: string;
+  }>(),
   failSelect1: false,
 };
 
@@ -49,7 +68,10 @@ vi.mock('pg', () => {
         /^BEGIN$|^COMMIT$|^ROLLBACK$/.test(normalized) ||
         normalized.startsWith('CREATE TABLE') ||
         normalized.startsWith('CREATE INDEX') ||
-        normalized.startsWith('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS')
+        normalized.startsWith('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS') ||
+        normalized.startsWith('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS') ||
+        normalized.startsWith('ALTER TABLE scheduler_alerts DROP CONSTRAINT IF EXISTS') ||
+        normalized.startsWith('ALTER TABLE scheduler_alerts ADD CONSTRAINT')
       ) {
         return { rows: [] };
       }
@@ -203,20 +225,46 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('INSERT INTO scheduler_alerts')) {
-        const key = String(params[1]);
+        const key = `${String(params[1])}:${normalized.includes("'quality_anomaly'") ? 'quality_anomaly' : 'missed_run'}`;
         if (!pgState.alerts.has(key)) {
           pgState.alerts.set(key, {
             site: String(params[0]) as ScheduledRunRecord['site'],
-            idempotency_key: key,
+            idempotency_key: String(params[1]),
             slot: String(params[2]) as 'morning' | 'afternoon',
             expected_by: String(params[3]),
+            alert_type: normalized.includes("'quality_anomaly'") ? 'quality_anomaly' : 'missed_run',
+            run_id: params[4] == null ? undefined : String(params[4]),
+            metrics_triggered: params[5] == null ? undefined : String(params[5]),
+            summary: params[6] == null ? undefined : String(params[6]),
+            baseline_records_scraped: params[7] == null ? undefined : Number(params[7]),
+            baseline_amount_coverage_pct: params[8] == null ? undefined : Number(params[8]),
+            baseline_ocr_success_pct: params[9] == null ? undefined : Number(params[9]),
+            baseline_row_fail_pct: params[10] == null ? undefined : Number(params[10]),
+            records_scraped: params[11] == null ? undefined : Number(params[11]),
+            amount_coverage_pct: params[12] == null ? undefined : Number(params[12]),
+            ocr_success_pct: params[13] == null ? undefined : Number(params[13]),
+            row_fail_pct: params[14] == null ? undefined : Number(params[14]),
+            detected_at: params[15] == null ? undefined : String(params[15]),
+            created_at: nowIso(),
           });
         }
         return { rows: [] };
       }
 
+      if (normalized.includes("FROM scheduler_alerts WHERE idempotency_key = $1 AND alert_type = 'missed_run'")) {
+        const row = pgState.alerts.get(`${String(params[0])}:missed_run`);
+        return { rows: row ? [row] : [] };
+      }
+
+      if (normalized.includes("FROM scheduler_alerts") && normalized.includes("alert_type = 'quality_anomaly'")) {
+        const rows = Array.from(pgState.alerts.values())
+          .filter((row) => row.site === String(params[0]) && row.alert_type === 'quality_anomaly')
+          .sort((a, b) => String(b.detected_at ?? b.created_at ?? '').localeCompare(String(a.detected_at ?? a.created_at ?? '')));
+        return { rows: rows[0] ? [rows[0]] : [] };
+      }
+
       if (normalized.includes('FROM scheduler_alerts WHERE idempotency_key = $1')) {
-        const row = pgState.alerts.get(String(params[0]));
+        const row = pgState.alerts.get(`${String(params[0])}:missed_run`);
         return { rows: row ? [row] : [] };
       }
 
@@ -295,6 +343,42 @@ async function exerciseStore(store: ScheduledRunStore): Promise<void> {
     expected_by: '2026-03-11T18:45:00.000Z',
   });
   expect((await store.getMissedAlertByKey('nyc_acris:2026-03-11:afternoon'))?.slot).toBe('afternoon');
+
+  await store.insertQualityAnomalyAlert({
+    site: 'nyc_acris',
+    idempotency_key: second.idempotency_key,
+    run_id: second.id,
+    slot: 'afternoon',
+    metrics_triggered: ['records_scraped'],
+    summary: 'Quality anomaly for nyc_acris: records_scraped',
+    baseline_records_scraped: 5,
+    baseline_amount_coverage_pct: 99,
+    baseline_ocr_success_pct: 98,
+    baseline_row_fail_pct: 1,
+    records_scraped: 2,
+    amount_coverage_pct: 50,
+    ocr_success_pct: 50,
+    row_fail_pct: 60,
+    detected_at: '2026-03-11T12:31:00.000Z',
+  });
+  await store.insertQualityAnomalyAlert({
+    site: 'nyc_acris',
+    idempotency_key: second.idempotency_key,
+    run_id: second.id,
+    slot: 'afternoon',
+    metrics_triggered: ['records_scraped'],
+    summary: 'Quality anomaly for nyc_acris: records_scraped',
+    baseline_records_scraped: 5,
+    baseline_amount_coverage_pct: 99,
+    baseline_ocr_success_pct: 98,
+    baseline_row_fail_pct: 1,
+    records_scraped: 2,
+    amount_coverage_pct: 50,
+    ocr_success_pct: 50,
+    row_fail_pct: 60,
+    detected_at: '2026-03-11T12:31:00.000Z',
+  });
+  expect((await store.getLatestQualityAnomalyAlert('nyc_acris'))?.run_id).toBe(second.id);
 
   await store.close();
 }
