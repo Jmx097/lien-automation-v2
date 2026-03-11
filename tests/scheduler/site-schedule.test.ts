@@ -93,7 +93,7 @@ describe('site-aware scheduler', () => {
     await runScheduledScrape({ site: 'ca_sos', idempotencyKey: 'ca_sos:2026-03-03:morning', slot: 'morning', triggerSource: 'manual' });
     await runScheduledScrape({ site: 'nyc_acris', idempotencyKey: 'nyc_acris:2026-03-03:afternoon', slot: 'afternoon', triggerSource: 'manual' });
 
-    const state = getScheduleState();
+    const state = await getScheduleState();
     expect(state.ca_sos).toBeDefined();
     expect(state.nyc_acris).toBeDefined();
     expect(Array.from(runs.keys())).toEqual(

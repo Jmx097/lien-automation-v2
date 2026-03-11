@@ -88,7 +88,7 @@ describe('scheduler auto-throttle', () => {
     expect(result.amount_coverage_pct).toBeLessThan(95);
     expect(result.effective_max_records).toBe(40);
 
-    const state = getScheduleState();
+    const state = await getScheduleState();
     expect(state.ca_sos.effective_max_records).toBe(100);
     expect(state.ca_sos.auto_throttle).toBe(false);
   });
@@ -113,7 +113,7 @@ describe('scheduler auto-throttle', () => {
     expect(result.status).toBe('success');
     expect(result.amount_coverage_pct).toBeLessThan(95);
 
-    const state = getScheduleState();
+    const state = await getScheduleState();
     expect(state.nyc_acris.effective_max_records).toBeLessThan(100);
     expect(state.nyc_acris.auto_throttle).toBe(true);
   });

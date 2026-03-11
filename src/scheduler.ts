@@ -255,16 +255,16 @@ function getSiteRecordBounds(site: SupportedSite): { min: number; max: number } 
   return { min: SCHEDULE_MAX_RECORDS_FLOOR, max: SCHEDULE_MAX_RECORDS_CEILING };
 }
 
-function resolveEffectiveMaxRecords(site: SupportedSite): number {
+async function resolveEffectiveMaxRecords(site: SupportedSite): Promise<number> {
   const siteDefault = getSiteSchedule(site).maxRecords;
-  const state = getStore().getControlState(site);
+  const state = await getStore().getControlState(site);
   const seeded = state?.effective_max_records ?? siteDefault;
   const bounds = getSiteRecordBounds(site);
   return clamp(seeded, bounds.min, bounds.max);
 }
 
-function hasNYCStableSuccessStreak(required = 3): boolean {
-  const recent = getStore().getRecentSuccessfulRuns('nyc_acris', required);
+async function hasNYCStableSuccessStreak(required = 3): Promise<boolean> {
+  const recent = await getStore().getRecentSuccessfulRuns('nyc_acris', required);
   if (recent.length < required) return false;
 
   return recent.every((run) =>
@@ -280,11 +280,11 @@ function isAutoThrottleEnabled(site: SupportedSite): boolean {
   return SCHEDULE_AUTO_THROTTLE && site !== 'ca_sos';
 }
 
-function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: number, currentCoveragePct: number): number {
+async function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: number, currentCoveragePct: number): Promise<number> {
   if (!isAutoThrottleEnabled(site)) return current;
   const bounds = getSiteRecordBounds(site);
 
-  if (site === 'nyc_acris' && !hasNYCStableSuccessStreak(3)) {
+  if (site === 'nyc_acris' && !(await hasNYCStableSuccessStreak(3))) {
     return clamp(current, bounds.min, bounds.max);
   }
 
@@ -292,7 +292,7 @@ function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: number, cu
     return clamp(Math.floor(current * 0.8), bounds.min, bounds.max);
   }
 
-  const recent = getStore().getRecentSuccessfulRuns(site, 2);
+  const recent = await getStore().getRecentSuccessfulRuns(site, 2);
   const streak = [currentCoveragePct, ...recent.map((run) => run.amount_coverage_pct)];
   if (streak.length >= 3 && streak.every((pct) => pct >= AMOUNT_MIN_COVERAGE_PCT + 2)) {
     return clamp(Math.floor(current * 1.1), bounds.min, bounds.max);
@@ -301,8 +301,8 @@ function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: number, cu
   return current;
 }
 
-function getConnectivityState(site: SupportedSite): SiteConnectivityState {
-  return getStore().getConnectivityState(site) ?? createDefaultConnectivityState(site);
+async function getConnectivityState(site: SupportedSite): Promise<SiteConnectivityState> {
+  return await getStore().getConnectivityState(site) ?? createDefaultConnectivityState(site);
 }
 
 function getNYCCachePath(idempotencyKey: string): string {
@@ -394,27 +394,27 @@ async function sendConnectivityAlert(site: SupportedSite, state: SiteConnectivit
 async function applyNYCAcrisFailure(site: SupportedSite, failureClass: NYCAcrisFailureClass, reason: string): Promise<void> {
   if (site !== 'nyc_acris') return;
 
-  const outcome = recordConnectivityFailure(getConnectivityState(site), reason, failureClass);
+  const outcome = recordConnectivityFailure(await getConnectivityState(site), reason, failureClass);
   let state = outcome.state;
   if (outcome.becameBlocked) {
     await sendConnectivityAlert(site, state, 'blocked');
     state = markConnectivityAlerted(state);
   }
 
-  getStore().upsertConnectivityState(state);
+  await getStore().upsertConnectivityState(state);
 }
 
 async function applyNYCAcrisSuccess(site: SupportedSite, mode: 'probe' | 'run'): Promise<void> {
   if (site !== 'nyc_acris') return;
 
-  const outcome = recordConnectivitySuccess(getConnectivityState(site), mode);
+  const outcome = recordConnectivitySuccess(await getConnectivityState(site), mode);
   let state = outcome.state;
   if (outcome.recovered) {
     await sendConnectivityAlert(site, state, 'recovered');
     state = markConnectivityRecoveryAlerted(state);
   }
 
-  getStore().upsertConnectivityState(state);
+  await getStore().upsertConnectivityState(state);
 }
 
 function deriveFailureClass(err: unknown): NYCAcrisFailureClass {
@@ -441,12 +441,13 @@ async function getRecordsForScheduledRun(
     }
   }
 
+  const connectivityAtStart = await getConnectivityState(site);
   const records = await scrapers[site]({
     date_start,
     date_end,
     max_records: effectiveMaxRecords,
     stop_requested: () => isPastDeadline(site, new Date()),
-    connectivity_status_at_start: getConnectivityState(site).status,
+    connectivity_status_at_start: connectivityAtStart.status,
   } as any);
 
   return { records, reusedCache: false };
@@ -454,25 +455,25 @@ async function getRecordsForScheduledRun(
 
 export async function checkSiteConnectivity(): Promise<void> {
   const site: SupportedSite = 'nyc_acris';
-  let state = getConnectivityState(site);
+  let state = await getConnectivityState(site);
 
   if (shouldRunConnectivityProbe(state)) {
     const probe = await probeNYCAcrisConnectivity();
     if (probe.ok) {
       await applyNYCAcrisSuccess(site, 'probe');
-      state = getConnectivityState(site);
+      state = await getConnectivityState(site);
       log({ stage: 'site_connectivity_probe_success', site, transport_mode: probe.transportMode, detail: probe.detail });
     } else {
       const failureClass = classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
       await applyNYCAcrisFailure(site, failureClass, probe.detail ?? 'probe_failed');
-      state = getConnectivityState(site);
+      state = await getConnectivityState(site);
       log({ stage: 'site_connectivity_probe_failure', site, transport_mode: probe.transportMode, detail: probe.detail });
     }
   }
 
   if (shouldSendProlongedBlockedAlert(state)) {
     await sendConnectivityAlert(site, state, 'blocked_4h');
-    getStore().upsertConnectivityState(markConnectivityAlerted(state));
+    await getStore().upsertConnectivityState(markConnectivityAlerted(state));
   }
 }
 
@@ -483,15 +484,15 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const slot = options.slot ?? schedule.slot;
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
   const triggerSource = options.triggerSource ?? 'external';
-  const connectivityAtStart = getConnectivityState(site);
+  const connectivityAtStart = await getConnectivityState(site);
 
-  const existing = getStore().getByIdempotencyKey(idempotencyKey);
+  const existing = await getStore().getByIdempotencyKey(idempotencyKey);
   if (ENABLE_SCHEDULE_IDEMPOTENCY && existing && existing.status !== 'error') {
     log({ stage: 'scheduled_run_duplicate_skipped', site, idempotency_key: idempotencyKey, existing_run_id: existing.id });
     return { ...existing, duplicate_of: existing.id };
   }
 
-  const mostRecent = getStore().getMostRecentRun(site);
+  const mostRecent = await getStore().getMostRecentRun(site);
   if (mostRecent) {
     const elapsedMs = Date.now() - new Date(mostRecent.started_at).getTime();
     const cooldownMs = SCHEDULE_COOLDOWN_MINUTES * 60 * 1000;
@@ -509,7 +510,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
   const { date_start, date_end } = getLast7DaysRange();
   const deadlineIso = buildDeadlineIso(site, now);
-  const seededMaxRecords = resolveEffectiveMaxRecords(site);
+  const seededMaxRecords = await resolveEffectiveMaxRecords(site);
   let effectiveMaxRecords = seededMaxRecords;
   let skipScrape = false;
 
@@ -578,9 +579,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     run.finished_at = new Date().toISOString();
 
     if (existing?.status === 'error') {
-      getStore().updateRun(run);
+      await getStore().updateRun(run);
     } else {
-      getStore().insertRun(run);
+      await getStore().insertRun(run);
     }
 
     log({
@@ -596,9 +597,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   if (existing?.status === 'error') {
-    getStore().updateRun(run);
+    await getStore().updateRun(run);
   } else {
-    getStore().insertRun(run);
+    await getStore().insertRun(run);
   }
 
   log({
@@ -617,7 +618,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     if (skipScrape) {
       run.status = 'success';
       run.finished_at = new Date().toISOString();
-      getStore().updateRun(run);
+      await getStore().updateRun(run);
 
       log({
         stage: 'scheduled_run_complete',
@@ -667,7 +668,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     run.failure_class = undefined;
     run.finished_at = new Date().toISOString();
 
-    getStore().updateRun(run);
+    await getStore().updateRun(run);
     await clearNYCCachedRecords(idempotencyKey).catch(() => null);
     await applyNYCAcrisSuccess(site, 'run');
 
@@ -675,8 +676,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     if (site !== 'ca_sos') {
       nextCap = deadlineHit || records.length === 0
         ? effectiveMaxRecords
-        : maybeAdjustEffectiveMaxRecords(site, effectiveMaxRecords, run.amount_coverage_pct);
-      getStore().upsertControlState(site, nextCap);
+        : await maybeAdjustEffectiveMaxRecords(site, effectiveMaxRecords, run.amount_coverage_pct);
+      await getStore().upsertControlState(site, nextCap);
     }
 
     log({
@@ -700,7 +701,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     run.error = String(err?.stack ?? err?.message ?? err);
     run.failure_class = failureClass;
     run.finished_at = new Date().toISOString();
-    getStore().updateRun(run);
+    await getStore().updateRun(run);
     await applyNYCAcrisFailure(site, failureClass, run.error);
     log({ stage: 'scheduled_run_error', site, run_id: runId, idempotency_key: idempotencyKey, error: run.error });
   }
@@ -708,19 +709,19 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   return run;
 }
 
-export function getRunHistory(limit = 50): ScheduledRun[] {
+export async function getRunHistory(limit = 50): Promise<ScheduledRun[]> {
   return getStore().getRunHistory(limit);
 }
 
-export function getScheduleState(): ScheduleState {
-  return Object.fromEntries(
-    supportedSites.map((site) => {
-      const control = getStore().getControlState(site);
+export async function getScheduleState(): Promise<ScheduleState> {
+  const entries = await Promise.all(
+    supportedSites.map(async (site) => {
+      const control = await getStore().getControlState(site);
       const bounds = getSiteRecordBounds(site);
       const defaultMax = getSiteSchedule(site).maxRecords;
       const effectiveMax = control?.effective_max_records ?? clamp(defaultMax, bounds.min, bounds.max);
-      const recent = getStore().getRecentSuccessfulRuns(site, 4);
-      const connectivity = getConnectivityState(site);
+      const recent = await getStore().getRecentSuccessfulRuns(site, 4);
+      const connectivity = await getConnectivityState(site);
 
       const state: SiteScheduleState = {
         effective_max_records: effectiveMax,
@@ -745,9 +746,11 @@ export function getScheduleState(): ScheduleState {
         })),
       };
 
-      return [site, state];
+      return [site, state] as const;
     })
-  ) as ScheduleState;
+  );
+
+  return Object.fromEntries(entries) as ScheduleState;
 }
 
 export function getNextRuns(): Array<{ site: SupportedSite; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
@@ -780,30 +783,32 @@ export async function checkMissedRuns(): Promise<void> {
     if (!overdue) continue;
 
     const key = buildDefaultIdempotencyKey(site, now, config.slot);
-    const success = getStore().getSuccessfulRunByIdempotencyKey(key);
+    const success = await getStore().getSuccessfulRunByIdempotencyKey(key);
     if (success) continue;
 
-    const existingAlert = getStore().getMissedAlertByKey(key);
+    const existingAlert = await getStore().getMissedAlertByKey(key);
     if (existingAlert) continue;
 
     const expectedAtIso = `${parts.year}-${parts.month}-${parts.day}T${String(dueHour).padStart(2, '0')}:${String(dueMinute).padStart(2, '0')}:00`;
-    getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
+    await getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
     await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
     log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
   }
 }
 
-export function getConnectivityHealth(): Record<SupportedSite, SiteScheduleState['connectivity']> {
-  return Object.fromEntries(
-    supportedSites.map((site) => {
-      const connectivity = getConnectivityState(site);
+export async function getConnectivityHealth(): Promise<Record<SupportedSite, SiteScheduleState['connectivity']>> {
+  const entries = await Promise.all(
+    supportedSites.map(async (site) => {
+      const connectivity = await getConnectivityState(site);
       return [site, {
         status: connectivity.status,
         next_probe_at: connectivity.next_probe_at,
         next_allowed_run_at: getNextAllowedRunAt(connectivity),
         last_failure_reason: connectivity.last_failure_reason,
         last_success_at: connectivity.last_success_at,
-      }];
+      }] as const;
     })
-  ) as Record<SupportedSite, SiteScheduleState['connectivity']>;
+  );
+
+  return Object.fromEntries(entries) as Record<SupportedSite, SiteScheduleState['connectivity']>;
 }

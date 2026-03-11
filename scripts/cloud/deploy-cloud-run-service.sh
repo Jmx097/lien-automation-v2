@@ -6,10 +6,13 @@ set -euo pipefail
 : "${GAR_REPOSITORY:?Set GAR_REPOSITORY}"
 : "${SERVICE_NAME:=lien-automation}"
 : "${IMAGE_URI:?Set IMAGE_URI}"
+: "${GIT_SHA:=unknown}"
 
 : "${SHEETS_KEY:?Set SHEETS_KEY}"
 : "${SHEET_ID:?Set SHEET_ID}"
 : "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
+: "${DATABASE_URL:=}"
+: "${CLOUDSQL_INSTANCE_CONNECTION_NAME:=}"
 : "${BRIGHTDATA_BROWSER_WS:=}"
 : "${BRIGHTDATA_PROXY_SERVER:=}"
 : "${BRIGHTDATA_PROXY_USERNAME:=}"
@@ -54,6 +57,8 @@ BRIGHTDATA_PROXY_PASSWORD: '${BRIGHTDATA_PROXY_PASSWORD}'
 SHEETS_KEY: '${SHEETS_KEY}'
 SHEET_ID: '${SHEET_ID}'
 SCHEDULE_RUN_TOKEN: '${SCHEDULE_RUN_TOKEN}'
+DATABASE_URL: '${DATABASE_URL}'
+GIT_SHA: '${GIT_SHA}'
 SCHEDULE_CA_SOS_TIMEZONE: '${SCHEDULE_CA_SOS_TIMEZONE}'
 SCHEDULE_CA_SOS_WEEKLY_DAYS: '${SCHEDULE_CA_SOS_WEEKLY_DAYS}'
 SCHEDULE_CA_SOS_RUN_HOUR: '${SCHEDULE_CA_SOS_RUN_HOUR}'
@@ -78,13 +83,21 @@ SCHEDULE_MAX_RECORDS_CEILING: '${SCHEDULE_MAX_RECORDS_CEILING}'
 REQUIRE_OCR_TOOLS: '${REQUIRE_OCR_TOOLS}'
 EOF
 
-gcloud run deploy "${SERVICE_NAME}" \
-  --project="${GCP_PROJECT_ID}" \
-  --region="${GCP_REGION}" \
-  --image="${IMAGE_URI}" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --port=8080 \
+DEPLOY_ARGS=(
+  --project="${GCP_PROJECT_ID}"
+  --region="${GCP_REGION}"
+  --image="${IMAGE_URI}"
+  --platform=managed
+  --allow-unauthenticated
+  --port=8080
   --env-vars-file="${ENV_VARS_FILE}"
+)
+
+if [[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]]; then
+  DEPLOY_ARGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE_CONNECTION_NAME}")
+fi
+
+gcloud run deploy "${SERVICE_NAME}" \
+  "${DEPLOY_ARGS[@]}"
 
 echo "Deployed Cloud Run service: ${SERVICE_NAME}"

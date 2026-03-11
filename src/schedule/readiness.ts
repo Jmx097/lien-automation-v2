@@ -1,8 +1,6 @@
-import Database from 'better-sqlite3';
-import { resolveDbPath } from '../db/init';
 import { checkOCRRuntime } from '../scraper/ocr-runtime';
 import { supportedSites, type SupportedSite } from '../sites';
-import { ScheduledRunStore } from '../scheduler/store';
+import { ScheduledRunStore, getSchedulerStoreReadiness } from '../scheduler/store';
 import { createDefaultConnectivityState, getNextAllowedRunAt, type SiteConnectivityStatus } from '../scheduler/connectivity';
 
 export interface ReadinessCheck {
@@ -73,40 +71,6 @@ function checkSiteScheduleConfig(): ReadinessCheck {
   };
 }
 
-function checkDbReachable(): ReadinessCheck {
-  const dbPath = resolveDbPath();
-
-  try {
-    const db = new Database(dbPath, { readonly: true });
-    db.prepare('SELECT 1').get();
-
-    const runsTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scheduled_runs'").get() as
-      | { name: string }
-      | undefined;
-
-    db.close();
-
-    if (!runsTable) {
-      return {
-        name: 'db_reachable',
-        ok: false,
-        detail: 'DB reachable but scheduled_runs table is missing. Run node src/queue/init-db.js.',
-      };
-    }
-
-    return {
-      name: 'db_reachable',
-      ok: true,
-    };
-  } catch (err: unknown) {
-    return {
-      name: 'db_reachable',
-      ok: false,
-      detail: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
 function checkDownstreamCredentialsLoaded(): ReadinessCheck {
   const sheetsKeyRaw = process.env.SHEETS_KEY;
   const sheetId = process.env.SHEET_ID;
@@ -162,21 +126,43 @@ function checkOCRReady(): ReadinessCheck {
   };
 }
 
-export function getScheduleReadinessReport(): ScheduleReadinessReport {
-  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), checkDbReachable(), checkDownstreamCredentialsLoaded(), checkOCRReady()];
-  const store = new ScheduledRunStore();
-  const site_connectivity = Object.fromEntries(
-    supportedSites.map((site) => {
-      const state = store.getConnectivityState(site) ?? createDefaultConnectivityState(site);
+export async function getScheduleReadinessReport(): Promise<ScheduleReadinessReport> {
+  const storeReadiness = await getSchedulerStoreReadiness();
+  const dbCheck: ReadinessCheck = storeReadiness.ok
+    ? { name: 'db_reachable', ok: true, detail: `scheduler_store=${storeReadiness.backend}` }
+    : { name: 'db_reachable', ok: false, detail: storeReadiness.detail };
+  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), dbCheck, checkDownstreamCredentialsLoaded(), checkOCRReady()];
+  const siteConnectivityEntries = storeReadiness.ok
+    ? await (async () => {
+      const store = new ScheduledRunStore();
+      try {
+        return await Promise.all(
+          supportedSites.map(async (site) => {
+            const state = await store.getConnectivityState(site) ?? createDefaultConnectivityState(site);
+            return [site, {
+              status: state.status,
+              next_probe_at: state.next_probe_at,
+              next_allowed_run_at: getNextAllowedRunAt(state),
+              last_failure_reason: state.last_failure_reason,
+              last_success_at: state.last_success_at,
+            }] as const;
+          })
+        );
+      } finally {
+        await store.close().catch(() => null);
+      }
+    })()
+    : supportedSites.map((site) => {
+      const state = createDefaultConnectivityState(site);
       return [site, {
         status: state.status,
         next_probe_at: state.next_probe_at,
         next_allowed_run_at: getNextAllowedRunAt(state),
         last_failure_reason: state.last_failure_reason,
         last_success_at: state.last_success_at,
-      }];
-    })
-  ) as ScheduleReadinessReport['site_connectivity'];
+      }] as const;
+    });
+  const site_connectivity = Object.fromEntries(siteConnectivityEntries) as ScheduleReadinessReport['site_connectivity'];
 
   return {
     status: checks.every((check) => check.ok) ? 'ready' : 'not_ready',

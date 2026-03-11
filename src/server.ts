@@ -184,20 +184,20 @@ app.post("/scrape-all", async (req, res) => {
   return res.json({ results });
 });
 
-app.get("/schedule/health", (_req, res) => {
-  const report = getScheduleReadinessReport();
+app.get("/schedule/health", async (_req, res) => {
+  const report = await getScheduleReadinessReport();
   const statusCode = report.status === "ready" ? 200 : 503;
   res.status(statusCode).json(report);
 });
 
-app.get("/schedule", (req, res) => {
+app.get("/schedule", async (req, res) => {
   const limitParam = Number.parseInt(String(req.query.limit ?? '50'), 10);
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
 
   res.json({
     next_runs: getNextRuns(),
-    history: getRunHistory(limit),
-    state: getScheduleState(),
+    history: await getRunHistory(limit),
+    state: await getScheduleState(),
     persisted: true,
   });
 });
