@@ -16,6 +16,7 @@ import {
 } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
 import { ensureDatabaseReady } from "./db/init";
+import { validateScheduleRunRequest, validateScrapeRequest, type ValidationIssue } from "./http/validation";
 
 dotenv.config();
 
@@ -50,32 +51,21 @@ function errorStatusFor(err: unknown): number {
   return isMissingRuntimeConfigError(err) ? 503 : 500;
 }
 
-const allowedInjectedFailureClasses = new Set<RetryableScheduledFailureClass>([
-  'timeout_or_navigation',
-  'viewer_roundtrip',
-  'token_or_session_state',
-  'sheet_export',
-]);
+function sendValidationError(res: express.Response, issues: ValidationIssue[]) {
+  return res.status(400).json({
+    error: 'Validation failed',
+    issues,
+  });
+}
 
 app.post("/scrape", async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const { site, date_start, date_end, max_records } = req.body;
-
+    const validation = validateScrapeRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+    const { site, date_start, date_end, max_records } = validation.value;
     const scraper = (scrapers as any)[site];
-
-    if (!site || !scraper) {
-      return res.status(400).json({
-        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
-      });
-    }
-
-    if (!date_start || !date_end) {
-      return res.status(400).json({
-        error: "date_start and date_end required"
-      });
-    }
 
     log({ stage: "scrape_start", site, date_start, date_end });
 
@@ -122,21 +112,10 @@ app.post("/enqueue", async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const { site, date_start, date_end, max_records } = req.body;
-
+    const validation = validateScrapeRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+    const { site, date_start, date_end, max_records } = validation.value;
     const scraper = (scrapers as any)[site];
-
-    if (!site || !scraper) {
-      return res.status(400).json({
-        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
-      });
-    }
-
-    if (!date_start || !date_end) {
-      return res.status(400).json({
-        error: "date_start and date_end required"
-      });
-    }
 
     log({ stage: "enqueue_start", site, date_start, date_end });
 
@@ -187,7 +166,14 @@ app.get("/version", (_req, res) => {
 });
 
 app.post("/scrape-all", async (req, res) => {
-  const { date_start, date_end, max_records } = req.body;
+  const validation = validateScrapeRequest({
+    site: 'ca_sos',
+    date_start: req.body?.date_start,
+    date_end: req.body?.date_end,
+    max_records: req.body?.max_records,
+  });
+  if (!validation.ok) return sendValidationError(res, validation.issues.filter((issue) => issue.field !== 'site'));
+  const { date_start, date_end, max_records } = validation.value;
   const results: any[] = [];
   for (const [site, scraper] of Object.entries(scrapers)) {
     try {
@@ -218,6 +204,28 @@ app.get("/schedule", async (req, res) => {
   });
 });
 
+app.get("/schedule/confidence", async (req, res) => {
+  const limitParam = Number.parseInt(String(req.query.limit ?? '20'), 10);
+  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 20;
+  const history = await getRunHistory(limit);
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    runs: history.map((run) => ({
+      id: run.id,
+      site: run.site,
+      started_at: run.started_at,
+      finished_at: run.finished_at,
+      status: run.status,
+      confidence: run.confidence,
+      source_tab_title: run.source_tab_title,
+      master_tab_title: run.master_tab_title,
+      review_tab_title: run.review_tab_title,
+      failure_class: run.failure_class,
+    })),
+  });
+});
+
 app.post("/schedule/run", async (req, res) => {
   try {
     const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
@@ -234,17 +242,13 @@ app.post("/schedule/run", async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const slot = req.body?.slot === 'morning' || req.body?.slot === 'afternoon' ? req.body.slot : undefined;
-    const site = typeof req.body?.site === 'string' ? req.body.site : undefined;
-    const idempotencyKey = typeof req.body?.idempotency_key === 'string' ? req.body.idempotency_key : undefined;
-    const requestedTestFailureClass = typeof req.body?.test_retry_failure_class === 'string'
-      ? req.body.test_retry_failure_class
-      : undefined;
+    const validation = validateScheduleRunRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+    const slot = validation.value.slot;
+    const site = validation.value.site;
+    const idempotencyKey = validation.value.idempotency_key;
+    const requestedTestFailureClass = validation.value.test_retry_failure_class;
     const testFailureClass = requestedTestFailureClass as RetryableScheduledFailureClass | undefined;
-
-    if (requestedTestFailureClass && !allowedInjectedFailureClasses.has(testFailureClass!)) {
-      return res.status(400).json({ error: 'Invalid test_retry_failure_class' });
-    }
 
     if (requestedTestFailureClass && !SCHEDULE_FAILURE_INJECTION_ENABLED) {
       return res.status(400).json({ error: 'ENABLE_SCHEDULE_FAILURE_INJECTION is not enabled' });
@@ -281,21 +285,10 @@ app.post("/scrape-enhanced", async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const { site, date_start, date_end, max_records } = req.body;
-
+    const validation = validateScrapeRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+    const { site, date_start, date_end, max_records } = validation.value;
     const scraper = (scrapers as any)[site];
-
-    if (!site || !scraper) {
-      return res.status(400).json({
-        error: `Unknown site: ${site}. Supported: ${Object.keys(scrapers).join(", ")}`
-      });
-    }
-
-    if (!date_start || !date_end) {
-      return res.status(400).json({
-        error: "date_start and date_end required"
-      });
-    }
 
     log({ stage: "scrape_enhanced_start", site, date_start, date_end });
 

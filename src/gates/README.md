@@ -6,13 +6,17 @@ This directory contains the implementation of the reinforcement gates for the li
 
 Located in `src/gates/pre-run-health.ts`, this gate performs several checks before any scraping begins:
 
-1. Docker container is running and responsive
-2. Required environment variables are set:
-   - `BRIGHT_DATA_PROXY`
-   - `GOOGLE_SHEETS_CREDENTIALS`
-   - `DATABASE_URL`
-3. Canary request succeeds (fetch simple page, <5s timeout)
-4. Playwright is available in the local toolchain
+1. Current runtime environment variables are present:
+   - `SHEET_ID`
+   - `SHEETS_KEY`
+   - `SCHEDULE_RUN_TOKEN`
+   - one browser transport (`BRIGHTDATA_BROWSER_WS`, `BRIGHTDATA_PROXY_SERVER`, or `SBR_CDP_URL`)
+   - per-site schedule env vars for the checked sites
+2. `SHEETS_KEY` parses as a valid service-account credential payload
+3. OCR runtime is available when `REQUIRE_OCR_TOOLS != 0`
+4. `GET /schedule/health` reports the service as ready
+5. `GET /version` reports runtime metadata
+6. Playwright is available in the local toolchain
 
 ### Usage
 
@@ -25,6 +29,8 @@ if (!result.success) {
   process.exit(1);
 }
 ```
+
+Warnings are returned separately for softer conditions such as fallback publishing still being active.
 
 ## Retry Policy Utility
 

@@ -20,7 +20,8 @@ This project provides an Express.js API server that scrapes lien data from the C
 - **Enhanced scrape mode**: `POST /scrape-enhanced` runs scrape processing without sheet upload in the same response flow.
 - **Scheduler readiness + introspection**:
   - `GET /schedule/health` reports readiness checks and configuration status.
-  - `GET /schedule` returns next run windows and persisted schedule history.
+  - `GET /schedule` returns next run windows and persisted schedule history, including per-run confidence summaries.
+  - `GET /schedule/confidence` returns a lightweight operator view of recent run confidence outcomes.
 - **Externally triggered schedule runs**: `POST /schedule/run` supports authenticated scheduler triggers with slot/idempotency controls.
 - **Persisted scheduler history**: scheduled run records are stored in SQLite locally and can use Postgres-backed durable state in hosted environments when `DATABASE_URL` is configured.
 - **Structured logging and retry behavior**: runtime logs and scraper safeguards for operational reliability.
@@ -92,6 +93,10 @@ Returns scheduler readiness status and checks (including env/config dependencies
 
 Returns upcoming schedule windows and persisted run history (`history`) from the scheduler store. Each `next_runs` entry now includes the trigger time used by the external scheduler plus the target CA/NYC finish-by time.
 
+### GET /schedule/confidence
+
+Returns a compact recent-runs view intended for operator dashboards, including confidence status, reasons, and key tab/failure metadata.
+
 ### POST /schedule/run
 
 Authenticated endpoint for external scheduler triggers. Accepts optional `site`, `slot` (`morning`/`afternoon`), and `idempotency_key`. Scheduled runs create a brand-new sheet tab per run.
@@ -113,6 +118,7 @@ When `ENABLE_SCHEDULE_FAILURE_INJECTION=1`, operators may also send `test_retry_
 - **Director-facing merged sheet publishing** uses `MERGED_SHEET_ID` when set, or falls back to the built-in target sheet ID currently configured in the app.
 - **Director-facing lead alerts** can send a `New leads!` email via `LEAD_ALERT_WEBHOOK_URL` or direct Resend delivery when `LEAD_ALERT_RESEND_API_KEY` and `LEAD_ALERT_EMAIL_FROM` are configured. `LEAD_ALERT_EMAIL_TO` defaults to `antigravity1@timberlinetax.com`.
 - **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
+- **Operational alerting** should configure both `LEAD_ALERT_WEBHOOK_URL` and `SCHEDULE_ALERT_WEBHOOK_URL` so lead emails, missed-run alerts, connectivity alerts, and anomaly alerts are all externally visible.
 
 ## SQLite Queue DB Initialization
 
@@ -139,6 +145,7 @@ Important optional environment variables:
 - `LEAD_ALERT_EMAIL_TO` controls who receives the `New leads!` notification. Default: `antigravity1@timberlinetax.com`.
 - `LEAD_ALERT_WEBHOOK_URL` lets the app post the generic HTML notification payload to an external mailer/automation layer.
 - `LEAD_ALERT_RESEND_API_KEY` plus `LEAD_ALERT_EMAIL_FROM` enables direct Resend delivery for the `New leads!` email.
+- `SCHEDULE_ALERT_WEBHOOK_URL` enables missed-run, connectivity, and quality-anomaly alerts from the scheduler.
 - `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
 - In hosted Cloud Run, the first-pass secret migration now expects `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` to be supplied via Secret Manager-backed env vars while keeping the same runtime variable names.
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
@@ -362,6 +369,7 @@ Use GitHub as the deployment source of truth for both hosted environments:
 Required GitHub configuration:
 
 - **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SHEET_ID`, `CLOUDSQL_INSTANCE_CONNECTION_NAME`, `DATABASE_URL_SECRET_REF`, `SCHEDULE_RUN_TOKEN_SECRET_REF`, `SHEETS_KEY_SECRET_REF`, `SBR_CDP_URL_SECRET_REF`
+- Optional Cloud Run alerting secrets: `lien_automation_lead_alert_webhook_url`, `lien_automation_schedule_alert_webhook_url`, `LEAD_ALERT_EMAIL_FROM`, `LEAD_ALERT_RESEND_API_KEY`
 - **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
 - **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_TARGET_TIMEZONE`, `SCHEDULE_WEEKLY_DAYS`, `SCHEDULE_RUN_HOUR`, `SCHEDULE_RUN_MINUTE`, `SCHEDULE_DEADLINE_HOUR`, `SCHEDULE_DEADLINE_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
 
@@ -402,6 +410,13 @@ Linux cron example:
 ```
 
 Cloud Scheduler equivalent: create one job per site with the appropriate schedule and JSON body.
+
+Verification helpers:
+
+```bash
+bash scripts/cloud/verify-cloud-run-service.sh
+bash scripts/cloud/verify-cloud-scheduler-jobs.sh
+```
 
 ### Runtime safeguards
 

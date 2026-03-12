@@ -1,9 +1,11 @@
-// src/gates/pre-run-health.ts
 import { execSync } from 'child_process';
+import { checkOCRRuntime } from '../scraper/ocr-runtime';
+import { supportedSites, type SupportedSite } from '../sites';
 
 export interface PreRunHealthResult {
   success: boolean;
   errors: string[];
+  warnings: string[];
 }
 
 type FetchLike = typeof fetch;
@@ -12,120 +14,169 @@ export interface PreRunHealthDependencies {
   execSyncImpl?: typeof execSync;
   fetchImpl?: FetchLike;
   env?: NodeJS.ProcessEnv;
-  canaryUrl?: string;
+  readinessUrl?: string;
+  versionUrl?: string;
+  sites?: SupportedSite[];
 }
 
-/**
- * Pre-run health check for the lien automation pipeline
- * 
- * Checks:
- * 1. Docker container is running and responsive
- * 2. Required env vars are set
- * 3. Canary request succeeds
- * 4. Playwright browsers installed
- */
+type ReadinessPayload = {
+  status?: string;
+  checks?: Array<{ name?: string; ok?: boolean; detail?: string }>;
+  merged_output?: {
+    target_reachable?: boolean;
+    fallback_active?: boolean;
+    detail?: string;
+  };
+};
+
+const DEFAULT_READINESS_URL = 'http://127.0.0.1:8080/schedule/health';
+const DEFAULT_VERSION_URL = 'http://127.0.0.1:8080/version';
+
 export async function preRunHealthCheck(dependencies: PreRunHealthDependencies = {}): Promise<PreRunHealthResult> {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const execSyncImpl = dependencies.execSyncImpl ?? execSync;
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const env = dependencies.env ?? process.env;
-  const canaryUrl = dependencies.canaryUrl ?? 'https://httpbin.org/get';
+  const sites = dependencies.sites ?? [...supportedSites];
 
-  try {
-    // Check 1: Docker container is running and responsive
-    await checkDockerContainer(errors, execSyncImpl);
-
-    // Check 2: Required env vars are set
-    checkEnvVars(errors, env);
-
-    // Check 3: Canary request succeeds
-    await checkCanaryRequest(errors, fetchImpl, canaryUrl);
-
-    // Check 4: Playwright browsers installed
-    checkPlaywrightBrowsers(errors, execSyncImpl);
-  } catch (error) {
-    errors.push(`Unexpected error during health check: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  checkRuntimeEnv(errors, env, sites);
+  checkPlaywrightAvailability(errors, execSyncImpl);
+  checkOCRReadiness(errors, warnings, env, sites);
+  await checkReadinessEndpoint(errors, warnings, fetchImpl, dependencies.readinessUrl ?? DEFAULT_READINESS_URL);
+  await checkVersionEndpoint(errors, warnings, fetchImpl, dependencies.versionUrl ?? DEFAULT_VERSION_URL);
 
   return {
     success: errors.length === 0,
-    errors
+    errors,
+    warnings,
   };
 }
 
-async function checkDockerContainer(errors: string[], execSyncImpl: typeof execSync): Promise<void> {
-  try {
-    // Check if docker is available
-    execSyncImpl('docker --version', { stdio: 'ignore' });
+function checkRuntimeEnv(errors: string[], env: NodeJS.ProcessEnv, sites: SupportedSite[]): void {
+  const required = ['SHEET_ID', 'SHEETS_KEY', 'SCHEDULE_RUN_TOKEN'];
+  for (const envVar of required) {
+    if (!env[envVar]?.trim()) errors.push(`Required environment variable ${envVar} is not set`);
+  }
 
-    // Check if the lien-scraper container is running
-    const containerStatus = execSyncImpl(
-      'docker ps --filter "name=lien-scraper" --format "{{.Status}}"',
-      { encoding: 'utf-8' }
-    ).trim();
+  const hasBrowserTransport = Boolean(
+    env.BRIGHTDATA_BROWSER_WS?.trim() ||
+    env.BRIGHTDATA_PROXY_SERVER?.trim() ||
+    env.SBR_CDP_URL?.trim()
+  );
+  if (!hasBrowserTransport) {
+    errors.push('One browser transport must be configured: BRIGHTDATA_BROWSER_WS, BRIGHTDATA_PROXY_SERVER, or SBR_CDP_URL');
+  }
 
-    if (!containerStatus) {
-      // Try to start the container if it's not running
-      try {
-        execSyncImpl('docker start lien-scraper', { stdio: 'ignore' });
-        console.log('Started lien-scraper container');
-      } catch {
-        // If we can't start it, try to run it
-        try {
-          execSyncImpl('docker run -d --name lien-scraper lien-scraper', { stdio: 'ignore' });
-          console.log('Created and started new lien-scraper container');
-        } catch {
-          errors.push('Docker container is not running and could not be started');
-        }
+  const requiredSiteVars: Record<SupportedSite, string[]> = {
+    ca_sos: ['SCHEDULE_CA_SOS_WEEKLY_DAYS', 'SCHEDULE_CA_SOS_RUN_HOUR', 'SCHEDULE_CA_SOS_RUN_MINUTE'],
+    nyc_acris: [
+      'SCHEDULE_NYC_ACRIS_WEEKLY_DAYS',
+      'SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR',
+      'SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE',
+      'SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR',
+      'SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE',
+    ],
+  };
+
+  for (const site of sites) {
+    for (const envVar of requiredSiteVars[site]) {
+      if (!env[envVar]?.trim()) errors.push(`Required environment variable ${envVar} is not set for ${site}`);
+    }
+  }
+
+  if (env.SHEETS_KEY?.trim()) {
+    try {
+      const parsed = JSON.parse(env.SHEETS_KEY.replace(/^'+|'+$/g, '')) as Record<string, unknown>;
+      if (!parsed.client_email || !parsed.private_key) {
+        errors.push('SHEETS_KEY JSON must include client_email and private_key');
       }
-    }
-  } catch {
-    errors.push('Docker is not available or not functioning properly');
-  }
-}
-
-function checkEnvVars(errors: string[], env: NodeJS.ProcessEnv): void {
-  const requiredEnvVars = [
-    'BRIGHT_DATA_PROXY',
-    'GOOGLE_SHEETS_CREDENTIALS',
-    'DATABASE_URL'
-  ];
-
-  for (const envVar of requiredEnvVars) {
-    if (!env[envVar]) {
-      errors.push(`Required environment variable ${envVar} is not set`);
+    } catch (error: unknown) {
+      errors.push(`SHEETS_KEY is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
 
-async function checkCanaryRequest(errors: string[], fetchImpl: FetchLike, canaryUrl: string): Promise<void> {
-  try {
-    // Simple canary request - check if we can access a known endpoint
-    // This would typically be a lightweight request to verify connectivity
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-    
-    const response = await fetchImpl(canaryUrl, {
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      errors.push(`Canary request failed with status ${response.status}`);
-    }
-  } catch (error) {
-    errors.push(`Canary request failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function checkPlaywrightBrowsers(errors: string[], execSyncImpl: typeof execSync): void {
+function checkPlaywrightAvailability(errors: string[], execSyncImpl: typeof execSync): void {
   try {
     execSyncImpl('npx playwright --version', { stdio: 'ignore' });
   } catch {
-    errors.push('Playwright browsers are not installed or not functioning properly');
+    errors.push('Playwright is not installed or not functioning properly');
   }
 }
 
-// Export the function for use in other modules
+function checkOCRReadiness(errors: string[], warnings: string[], env: NodeJS.ProcessEnv, sites: SupportedSite[]): void {
+  if (!sites.includes('ca_sos')) return;
+  const requireOCR = env.REQUIRE_OCR_TOOLS !== '0';
+  const result = checkOCRRuntime({ env });
+  if (result.ok) return;
+
+  const message = result.detail ?? `Missing OCR binaries: ${result.missing.join(', ')}`;
+  if (requireOCR) errors.push(message);
+  else warnings.push(message);
+}
+
+async function checkReadinessEndpoint(
+  errors: string[],
+  warnings: string[],
+  fetchImpl: FetchLike,
+  readinessUrl: string,
+): Promise<void> {
+  try {
+    const response = await fetchImpl(readinessUrl);
+    const raw = await response.text();
+    if (!response.ok) {
+      errors.push(`Readiness endpoint failed with status ${response.status}`);
+      return;
+    }
+
+    const payload = JSON.parse(raw) as ReadinessPayload;
+    if (payload.status !== 'ready') {
+      errors.push(`Readiness endpoint is not ready: ${payload.status ?? 'unknown'}`);
+    }
+
+    for (const check of payload.checks ?? []) {
+      if (check.ok === false) {
+        errors.push(`Readiness check ${check.name ?? 'unknown'} failed${check.detail ? `: ${check.detail}` : ''}`);
+      }
+    }
+
+    if (payload.merged_output?.target_reachable === false) {
+      errors.push(`Merged output target is not reachable${payload.merged_output.detail ? `: ${payload.merged_output.detail}` : ''}`);
+    }
+
+    if (payload.merged_output?.fallback_active) {
+      warnings.push('Merged output fallback is active; Master is being published to the source workbook');
+    }
+  } catch (error: unknown) {
+    errors.push(`Readiness endpoint check failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function checkVersionEndpoint(
+  errors: string[],
+  warnings: string[],
+  fetchImpl: FetchLike,
+  versionUrl: string,
+): Promise<void> {
+  try {
+    const response = await fetchImpl(versionUrl);
+    const raw = await response.text();
+    if (!response.ok) {
+      errors.push(`Version endpoint failed with status ${response.status}`);
+      return;
+    }
+
+    const payload = JSON.parse(raw) as { git_sha?: string; node_version?: string };
+    if (!payload.git_sha || payload.git_sha === 'unknown') {
+      warnings.push('Version endpoint did not report a concrete git_sha');
+    }
+    if (!payload.node_version) {
+      warnings.push('Version endpoint did not report node_version');
+    }
+  } catch (error: unknown) {
+    errors.push(`Version endpoint check failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export default preRunHealthCheck;

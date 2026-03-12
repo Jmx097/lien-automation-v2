@@ -30,6 +30,16 @@ export interface ScheduledRunRecord {
   max_attempts?: number;
   retried?: number;
   retry_exhausted?: number;
+  source_tab_title?: string;
+  master_tab_title?: string;
+  review_tab_title?: string;
+  quarantined_row_count?: number;
+  new_master_row_count?: number;
+  purged_review_row_count?: number;
+  lead_alert_attempted?: number;
+  lead_alert_delivered?: number;
+  master_fallback_used?: number;
+  anomaly_detected?: number;
 }
 
 export type SchedulerAlertType = 'missed_run' | 'quality_anomaly';
@@ -134,6 +144,16 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     max_attempts: toNumber(row.max_attempts || 1),
     retried: toNumber(row.retried || 0),
     retry_exhausted: toNumber(row.retry_exhausted || 0),
+    source_tab_title: row.source_tab_title == null ? undefined : String(row.source_tab_title),
+    master_tab_title: row.master_tab_title == null ? undefined : String(row.master_tab_title),
+    review_tab_title: row.review_tab_title == null ? undefined : String(row.review_tab_title),
+    quarantined_row_count: toNumber(row.quarantined_row_count || 0),
+    new_master_row_count: toNumber(row.new_master_row_count || 0),
+    purged_review_row_count: toNumber(row.purged_review_row_count || 0),
+    lead_alert_attempted: toNumber(row.lead_alert_attempted || 0),
+    lead_alert_delivered: toNumber(row.lead_alert_delivered || 0),
+    master_fallback_used: toNumber(row.master_fallback_used || 0),
+    anomaly_detected: toNumber(row.anomaly_detected || 0),
   };
 }
 
@@ -244,6 +264,16 @@ function createCommonSchemaSql(): string[] {
         max_attempts INTEGER NOT NULL DEFAULT 1,
         retried INTEGER NOT NULL DEFAULT 0,
         retry_exhausted INTEGER NOT NULL DEFAULT 0,
+        source_tab_title TEXT,
+        master_tab_title TEXT,
+        review_tab_title TEXT,
+        quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+        new_master_row_count INTEGER NOT NULL DEFAULT 0,
+        purged_review_row_count INTEGER NOT NULL DEFAULT 0,
+        lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
+        lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
+        master_fallback_used INTEGER NOT NULL DEFAULT 0,
+        anomaly_detected INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -466,6 +496,36 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'retry_exhausted')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retry_exhausted INTEGER NOT NULL DEFAULT 0").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'source_tab_title')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN source_tab_title TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'master_tab_title')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN master_tab_title TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'review_tab_title')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN review_tab_title TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'quarantined_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN quarantined_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'new_master_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN new_master_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'purged_review_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN purged_review_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'lead_alert_attempted')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN lead_alert_attempted INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'lead_alert_delivered')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN lead_alert_delivered INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'master_fallback_used')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN master_fallback_used INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'anomaly_detected')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN anomaly_detected INTEGER NOT NULL DEFAULT 0").run();
+    }
   }
 
   async insertRun(run: ScheduledRunRecord): Promise<void> {
@@ -475,8 +535,11 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
         records_scraped, records_skipped, rows_uploaded,
         amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
         deadline_hit, effective_max_records, partial, error, failure_class,
-        attempt_count, max_attempts, retried, retry_exhausted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        attempt_count, max_attempts, retried, retry_exhausted,
+        source_tab_title, master_tab_title, review_tab_title, quarantined_row_count,
+        new_master_row_count, purged_review_row_count, lead_alert_attempted, lead_alert_delivered,
+        master_fallback_used, anomaly_detected
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       run.id,
       run.site,
@@ -502,7 +565,17 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       run.attempt_count ?? 1,
       run.max_attempts ?? 1,
       run.retried ?? 0,
-      run.retry_exhausted ?? 0
+      run.retry_exhausted ?? 0,
+      run.source_tab_title ?? null,
+      run.master_tab_title ?? null,
+      run.review_tab_title ?? null,
+      run.quarantined_row_count ?? 0,
+      run.new_master_row_count ?? 0,
+      run.purged_review_row_count ?? 0,
+      run.lead_alert_attempted ?? 0,
+      run.lead_alert_delivered ?? 0,
+      run.master_fallback_used ?? 0,
+      run.anomaly_detected ?? 0
     );
   }
 
@@ -512,7 +585,10 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
        SET site = ?, finished_at = ?, status = ?, records_scraped = ?, records_skipped = ?, rows_uploaded = ?,
            amount_found_count = ?, amount_missing_count = ?, amount_coverage_pct = ?, ocr_success_pct = ?, row_fail_pct = ?,
            deadline_hit = ?, effective_max_records = ?, partial = ?, error = ?, failure_class = ?,
-           attempt_count = ?, max_attempts = ?, retried = ?, retry_exhausted = ?, updated_at = CURRENT_TIMESTAMP
+           attempt_count = ?, max_attempts = ?, retried = ?, retry_exhausted = ?,
+           source_tab_title = ?, master_tab_title = ?, review_tab_title = ?, quarantined_row_count = ?,
+           new_master_row_count = ?, purged_review_row_count = ?, lead_alert_attempted = ?, lead_alert_delivered = ?,
+           master_fallback_used = ?, anomaly_detected = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
     ).run(
       run.site,
@@ -535,6 +611,16 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       run.max_attempts ?? 1,
       run.retried ?? 0,
       run.retry_exhausted ?? 0,
+      run.source_tab_title ?? null,
+      run.master_tab_title ?? null,
+      run.review_tab_title ?? null,
+      run.quarantined_row_count ?? 0,
+      run.new_master_row_count ?? 0,
+      run.purged_review_row_count ?? 0,
+      run.lead_alert_attempted ?? 0,
+      run.lead_alert_delivered ?? 0,
+      run.master_fallback_used ?? 0,
+      run.anomaly_detected ?? 0,
       run.id
     );
   }
@@ -748,19 +834,39 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           effective_max_records INTEGER NOT NULL DEFAULT 0,
           partial INTEGER NOT NULL DEFAULT 0,
           error TEXT,
-          failure_class TEXT,
-          attempt_count INTEGER NOT NULL DEFAULT 1,
-          max_attempts INTEGER NOT NULL DEFAULT 1,
-          retried INTEGER NOT NULL DEFAULT 0,
-          retry_exhausted INTEGER NOT NULL DEFAULT 0,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `);
-      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 1');
-      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 1');
-      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retried INTEGER NOT NULL DEFAULT 0');
-      await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retry_exhausted INTEGER NOT NULL DEFAULT 0');
+            failure_class TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 1,
+            max_attempts INTEGER NOT NULL DEFAULT 1,
+            retried INTEGER NOT NULL DEFAULT 0,
+            retry_exhausted INTEGER NOT NULL DEFAULT 0,
+            source_tab_title TEXT,
+            master_tab_title TEXT,
+            review_tab_title TEXT,
+            quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+            new_master_row_count INTEGER NOT NULL DEFAULT 0,
+            purged_review_row_count INTEGER NOT NULL DEFAULT 0,
+            lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
+            lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
+            master_fallback_used INTEGER NOT NULL DEFAULT 0,
+            anomaly_detected INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 1');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 1');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retried INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retry_exhausted INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS source_tab_title TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS master_tab_title TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS review_tab_title TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS quarantined_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS new_master_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS purged_review_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS lead_alert_attempted INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS lead_alert_delivered INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS master_fallback_used INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS anomaly_detected INTEGER NOT NULL DEFAULT 0');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at DESC)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_site_started_at ON scheduled_runs(site, started_at DESC)');
@@ -858,10 +964,14 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         records_scraped, records_skipped, rows_uploaded,
         amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
         deadline_hit, effective_max_records, partial, error, failure_class,
-        attempt_count, max_attempts, retried, retry_exhausted
+        attempt_count, max_attempts, retried, retry_exhausted,
+        source_tab_title, master_tab_title, review_tab_title, quarantined_row_count,
+        new_master_row_count, purged_review_row_count, lead_alert_attempted, lead_alert_delivered,
+        master_fallback_used, anomaly_detected
       ) VALUES (
         $1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8,
-        $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+        $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
+        $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
       )`,
       [
         run.id,
@@ -889,6 +999,16 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         run.max_attempts ?? 1,
         run.retried ?? 0,
         run.retry_exhausted ?? 0,
+        run.source_tab_title ?? null,
+        run.master_tab_title ?? null,
+        run.review_tab_title ?? null,
+        run.quarantined_row_count ?? 0,
+        run.new_master_row_count ?? 0,
+        run.purged_review_row_count ?? 0,
+        run.lead_alert_attempted ?? 0,
+        run.lead_alert_delivered ?? 0,
+        run.master_fallback_used ?? 0,
+        run.anomaly_detected ?? 0,
       ]
     );
   }
@@ -916,8 +1036,18 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
            max_attempts = $18,
            retried = $19,
            retry_exhausted = $20,
+           source_tab_title = $21,
+           master_tab_title = $22,
+           review_tab_title = $23,
+           quarantined_row_count = $24,
+           new_master_row_count = $25,
+           purged_review_row_count = $26,
+           lead_alert_attempted = $27,
+           lead_alert_delivered = $28,
+           master_fallback_used = $29,
+           anomaly_detected = $30,
            updated_at = NOW()
-       WHERE id = $21`,
+       WHERE id = $31`,
       [
         run.site,
         run.finished_at ?? null,
@@ -939,6 +1069,16 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         run.max_attempts ?? 1,
         run.retried ?? 0,
         run.retry_exhausted ?? 0,
+        run.source_tab_title ?? null,
+        run.master_tab_title ?? null,
+        run.review_tab_title ?? null,
+        run.quarantined_row_count ?? 0,
+        run.new_master_row_count ?? 0,
+        run.purged_review_row_count ?? 0,
+        run.lead_alert_attempted ?? 0,
+        run.lead_alert_delivered ?? 0,
+        run.master_fallback_used ?? 0,
+        run.anomaly_detected ?? 0,
         run.id,
       ]
     );

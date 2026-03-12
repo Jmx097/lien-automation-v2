@@ -70,6 +70,24 @@ const ALL_DAYS = 'MO,TU,WE,TH,FR,SA,SU';
 export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
   cooldown_of?: string;
+  confidence?: RunConfidenceSummary;
+}
+
+export interface RunConfidenceSummary {
+  status: 'high' | 'medium' | 'low';
+  reasons: string[];
+  metrics: {
+    records_scraped: number;
+    rows_uploaded: number;
+    amount_coverage_pct: number;
+    ocr_success_pct: number;
+    row_fail_pct: number;
+    partial: number;
+    retry_exhausted: number;
+    quarantined_row_count: number;
+    new_master_row_count: number;
+    purged_review_row_count: number;
+  };
 }
 
 export interface SiteScheduleState {
@@ -347,6 +365,55 @@ function roundMetric(value: number): number {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
+  const reasons: string[] = [];
+
+  if (run.status !== 'success') reasons.push('run_not_successful');
+  if (!run.source_tab_title && run.records_scraped > 0) reasons.push('source_tab_missing');
+  if (run.partial === 1) reasons.push('partial_run');
+  if ((run.retry_exhausted ?? 0) > 0) reasons.push('retry_budget_exhausted');
+  if ((run.master_fallback_used ?? 0) > 0) reasons.push('master_publish_fallback_active');
+  if ((run.anomaly_detected ?? 0) > 0) reasons.push('quality_anomaly_detected');
+  if (run.rows_uploaded !== run.records_scraped) reasons.push('row_upload_mismatch');
+  if (run.records_scraped > 0 && !run.master_tab_title) reasons.push('master_tab_missing');
+  if (run.records_scraped > 0 && run.amount_coverage_pct < AMOUNT_MIN_COVERAGE_PCT) reasons.push('amount_coverage_below_target');
+  if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
+  if ((run.quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
+
+  let status: RunConfidenceSummary['status'] = 'high';
+  if (
+    reasons.some((reason) => [
+      'run_not_successful',
+      'source_tab_missing',
+      'row_upload_mismatch',
+      'master_tab_missing',
+      'retry_budget_exhausted',
+      'master_publish_fallback_active',
+    ].includes(reason))
+  ) {
+    status = 'low';
+  } else if (reasons.length > 0) {
+    status = 'medium';
+  }
+
+  return {
+    status,
+    reasons,
+    metrics: {
+      records_scraped: run.records_scraped,
+      rows_uploaded: run.rows_uploaded,
+      amount_coverage_pct: run.amount_coverage_pct,
+      ocr_success_pct: run.ocr_success_pct,
+      row_fail_pct: run.row_fail_pct,
+      partial: run.partial,
+      retry_exhausted: run.retry_exhausted ?? 0,
+      quarantined_row_count: run.quarantined_row_count ?? 0,
+      new_master_row_count: run.new_master_row_count ?? 0,
+      purged_review_row_count: run.purged_review_row_count ?? 0,
+    },
+  };
 }
 
 async function evaluateQualityAnomaly(site: SupportedSite, currentRun: ScheduledRun): Promise<QualityAnomalyEvaluation | null> {
@@ -806,6 +873,16 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
     retried: 0,
     retry_exhausted: 0,
+    source_tab_title: undefined,
+    master_tab_title: undefined,
+    review_tab_title: undefined,
+    quarantined_row_count: 0,
+    new_master_row_count: 0,
+    purged_review_row_count: 0,
+    lead_alert_attempted: 0,
+    lead_alert_delivered: 0,
+    master_fallback_used: 0,
+    anomaly_detected: 0,
     finished_at: undefined,
   };
 
@@ -978,8 +1055,19 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.failure_class = undefined;
         run.retry_exhausted = 0;
         run.finished_at = new Date().toISOString();
+        run.source_tab_title = uploadResult.tab_title;
+        run.master_tab_title = masterSync?.tab_title;
+        run.review_tab_title = masterSync?.review_tab_title;
+        run.quarantined_row_count = masterSync?.quarantined_row_count ?? 0;
+        run.new_master_row_count = masterSync?.new_master_row_count ?? 0;
+        run.purged_review_row_count = masterSync?.purged_review_row_count ?? 0;
+        run.lead_alert_attempted = leadAlertResult.attempted ? 1 : 0;
+        run.lead_alert_delivered = leadAlertResult.delivered ? 1 : 0;
+        run.master_fallback_used = masterSync?.fallback_used ? 1 : 0;
+        run.anomaly_detected = 0;
 
         const anomaly = await evaluateQualityAnomaly(site, run);
+        run.anomaly_detected = anomaly ? 1 : 0;
         await getStore().updateRun(run);
         await clearNYCCachedRecords(idempotencyKey).catch(() => null);
         await applyNYCAcrisSuccess(site, 'run');
@@ -1147,7 +1235,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 }
 
 export async function getRunHistory(limit = 50): Promise<ScheduledRun[]> {
-  return getStore().getRunHistory(limit);
+  const runs = await getStore().getRunHistory(limit);
+  return runs.map((run) => ({
+    ...run,
+    confidence: buildRunConfidence(run),
+  }));
 }
 
 export async function getScheduleState(): Promise<ScheduleState> {

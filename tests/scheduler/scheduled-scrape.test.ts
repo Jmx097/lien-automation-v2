@@ -195,6 +195,11 @@ describe('runScheduledScrape', () => {
     expect(result.amount_found_count).toBe(2);
     expect(result.amount_coverage_pct).toBeGreaterThan(90);
     expect(mockSyncMasterSheetTab).toHaveBeenCalledTimes(1);
+
+    const { getRunHistory } = await import('../../src/scheduler');
+    const history = await getRunHistory(1);
+    expect(history[0].confidence?.status).toBe('low');
+    expect(history[0].confidence?.reasons).toContain('master_publish_fallback_active');
   });
 
   it('sends a new leads notification when Master gains new rows', async () => {
@@ -241,6 +246,42 @@ describe('runScheduledScrape', () => {
     expect(payload.subject).toBe('New leads!');
     expect(payload.html).toContain('New leads!');
     expect(payload.new_master_row_count).toBe(1);
+  });
+
+  it('reports a high-confidence run when source and destination publishing succeed without fallback', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 1,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 1,
+      purged_review_row_count: 0,
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-12:morning:high-confidence',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].source_tab_title).toBe('tab-name');
+    expect(history[0].master_tab_title).toBe('Master');
+    expect(['high', 'medium']).toContain(history[0].confidence?.status);
+    expect(history[0].confidence?.reasons).not.toEqual(expect.arrayContaining([
+      'run_not_successful',
+      'source_tab_missing',
+      'row_upload_mismatch',
+      'master_publish_fallback_active',
+    ]));
   });
 
   it('fails the run when sheet upload count mismatches', async () => {
