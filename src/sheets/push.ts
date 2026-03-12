@@ -405,7 +405,6 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
 }
 
 
-
 function escapeSheetNameForFormula(name: string): string {
   return name.replace(/'/g, "''");
 }
@@ -422,8 +421,7 @@ async function refreshMasterSheetTab(
   const titles = await listSheetTitles(sheets, spreadsheetId);
   const aggregateSources = titles.filter((title) =>
     title !== masterTabTitle &&
-    title !== 'Records' &&
-    title.startsWith('Scheduled_')
+    title !== 'Records'
   );
 
   const formula = aggregateSources.length > 0

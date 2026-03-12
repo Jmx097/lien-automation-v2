@@ -1179,12 +1179,13 @@ export async function getScheduleState(): Promise<ScheduleState> {
   return Object.fromEntries(entries) as ScheduleState;
 }
 
-export function getNextRuns(): Array<{ site: SupportedSite; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
+export function getNextRuns(): Array<{ site: SupportedSite; slot: Slot; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
   return supportedSites.flatMap((site) =>
     resolveConfiguredSlots(site).map((slot) => {
       const config = getSiteSchedule(site, slot);
       return {
         site,
+        slot,
         schedule: 'daily',
         days: config.days.join(','),
         run_time: formatClock(config.triggerHour, config.triggerMinute),
