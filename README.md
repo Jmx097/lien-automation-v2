@@ -110,6 +110,7 @@ When `ENABLE_SCHEDULE_FAILURE_INJECTION=1`, operators may also send `test_retry_
 
 - **Live browser scraping execution** requires one of `BRIGHTDATA_BROWSER_WS`, `BRIGHTDATA_PROXY_SERVER`, or `SBR_CDP_URL`.
 - **Google Sheets upload paths** require both `SHEETS_KEY` and `SHEET_ID`.
+- **Director-facing merged sheet publishing** uses `MERGED_SHEET_ID` when set, or falls back to the built-in target sheet ID currently configured in the app.
 - **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
 
 ## SQLite Queue DB Initialization
@@ -132,6 +133,7 @@ Required environment variables:
 
 Important optional environment variables:
 
+- `MERGED_SHEET_ID` points the scheduled-run merged `Master` publish at a separate Google Sheet. When omitted, the app uses the currently configured default destination sheet and falls back to the source workbook `Master` tab if that destination is not reachable yet.
 - `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
 - In hosted Cloud Run, the first-pass secret migration now expects `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` to be supplied via Secret Manager-backed env vars while keeping the same runtime variable names.
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
@@ -162,6 +164,7 @@ For CA SOS scheduled runs specifically:
   - `TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe`
   - `PDFTOPPM_PATH=C:\path\to\poppler\Library\bin\pdftoppm.exe`
 - `GET /schedule/health` reports `ocr_runtime_ready=false` when those binaries are missing or not executable.
+- `GET /schedule/health` now also reports whether the source workbook is reachable plus whether merged-output publishing is using the destination sheet or source-workbook fallback mode.
 - `REQUIRE_OCR_TOOLS=1` keeps scheduled readiness strict. Set `REQUIRE_OCR_TOOLS=0` only if you intentionally want to allow runs without OCR-backed extraction.
 
 ## Data Schema
@@ -401,8 +404,9 @@ Cloud Scheduler equivalent: create one job per site with the appropriate schedul
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`. It is used for missed runs, connectivity alerts, and successful-run quality anomalies.
 5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
-6. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
-7. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
+6. Successful scheduled runs write raw `Scheduled_*` tabs into the source workbook (`SHEET_ID`) and then publish a merged `Master` dataset to the destination workbook (`MERGED_SHEET_ID` or the built-in default target). If the destination workbook is not reachable yet, the merged `Master` publish falls back to the source workbook so scheduled runs remain operational.
+7. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
+8. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
 
 ## Monitoring Setup Notes
 

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockScraper = vi.fn();
 const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
+const mockSyncMasterSheetTab = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
@@ -22,6 +23,7 @@ vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
 vi.mock('../../src/sheets/push', () => ({
   formatRunTabName: vi.fn(() => 'tab-name'),
   pushToSheetsForTab: mockPushToSheetsForTab,
+  syncMasterSheetTab: mockSyncMasterSheetTab,
 }));
 
 vi.mock('../../src/utils/logger', () => ({
@@ -63,6 +65,14 @@ describe('scheduler auto-throttle', () => {
     connectivityState.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
+    mockSyncMasterSheetTab.mockReset();
+    mockSyncMasterSheetTab.mockResolvedValue({
+      tab_title: 'Master',
+      row_count: 2,
+      source_tabs: 1,
+      target_spreadsheet_id: 'source-sheet',
+      fallback_used: false,
+    });
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';
     process.env.SCHEDULE_DEADLINE_HOUR = '23';

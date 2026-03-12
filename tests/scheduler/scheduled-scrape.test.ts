@@ -171,6 +171,13 @@ describe('runScheduledScrape', () => {
       { filing_number: '2', amount: '200', amount_reason: 'ok' },
     ]);
     mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 2,
+      source_tabs: 1,
+      target_spreadsheet_id: 'source-sheet',
+      fallback_used: true,
+    });
 
     const { runScheduledScrape } = await import('../../src/scheduler');
 
@@ -187,6 +194,7 @@ describe('runScheduledScrape', () => {
     expect(result.records_scraped).toBe(2);
     expect(result.amount_found_count).toBe(2);
     expect(result.amount_coverage_pct).toBeGreaterThan(90);
+    expect(mockSyncMasterSheetTab).toHaveBeenCalledTimes(1);
   });
 
   it('fails the run when sheet upload count mismatches', async () => {

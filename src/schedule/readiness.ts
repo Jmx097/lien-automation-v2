@@ -2,6 +2,7 @@ import { checkOCRRuntime } from '../scraper/ocr-runtime';
 import { supportedSites, type SupportedSite } from '../sites';
 import { ScheduledRunStore, getSchedulerStoreReadiness } from '../scheduler/store';
 import { createDefaultConnectivityState, getNextAllowedRunAt, type SiteConnectivityStatus } from '../scheduler/connectivity';
+import { checkSpreadsheetAccess, getMergedSheetTargetConfig } from '../sheets/push';
 
 export interface ReadinessCheck {
   name: string;
@@ -12,6 +13,13 @@ export interface ReadinessCheck {
 export interface ScheduleReadinessReport {
   status: 'ready' | 'not_ready';
   checks: ReadinessCheck[];
+  merged_output: {
+    source_spreadsheet_id_suffix: string;
+    target_spreadsheet_id_suffix: string;
+    target_reachable: boolean;
+    fallback_active: boolean;
+    detail?: string;
+  };
   site_connectivity: Record<SupportedSite, {
     status: SiteConnectivityStatus;
     next_probe_at?: string;
@@ -110,6 +118,25 @@ function checkDownstreamCredentialsLoaded(): ReadinessCheck {
   }
 }
 
+async function checkSourceSheetReachable(): Promise<ReadinessCheck> {
+  const sheetId = process.env.SHEET_ID;
+
+  if (!sheetId || !process.env.SHEETS_KEY) {
+    return {
+      name: 'source_sheet_reachable',
+      ok: false,
+      detail: 'SHEETS_KEY and SHEET_ID must both be set.',
+    };
+  }
+
+  const access = await checkSpreadsheetAccess(sheetId);
+  return {
+    name: 'source_sheet_reachable',
+    ok: access.ok,
+    detail: access.detail,
+  };
+}
+
 function checkOCRReady(): ReadinessCheck {
   const result = checkOCRRuntime();
   if (!result.ok) {
@@ -131,7 +158,19 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
   const dbCheck: ReadinessCheck = storeReadiness.ok
     ? { name: 'db_reachable', ok: true, detail: `scheduler_store=${storeReadiness.backend}` }
     : { name: 'db_reachable', ok: false, detail: storeReadiness.detail };
-  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), dbCheck, checkDownstreamCredentialsLoaded(), checkOCRReady()];
+  const credentialsCheck = checkDownstreamCredentialsLoaded();
+  const sourceSheetCheck = credentialsCheck.ok
+    ? await checkSourceSheetReachable()
+    : {
+      name: 'source_sheet_reachable',
+      ok: false,
+      detail: 'Skipped because downstream credentials are not loaded.',
+    };
+  const mergedConfig = getMergedSheetTargetConfig();
+  const targetAccess = credentialsCheck.ok
+    ? await checkSpreadsheetAccess(mergedConfig.target_spreadsheet_id)
+    : { ok: false, detail: 'Skipped because downstream credentials are not loaded.' };
+  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), dbCheck, credentialsCheck, sourceSheetCheck, checkOCRReady()];
   const siteConnectivityEntries = storeReadiness.ok
     ? await (async () => {
       const store = new ScheduledRunStore();
@@ -167,7 +206,13 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
   return {
     status: checks.every((check) => check.ok) ? 'ready' : 'not_ready',
     checks,
+    merged_output: {
+      source_spreadsheet_id_suffix: mergedConfig.source_spreadsheet_id.slice(-6),
+      target_spreadsheet_id_suffix: mergedConfig.target_spreadsheet_id.slice(-6),
+      target_reachable: targetAccess.ok,
+      fallback_active: !targetAccess.ok && mergedConfig.target_spreadsheet_id !== mergedConfig.source_spreadsheet_id,
+      detail: targetAccess.detail,
+    },
     site_connectivity,
   };
 }
-

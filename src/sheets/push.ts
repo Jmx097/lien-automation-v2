@@ -36,6 +36,7 @@ export const FROZEN_SHEET_HEADERS = [
 
 const SHEET_COLUMN_COUNT = FROZEN_SHEET_HEADERS.length;
 const HEADER_END_COLUMN = String.fromCharCode('A'.charCodeAt(0) + SHEET_COLUMN_COUNT - 1);
+const DEFAULT_MERGED_SHEET_ID = '1qa32AEUMC4TYHh4G6AV4msRS4GjQQZFTNPpYHMh4n5A';
 
 function getPacificTimestampForTab(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -188,6 +189,15 @@ function getRequiredEnv(name: string): string {
   return v;
 }
 
+function getSourceSpreadsheetId(): string {
+  return getRequiredEnv('SHEET_ID');
+}
+
+function getMergedSpreadsheetId(): string {
+  const configured = process.env.MERGED_SHEET_ID?.trim();
+  return configured || DEFAULT_MERGED_SHEET_ID;
+}
+
 function getSheetsClient() {
   const sanitizedKey = getRequiredEnv('SHEETS_KEY').replace(/^'+|'+$/g, '');
   const auth = new google.auth.GoogleAuth({
@@ -196,6 +206,41 @@ function getSheetsClient() {
   });
 
   return google.sheets({ version: 'v4', auth });
+}
+
+export interface SpreadsheetAccessResult {
+  ok: boolean;
+  detail?: string;
+}
+
+export interface MergedSheetTargetConfig {
+  source_spreadsheet_id: string;
+  target_spreadsheet_id: string;
+  fallback_tab_title: string;
+  target_tab_title: string;
+  default_target_used: boolean;
+}
+
+export interface MasterSheetSyncResult {
+  tab_title: string;
+  row_count: number;
+  source_tabs: number;
+  target_spreadsheet_id: string;
+  fallback_used: boolean;
+}
+
+export function getMergedSheetTargetConfig(): MergedSheetTargetConfig {
+  const source_spreadsheet_id = getSourceSpreadsheetId();
+  const configured = process.env.MERGED_SHEET_ID?.trim();
+  const target_spreadsheet_id = configured || DEFAULT_MERGED_SHEET_ID;
+
+  return {
+    source_spreadsheet_id,
+    target_spreadsheet_id,
+    fallback_tab_title: 'Master',
+    target_tab_title: 'Master',
+    default_target_used: !configured,
+  };
 }
 
 function sanitizeSheetTitle(input: string): string {
@@ -230,6 +275,19 @@ async function listSheetTitles(
       ?.map(s => s.properties?.title)
       .filter((t): t is string => typeof t === 'string') ?? [];
   return titles;
+}
+
+export async function checkSpreadsheetAccess(spreadsheetId: string): Promise<SpreadsheetAccessResult> {
+  try {
+    const sheets = getSheetsClient();
+    await sheets.spreadsheets.get({ spreadsheetId, fields: 'spreadsheetId' });
+    return { ok: true };
+  } catch (err: any) {
+    return {
+      ok: false,
+      detail: String(err?.message ?? err),
+    };
+  }
 }
 
 async function ensureSheetTabExists(
@@ -408,7 +466,7 @@ export async function pushToSheetsForTab(
   rows: LienRecord[],
   requestedTabTitle: string
 ): Promise<{ uploaded: number; tab_title: string }> {
-  const spreadsheetId = getRequiredEnv('SHEET_ID');
+  const spreadsheetId = getSourceSpreadsheetId();
   const sheets = getSheetsClient();
 
   const tabTitle = await ensureSheetTabExists(sheets, spreadsheetId, requestedTabTitle);
@@ -442,17 +500,12 @@ export async function pushToSheetsForTab(
   return { uploaded: rows.length, tab_title: tabTitle };
 }
 
-
-
-export async function syncMasterSheetTab(options: {
-  tabTitle?: string;
-  includePrefixes?: string[];
-} = {}): Promise<{ tab_title: string; row_count: number; source_tabs: number }> {
-  const spreadsheetId = getRequiredEnv('SHEET_ID');
-  const sheets = getSheetsClient();
-  const tabTitle = options.tabTitle ?? 'Master';
-  const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
-
+async function collectRowsFromSourceTabs(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  includePrefixes: string[],
+  tabTitle: string
+): Promise<{ rows: any[][]; sourceTabs: string[] }> {
   const existingTitles = await listSheetTitles(sheets, spreadsheetId);
   const sourceTabs = existingTitles.filter((title) =>
     title !== tabTitle && includePrefixes.some((prefix) => title.startsWith(prefix))
@@ -466,6 +519,15 @@ export async function syncMasterSheetTab(options: {
     for (const valueRow of values) rows.push(valueRow);
   }
 
+  return { rows, sourceTabs };
+}
+
+async function writeMergedRowsToTab(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  tabTitle: string,
+  rows: any[][]
+): Promise<string> {
   const ensuredTabTitle = await ensureSheetTabExists(sheets, spreadsheetId, tabTitle);
   await initializeSheetHeaderRow(sheets, spreadsheetId, ensuredTabTitle);
 
@@ -483,19 +545,61 @@ export async function syncMasterSheetTab(options: {
     });
   }
 
-  log({
-    stage: 'sheets_master_sync_complete',
-    spreadsheet_id_suffix: spreadsheetId.slice(-6),
-    tab_title: ensuredTabTitle,
-    source_tabs: sourceTabs.length,
-    row_count: rows.length,
-  });
+  return ensuredTabTitle;
+}
 
-  return {
-    tab_title: ensuredTabTitle,
-    row_count: rows.length,
-    source_tabs: sourceTabs.length,
+export async function syncMasterSheetTab(options: {
+  tabTitle?: string;
+  includePrefixes?: string[];
+  sourceSpreadsheetId?: string;
+  targetSpreadsheetId?: string;
+} = {}): Promise<MasterSheetSyncResult> {
+  const sourceSpreadsheetId = options.sourceSpreadsheetId ?? getSourceSpreadsheetId();
+  const configuredTargetSpreadsheetId = options.targetSpreadsheetId ?? getMergedSpreadsheetId();
+  const sheets = getSheetsClient();
+  const tabTitle = options.tabTitle ?? 'Master';
+  const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
+  const { rows, sourceTabs } = await collectRowsFromSourceTabs(sheets, sourceSpreadsheetId, includePrefixes, tabTitle);
+
+  const finalize = async (targetSpreadsheetId: string, fallbackUsed: boolean) => {
+    const ensuredTabTitle = await writeMergedRowsToTab(sheets, targetSpreadsheetId, tabTitle, rows);
+
+    log({
+      stage: 'sheets_master_sync_complete',
+      source_spreadsheet_id_suffix: sourceSpreadsheetId.slice(-6),
+      target_spreadsheet_id_suffix: targetSpreadsheetId.slice(-6),
+      tab_title: ensuredTabTitle,
+      source_tabs: sourceTabs.length,
+      row_count: rows.length,
+      fallback_used: fallbackUsed,
+    });
+
+    return {
+      tab_title: ensuredTabTitle,
+      row_count: rows.length,
+      source_tabs: sourceTabs.length,
+      target_spreadsheet_id: targetSpreadsheetId,
+      fallback_used: fallbackUsed,
+    };
   };
+
+  try {
+    return await finalize(configuredTargetSpreadsheetId, false);
+  } catch (err: any) {
+    if (configuredTargetSpreadsheetId === sourceSpreadsheetId) {
+      throw err;
+    }
+
+    log({
+      stage: 'sheets_master_sync_fallback',
+      source_spreadsheet_id_suffix: sourceSpreadsheetId.slice(-6),
+      target_spreadsheet_id_suffix: configuredTargetSpreadsheetId.slice(-6),
+      fallback_spreadsheet_id_suffix: sourceSpreadsheetId.slice(-6),
+      reason: String(err?.message ?? err),
+    });
+
+    return finalize(sourceSpreadsheetId, true);
+  }
 }
 
 export async function pushRunToNewSheetTab(

@@ -948,7 +948,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }
 
-        await syncMasterSheetTab();
+        const masterSync = await syncMasterSheetTab();
 
         const deadlineHit = isPastDeadline(site, slot, new Date());
         const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
@@ -1053,6 +1053,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           partial: run.partial,
           retried: run.retried,
           tab_title: uploadResult.tab_title,
+          master_tab_title: masterSync?.tab_title,
+          master_target_spreadsheet_id_suffix: masterSync?.target_spreadsheet_id?.slice(-6),
+          master_fallback_used: masterSync?.fallback_used ?? false,
         });
 
         return run;

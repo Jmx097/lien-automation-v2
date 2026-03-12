@@ -7,8 +7,12 @@ function runNode(args) {
 }
 
 function runNpmVersion() {
-  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  return execFileSync(npmCommand, ['-v'], { encoding: 'utf8' }).trim();
+  if (process.platform === 'win32') {
+    const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    return runNode([npmCli, '-v']);
+  }
+
+  return execFileSync('npm', ['-v'], { encoding: 'utf8' }).trim();
 }
 
 function fail(message, hints = []) {
