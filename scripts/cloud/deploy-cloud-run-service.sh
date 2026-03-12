@@ -127,14 +127,6 @@ DEPLOY_ARGS=(
   --set-secrets="${SECRET_ENVS}"
 )
 
-if [[ "${#REMOVE_ENV_VARS[@]}" -gt 0 ]]; then
-  DEPLOY_ARGS+=(--remove-env-vars="$(IFS=,; echo "${REMOVE_ENV_VARS[*]}")")
-fi
-
-if [[ "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
-  DEPLOY_ARGS+=(--remove-secrets="$(IFS=,; echo "${REMOVE_SECRETS[*]}")")
-fi
-
 if [[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]]; then
   DEPLOY_ARGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE_CONNECTION_NAME}")
 fi
@@ -152,6 +144,24 @@ if [[ "${DRY_RUN}" == "1" ]]; then
     "remove_secrets=$(IFS=,; echo "${REMOVE_SECRETS[*]}")" \
     "cloudsql_attached=$([[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]] && echo true || echo false)"
   exit 0
+fi
+
+if [[ "${#REMOVE_ENV_VARS[@]}" -gt 0 || "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
+  UPDATE_ARGS=(
+    --project="${GCP_PROJECT_ID}"
+    --region="${GCP_REGION}"
+    --platform=managed
+  )
+
+  if [[ "${#REMOVE_ENV_VARS[@]}" -gt 0 ]]; then
+    UPDATE_ARGS+=(--remove-env-vars="$(IFS=,; echo "${REMOVE_ENV_VARS[*]}")")
+  fi
+
+  if [[ "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
+    UPDATE_ARGS+=(--remove-secrets="$(IFS=,; echo "${REMOVE_SECRETS[*]}")")
+  fi
+
+  gcloud run services update "${SERVICE_NAME}" "${UPDATE_ARGS[@]}"
 fi
 
 gcloud run deploy "${SERVICE_NAME}" \
