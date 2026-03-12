@@ -5,6 +5,7 @@ import path from 'path';
 const mockScraper = vi.fn();
 const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
+const mockSyncMasterSheetTab = vi.fn();
 const mockLog = vi.fn();
 const mockFetch = vi.fn();
 
@@ -27,6 +28,7 @@ vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
 vi.mock('../../src/sheets/push', () => ({
   formatRunTabName: vi.fn(() => 'tab-name'),
   pushToSheetsForTab: mockPushToSheetsForTab,
+  syncMasterSheetTab: mockSyncMasterSheetTab,
 }));
 
 vi.mock('../../src/utils/logger', () => ({

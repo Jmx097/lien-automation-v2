@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockScraper = vi.fn();
 const mockProbeCASOSResultCount = vi.fn();
 const mockPushToSheetsForTab = vi.fn();
+const mockSyncMasterSheetTab = vi.fn();
 const runs = new Map<string, any>();
 const controlState = new Map<string, any>();
 const connectivityState = new Map<string, any>();
@@ -22,6 +23,7 @@ vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
 vi.mock('../../src/sheets/push', () => ({
   formatRunTabName: vi.fn(() => 'tab-name'),
   pushToSheetsForTab: mockPushToSheetsForTab,
+  syncMasterSheetTab: mockSyncMasterSheetTab,
 }));
 
 vi.mock('../../src/utils/logger', () => ({
@@ -74,6 +76,7 @@ describe('site-aware scheduler', () => {
     mockScraper.mockReset();
     mockProbeCASOSResultCount.mockReset();
     mockPushToSheetsForTab.mockReset();
+    mockSyncMasterSheetTab.mockReset();
     delete process.env.SCHEDULE_NYC_ACRIS_RUN_HOUR;
     delete process.env.SCHEDULE_NYC_ACRIS_RUN_MINUTE;
     delete process.env.SCHEDULE_NYC_ACRIS_WEEKLY_DAYS;
@@ -85,8 +88,8 @@ describe('site-aware scheduler', () => {
 
     expect(nextRuns).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ site: 'ca_sos', days: 'TU,WE', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
-        expect.objectContaining({ site: 'nyc_acris', days: 'TU,WE,TH,FR', run_time: '14:00', trigger_time: '14:00', finish_by_time: '18:00', deadline_time: '18:00' }),
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
+        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '14:00', trigger_time: '14:00', finish_by_time: '18:00', deadline_time: '18:00' }),
       ])
     );
   });

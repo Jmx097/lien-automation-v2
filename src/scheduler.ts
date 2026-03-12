@@ -19,7 +19,7 @@ import {
   type SiteConnectivityState,
 } from './scheduler/connectivity';
 import { probeNYCAcrisConnectivity } from './scraper/nyc_acris';
-import { formatRunTabName, pushToSheetsForTab } from './sheets/push';
+import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import type { LienRecord } from './types';
 import { supportedSites, type SupportedSite } from './sites';
 
@@ -63,6 +63,8 @@ interface SiteScheduleConfig {
   maxRecords: number;
   slot: Slot;
 }
+
+const ALL_DAYS = 'MO,TU,WE,TH,FR,SA,SU';
 
 export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
@@ -168,50 +170,99 @@ function getSiteEnv(site: SupportedSite, suffix: string, legacyName?: string): s
   return process.env[`${sitePrefix(site)}_${suffix}`] ?? (legacyName ? process.env[legacyName] : undefined);
 }
 
-function getSiteSchedule(site: SupportedSite): SiteScheduleConfig {
+function getSiteSchedules(site: SupportedSite): SiteScheduleConfig[] {
   if (site === 'nyc_acris') {
     const timezone = getSiteEnv(site, 'TIMEZONE') ?? 'America/New_York';
-    const days = (getSiteEnv(site, 'WEEKLY_DAYS') ?? 'TU,WE,TH,FR').split(',').map((value) => value.trim().toUpperCase());
-    const runHour = Number(getSiteEnv(site, 'RUN_HOUR') ?? '14');
-    const runMinute = Number(getSiteEnv(site, 'RUN_MINUTE') ?? '0');
-    const deadlineHour = Number(getSiteEnv(site, 'DEADLINE_HOUR') ?? '18');
-    const deadlineMinute = Number(getSiteEnv(site, 'DEADLINE_MINUTE') ?? '0');
+    const days = (getSiteEnv(site, 'WEEKLY_DAYS') ?? ALL_DAYS).split(',').map((value) => value.trim().toUpperCase());
     const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? '5');
 
-    return {
-      site,
-      timezone,
-      days,
-      triggerHour: runHour,
-      triggerMinute: runMinute,
-      finishByHour: deadlineHour,
-      finishByMinute: deadlineMinute,
-      triggerLeadMinutes: 0,
-      maxRecords,
-      slot: runHour < 12 ? 'morning' : 'afternoon',
-    };
+    const morningRunHour = Number(getSiteEnv(site, 'MORNING_RUN_HOUR') ?? '10');
+    const morningRunMinute = Number(getSiteEnv(site, 'MORNING_RUN_MINUTE') ?? '0');
+    const morningDeadlineHour = Number(getSiteEnv(site, 'MORNING_DEADLINE_HOUR') ?? '14');
+    const morningDeadlineMinute = Number(getSiteEnv(site, 'MORNING_DEADLINE_MINUTE') ?? '0');
+    const afternoonRunHour = Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR') ?? getSiteEnv(site, 'RUN_HOUR') ?? '14');
+    const afternoonRunMinute = Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE') ?? getSiteEnv(site, 'RUN_MINUTE') ?? '0');
+    const afternoonDeadlineHour = Number(getSiteEnv(site, 'AFTERNOON_DEADLINE_HOUR') ?? getSiteEnv(site, 'DEADLINE_HOUR') ?? '18');
+    const afternoonDeadlineMinute = Number(getSiteEnv(site, 'AFTERNOON_DEADLINE_MINUTE') ?? getSiteEnv(site, 'DEADLINE_MINUTE') ?? '0');
+
+    return [
+      {
+        site,
+        timezone,
+        days,
+        triggerHour: morningRunHour,
+        triggerMinute: morningRunMinute,
+        finishByHour: morningDeadlineHour,
+        finishByMinute: morningDeadlineMinute,
+        triggerLeadMinutes: 0,
+        maxRecords,
+        slot: 'morning',
+      },
+      {
+        site,
+        timezone,
+        days,
+        triggerHour: afternoonRunHour,
+        triggerMinute: afternoonRunMinute,
+        finishByHour: afternoonDeadlineHour,
+        finishByMinute: afternoonDeadlineMinute,
+        triggerLeadMinutes: 0,
+        maxRecords,
+        slot: 'afternoon',
+      },
+    ];
   }
 
   const timezone = getSiteEnv(site, 'TIMEZONE', 'SCHEDULE_TARGET_TIMEZONE') ?? 'America/New_York';
-  const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? 'TU,WE').split(',').map((value) => value.trim().toUpperCase());
-  const finishByHour = Number(getSiteEnv(site, 'RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '9');
-  const finishByMinute = Number(getSiteEnv(site, 'RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0');
+  const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? ALL_DAYS).split(',').map((value) => value.trim().toUpperCase());
+  const morningFinishByHour = Number(getSiteEnv(site, 'MORNING_RUN_HOUR') ?? '9');
+  const morningFinishByMinute = Number(getSiteEnv(site, 'MORNING_RUN_MINUTE') ?? '0');
+  const afternoonFinishByHour = Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '15');
+  const afternoonFinishByMinute = Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0');
   const triggerLeadMinutes = Number(getSiteEnv(site, 'TRIGGER_LEAD_MINUTES') ?? '180');
-  const triggerTime = subtractMinutes(finishByHour, finishByMinute, triggerLeadMinutes);
   const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? SCHEDULE_MAX_RECORDS);
 
-  return {
-    site,
-    timezone,
-    days,
-    triggerHour: triggerTime.hour,
-    triggerMinute: triggerTime.minute,
-    finishByHour,
-    finishByMinute,
-    triggerLeadMinutes,
-    maxRecords,
-    slot: finishByHour < 12 ? 'morning' : 'afternoon',
-  };
+  const morningTriggerTime = subtractMinutes(morningFinishByHour, morningFinishByMinute, triggerLeadMinutes);
+  const afternoonTriggerTime = subtractMinutes(afternoonFinishByHour, afternoonFinishByMinute, triggerLeadMinutes);
+
+  return [
+    {
+      site,
+      timezone,
+      days,
+      triggerHour: morningTriggerTime.hour,
+      triggerMinute: morningTriggerTime.minute,
+      finishByHour: morningFinishByHour,
+      finishByMinute: morningFinishByMinute,
+      triggerLeadMinutes,
+      maxRecords,
+      slot: 'morning',
+    },
+    {
+      site,
+      timezone,
+      days,
+      triggerHour: afternoonTriggerTime.hour,
+      triggerMinute: afternoonTriggerTime.minute,
+      finishByHour: afternoonFinishByHour,
+      finishByMinute: afternoonFinishByMinute,
+      triggerLeadMinutes,
+      maxRecords,
+      slot: 'afternoon',
+    },
+  ];
+}
+
+function getSiteSchedule(site: SupportedSite, slot?: Slot): SiteScheduleConfig {
+  const schedules = getSiteSchedules(site);
+  if (slot) return schedules.find((config) => config.slot === slot) ?? schedules[0];
+
+  const now = getDateParts(new Date(), schedules[0].timezone);
+  return now.hour < 12 ? schedules[0] : schedules[1];
+}
+
+function getScheduleForSlot(site: SupportedSite, slot: Slot): SiteScheduleConfig {
+  return getSiteSchedules(site).find((config) => config.slot === slot) ?? getSiteSchedules(site)[0];
 }
 
 function getDateParts(now: Date, timeZone: string): { year: string; month: string; day: string; hour: number; minute: number; weekday: string } {
@@ -238,25 +289,24 @@ function getDateParts(now: Date, timeZone: string): { year: string; month: strin
   };
 }
 
-function isScheduledDay(site: SupportedSite, now: Date): boolean {
-  const config = getSiteSchedule(site);
+function isScheduledDay(config: SiteScheduleConfig, now: Date): boolean {
   return config.days.includes(getDateParts(now, config.timezone).weekday);
 }
 
 function buildDefaultIdempotencyKey(site: SupportedSite, now: Date, slot: Slot): string {
-  const config = getSiteSchedule(site);
+  const config = getScheduleForSlot(site, slot);
   const parts = getDateParts(now, config.timezone);
   return `${site}:${parts.year}-${parts.month}-${parts.day}:${slot}`;
 }
 
-function buildDeadlineIso(site: SupportedSite, now: Date): string {
-  const config = getSiteSchedule(site);
+function buildDeadlineIso(site: SupportedSite, slot: Slot, now: Date): string {
+  const config = getScheduleForSlot(site, slot);
   const parts = getDateParts(now, config.timezone);
   return `${parts.year}-${parts.month}-${parts.day}T${String(config.finishByHour).padStart(2, '0')}:${String(config.finishByMinute).padStart(2, '0')}:00 ${config.timezone}`;
 }
 
-function isPastDeadline(site: SupportedSite, now: Date): boolean {
-  const config = getSiteSchedule(site);
+function isPastDeadline(site: SupportedSite, slot: Slot, now: Date): boolean {
+  const config = getScheduleForSlot(site, slot);
   const parts = getDateParts(now, config.timezone);
   if (parts.hour > config.finishByHour) return true;
   if (parts.hour === config.finishByHour && parts.minute >= config.finishByMinute) return true;
@@ -616,6 +666,7 @@ async function getRecordsForScheduledRun(
   date_start: string,
   date_end: string,
   effectiveMaxRecords: number,
+  slot: Slot,
   previousFailureClass?: string,
 ) {
   if (shouldUseCachedNYCRows(site, previousFailureClass)) {
@@ -631,7 +682,7 @@ async function getRecordsForScheduledRun(
     date_start,
     date_end,
     max_records: effectiveMaxRecords,
-    stop_requested: () => isPastDeadline(site, new Date()),
+    stop_requested: () => isPastDeadline(site, slot, new Date()),
     connectivity_status_at_start: connectivityAtStart.status,
   } as any);
 
@@ -664,9 +715,10 @@ export async function checkSiteConnectivity(): Promise<void> {
 
 export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}): Promise<ScheduledRun> {
   const site = options.site ?? 'ca_sos';
-  const schedule = getSiteSchedule(site);
+  const requestedSlot = options.slot;
+  const schedule = getSiteSchedule(site, requestedSlot);
   const now = new Date();
-  const slot = options.slot ?? schedule.slot;
+  const slot = requestedSlot ?? schedule.slot;
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
   const triggerSource = options.triggerSource ?? 'external';
   const testFailureClass = options.testFailureClass;
@@ -695,7 +747,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   const { date_start, date_end } = getLast7DaysRange();
-  const deadlineIso = buildDeadlineIso(site, now);
+  const deadlineIso = buildDeadlineIso(site, slot, now);
   const seededMaxRecords = await resolveEffectiveMaxRecords(site);
   let effectiveMaxRecords = seededMaxRecords;
   let skipScrape = false;
@@ -801,7 +853,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     date_end,
     max_records: effectiveMaxRecords,
     deadline_iso: deadlineIso,
-    scheduled_day_match: isScheduledDay(site, now),
+    scheduled_day_match: isScheduledDay(schedule, now),
   });
 
   try {
@@ -869,6 +921,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           date_start,
           date_end,
           effectiveMaxRecords,
+          slot,
           previousFailureClass,
         );
 
@@ -895,7 +948,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }
 
-        const deadlineHit = isPastDeadline(site, new Date());
+        await syncMasterSheetTab();
+
+        const deadlineHit = isPastDeadline(site, slot, new Date());
         const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
 
         run.records_scraped = records.length;
@@ -1129,45 +1184,45 @@ export async function getScheduleState(): Promise<ScheduleState> {
 }
 
 export function getNextRuns(): Array<{ site: SupportedSite; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
-  return supportedSites.map((site) => {
-    const config = getSiteSchedule(site);
-    return {
+  return supportedSites.flatMap((site) =>
+    getSiteSchedules(site).map((config) => ({
       site,
-      schedule: 'weekly',
+      schedule: `daily_${config.slot}`,
       days: config.days.join(','),
       run_time: formatClock(config.triggerHour, config.triggerMinute),
       trigger_time: formatClock(config.triggerHour, config.triggerMinute),
       finish_by_time: formatClock(config.finishByHour, config.finishByMinute),
       deadline_time: formatClock(config.finishByHour, config.finishByMinute),
       timezone: config.timezone,
-    };
-  });
+    }))
+  );
 }
 
 export async function checkMissedRuns(): Promise<void> {
   const now = new Date();
 
   for (const site of supportedSites) {
-    const config = getSiteSchedule(site);
-    if (!isScheduledDay(site, now)) continue;
+    for (const config of getSiteSchedules(site)) {
+      if (!isScheduledDay(config, now)) continue;
 
-    const parts = getDateParts(now, config.timezone);
-    const dueHour = config.triggerHour + Math.floor((config.triggerMinute + MISSED_RUN_GRACE_MINUTES) / 60);
-    const dueMinute = (config.triggerMinute + MISSED_RUN_GRACE_MINUTES) % 60;
-    const overdue = parts.hour > dueHour || (parts.hour === dueHour && parts.minute >= dueMinute);
-    if (!overdue) continue;
+      const parts = getDateParts(now, config.timezone);
+      const dueHour = config.triggerHour + Math.floor((config.triggerMinute + MISSED_RUN_GRACE_MINUTES) / 60);
+      const dueMinute = (config.triggerMinute + MISSED_RUN_GRACE_MINUTES) % 60;
+      const overdue = parts.hour > dueHour || (parts.hour === dueHour && parts.minute >= dueMinute);
+      if (!overdue) continue;
 
-    const key = buildDefaultIdempotencyKey(site, now, config.slot);
-    const success = await getStore().getSuccessfulRunByIdempotencyKey(key);
-    if (success) continue;
+      const key = buildDefaultIdempotencyKey(site, now, config.slot);
+      const success = await getStore().getSuccessfulRunByIdempotencyKey(key);
+      if (success) continue;
 
-    const existingAlert = await getStore().getMissedAlertByKey(key);
-    if (existingAlert) continue;
+      const existingAlert = await getStore().getMissedAlertByKey(key);
+      if (existingAlert) continue;
 
-    const expectedAtIso = `${parts.year}-${parts.month}-${parts.day}T${String(dueHour).padStart(2, '0')}:${String(dueMinute).padStart(2, '0')}:00`;
-    await getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
-    await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
-    log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
+      const expectedAtIso = `${parts.year}-${parts.month}-${parts.day}T${String(dueHour).padStart(2, '0')}:${String(dueMinute).padStart(2, '0')}:00`;
+      await getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
+      await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
+      log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
+    }
   }
 }
 
