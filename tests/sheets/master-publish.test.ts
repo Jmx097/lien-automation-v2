@@ -129,14 +129,46 @@ describe('syncMasterSheetTab', () => {
     workbookAccess.set('target-sheet', { read: true, write: true });
   });
 
+  function sourceRow(overrides: Partial<Record<number, any>> = {}): any[] {
+    const row = [
+      12,
+      '03/12/2026',
+      '100',
+      'Lien',
+      '777',
+      'IRS',
+      'Business',
+      'ACME LLC',
+      '',
+      '',
+      '123 Main St',
+      'New York',
+      'NY',
+      '10001',
+      0.95,
+      'nyc_acris',
+      'file-1',
+      '0',
+    ];
+    for (const [index, value] of Object.entries(overrides)) {
+      row[Number(index)] = value;
+    }
+    return row;
+  }
+
   it('publishes merged scheduled rows into the destination workbook', async () => {
     seedWorkbook('source-sheet', {
-      Scheduled_CA: [['ca-1'], ['ca-2']],
-      Scheduled_NYC: [['nyc-1']],
-      Master: [['old-master']],
+      Scheduled_CA: [
+        sourceRow({ 0: 11, 15: 'ca_sos', 16: 'ca-file-1' }),
+        sourceRow({ 0: 11, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }),
+      ],
+      Scheduled_NYC: [
+        sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }),
+      ],
+      Master: [Array(15).fill('old-master')],
     });
     seedWorkbook('target-sheet', {
-      Master: [['stale-target']],
+      Master: [Array(15).fill('stale-target')],
     });
 
     const { syncMasterSheetTab } = await import('../../src/sheets/push');
@@ -147,19 +179,26 @@ describe('syncMasterSheetTab', () => {
       source_tabs: 2,
       target_spreadsheet_id: 'target-sheet',
       fallback_used: false,
+      quarantined_row_count: 0,
+      review_tab_title: 'Review_Queue',
     }));
-    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([['ca-1'], ['ca-2'], ['nyc-1']]);
-    expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([['old-master']]);
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 0: 11, 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
+      sourceRow({ 0: 11, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }).slice(0, 15),
+      sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }).slice(0, 15),
+    ]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([]);
+    expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([Array(15).fill('old-master')]);
   });
 
   it('falls back to the source workbook when the destination sheet is not writable', async () => {
     seedWorkbook('source-sheet', {
-      Scheduled_CA: [['ca-1']],
-      Scheduled_NYC: [['nyc-1']],
-      Master: [['old-master']],
+      Scheduled_CA: [sourceRow({ 15: 'ca_sos', 16: 'ca-file-1' })],
+      Scheduled_NYC: [sourceRow({ 16: 'ny-file-1', 17: '1' })],
+      Master: [Array(15).fill('old-master')],
     });
     seedWorkbook('target-sheet', {
-      Master: [['stale-target']],
+      Master: [Array(15).fill('stale-target')],
     });
     workbookAccess.set('target-sheet', { read: true, write: false });
 
@@ -167,12 +206,60 @@ describe('syncMasterSheetTab', () => {
     const result = await syncMasterSheetTab();
 
     expect(result).toEqual(expect.objectContaining({
-      row_count: 2,
+      row_count: 1,
       source_tabs: 2,
       target_spreadsheet_id: 'source-sheet',
       fallback_used: true,
+      quarantined_row_count: 1,
     }));
-    expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([['ca-1'], ['nyc-1']]);
-    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([['stale-target']]);
+    expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
+    ]);
+    expect(ensureWorkbook('source-sheet').get('Review_Queue')?.rows).toEqual([
+      [
+        ...sourceRow({ 16: 'ny-file-1', 17: '1' }).slice(0, 15),
+        'nyc_acris',
+        'ny-file-1',
+        'partial_run',
+      ],
+    ]);
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([Array(15).fill('stale-target')]);
+  });
+
+  it('quarantines low-confidence rows instead of publishing them to Master', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [sourceRow({ 14: 0.72, 16: 'ny-low-confidence' })],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 1,
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toContain('low_confidence');
+  });
+
+  it('keeps only the highest-confidence duplicate row in Master and quarantines the other copy', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [
+        sourceRow({ 2: '100', 14: 0.91, 16: 'duplicate-file' }),
+        sourceRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 1,
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }).slice(0, 15),
+    ]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toBe('conflict_lower_confidence');
   });
 });

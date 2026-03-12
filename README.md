@@ -404,9 +404,10 @@ Cloud Scheduler equivalent: create one job per site with the appropriate schedul
 3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`. It is used for missed runs, connectivity alerts, and successful-run quality anomalies.
 5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
-6. Successful scheduled runs write raw `Scheduled_*` tabs into the source workbook (`SHEET_ID`) and then publish a merged `Master` dataset to the destination workbook (`MERGED_SHEET_ID` or the built-in default target). If the destination workbook is not reachable yet, the merged `Master` publish falls back to the source workbook so scheduled runs remain operational.
-7. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
-8. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
+6. Successful scheduled runs write raw `Scheduled_*` tabs into the source workbook (`SHEET_ID`) and then publish a filtered merged `Master` dataset to the destination workbook (`MERGED_SHEET_ID` or the built-in default target). If the destination workbook is not reachable yet, the merged `Master` publish falls back to the source workbook so scheduled runs remain operational.
+7. The director-facing `Master` sheet now publishes only rows that have all required fields, `partial = 0`, and `ConfidenceScore >= 0.85`. Questionable rows are written to `Review_Queue` instead of being mixed into `Master`.
+8. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
+9. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
 
 ## Monitoring Setup Notes
 

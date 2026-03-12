@@ -54,6 +54,7 @@ jobs:
         env:
           GIT_SHA: ${{ github.sha }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
+          MERGED_SHEET_ID: 1qa32AEUMC4TYHh4G6AV4msRS4GjQQZFTNPpYHMh4n5A
           DATABASE_URL_SECRET_REF: ${{ secrets.DATABASE_URL_SECRET_REF }}
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
           SHEETS_KEY_SECRET_REF: ${{ secrets.SHEETS_KEY_SECRET_REF }}

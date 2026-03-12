@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRowValues, FROZEN_SHEET_HEADERS } from '../../src/sheets/push';
+import { buildRowValues, DIRECTOR_SHEET_HEADERS, FROZEN_SHEET_HEADERS } from '../../src/sheets/push';
 
 describe('site-specific sheet export mapping', () => {
   it('matches the frozen top row exactly', () => {
@@ -18,17 +18,30 @@ describe('site-specific sheet export mapping', () => {
       'City',
       'State',
       'Zip',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
+      'ConfidenceScore',
+      'RecordSource',
+      'FileNumber',
+      'RunPartial',
+    ]);
+  });
+
+  it('matches the director-facing top row exactly', () => {
+    expect(DIRECTOR_SHEET_HEADERS).toEqual([
+      'Site Id',
+      'LienOrReceiveDate',
+      'Amount',
+      'LeadType',
+      'LeadSource',
+      'LiabilityType',
+      'BusinessPersonal',
+      'Company',
+      'FirstName',
+      'LastName',
+      'Street',
+      'City',
+      'State',
+      'Zip',
+      'ConfidenceScore',
     ]);
   });
 
@@ -62,6 +75,10 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][10]).toBe('123 Main St');
     expect(rows[0][11]).toBe('New York');
     expect(rows[0][13]).toBe('10001');
+    expect(rows[0][14]).toBe(0.88);
+    expect(rows[0][15]).toBe('nyc_acris');
+    expect(rows[0][16]).toBe('2026022700399005');
+    expect(rows[0][17]).toBe('0');
   });
 
   it('parses OCR-style addresses without commas into street city and zip', () => {
