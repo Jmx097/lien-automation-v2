@@ -125,6 +125,7 @@ describe('syncMasterSheetTab', () => {
     });
     process.env.SHEET_ID = 'source-sheet';
     process.env.MERGED_SHEET_ID = 'target-sheet';
+    process.env.REVIEW_QUEUE_RETENTION_DAYS = '7';
     workbookAccess.set('source-sheet', { read: true, write: true });
     workbookAccess.set('target-sheet', { read: true, write: true });
   });
@@ -261,5 +262,33 @@ describe('syncMasterSheetTab', () => {
       sourceRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }).slice(0, 15),
     ]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toBe('conflict_lower_confidence');
+  });
+
+  it('purges quarantined rows older than the review retention window while keeping recent ones', async () => {
+    seedWorkbook('source-sheet', {
+      'Scheduled_old_01-01-2000_to_01-01-2000_20000101': [
+        sourceRow({ 14: 0.72, 16: 'old-review-file' }),
+      ],
+      'Scheduled_new_01-01-2099_to_01-01-2099_20990101': [
+        sourceRow({ 14: 0.72, 16: 'new-review-file' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 1,
+      purged_review_row_count: 1,
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
+      [
+        ...sourceRow({ 14: 0.72, 16: 'new-review-file' }).slice(0, 15),
+        'nyc_acris',
+        'new-review-file',
+        'low_confidence',
+      ],
+    ]);
   });
 });

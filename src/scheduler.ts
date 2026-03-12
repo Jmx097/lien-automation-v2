@@ -20,6 +20,7 @@ import {
 } from './scheduler/connectivity';
 import { probeNYCAcrisConnectivity } from './scraper/nyc_acris';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
+import { sendNewLeadsNotification } from './notifications/email';
 import type { LienRecord } from './types';
 import { supportedSites, type SupportedSite } from './sites';
 
@@ -951,6 +952,17 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         }
 
         const masterSync = await syncMasterSheetTab();
+        let leadAlertResult = { attempted: false, delivered: false };
+        if ((masterSync?.new_master_row_count ?? 0) > 0) {
+          leadAlertResult = await sendNewLeadsNotification({
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            new_master_row_count: masterSync!.new_master_row_count,
+            master_tab_title: masterSync!.tab_title,
+            target_spreadsheet_id_suffix: masterSync!.target_spreadsheet_id.slice(-6),
+          });
+        }
 
         run.records_scraped = records.length;
         run.rows_uploaded = uploadResult.uploaded;
@@ -1055,6 +1067,10 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           master_tab_title: masterSync?.tab_title,
           master_target_spreadsheet_id_suffix: masterSync?.target_spreadsheet_id?.slice(-6),
           master_fallback_used: masterSync?.fallback_used ?? false,
+          new_master_row_count: masterSync?.new_master_row_count ?? 0,
+          purged_review_row_count: masterSync?.purged_review_row_count ?? 0,
+          lead_alert_attempted: leadAlertResult.attempted,
+          lead_alert_delivered: leadAlertResult.delivered,
         });
 
         return run;

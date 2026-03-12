@@ -111,6 +111,7 @@ When `ENABLE_SCHEDULE_FAILURE_INJECTION=1`, operators may also send `test_retry_
 - **Live browser scraping execution** requires one of `BRIGHTDATA_BROWSER_WS`, `BRIGHTDATA_PROXY_SERVER`, or `SBR_CDP_URL`.
 - **Google Sheets upload paths** require both `SHEETS_KEY` and `SHEET_ID`.
 - **Director-facing merged sheet publishing** uses `MERGED_SHEET_ID` when set, or falls back to the built-in target sheet ID currently configured in the app.
+- **Director-facing lead alerts** can send a `New leads!` email via `LEAD_ALERT_WEBHOOK_URL` or direct Resend delivery when `LEAD_ALERT_RESEND_API_KEY` and `LEAD_ALERT_EMAIL_FROM` are configured. `LEAD_ALERT_EMAIL_TO` defaults to `antigravity1@timberlinetax.com`.
 - **Authenticated scheduled runs** require `SCHEDULE_RUN_TOKEN` and an external scheduler (cron/Cloud Scheduler/systemd timer).
 
 ## SQLite Queue DB Initialization
@@ -134,6 +135,10 @@ Required environment variables:
 Important optional environment variables:
 
 - `MERGED_SHEET_ID` points the scheduled-run merged `Master` publish at a separate Google Sheet. When omitted, the app uses the currently configured default destination sheet and falls back to the source workbook `Master` tab if that destination is not reachable yet.
+- `REVIEW_QUEUE_RETENTION_DAYS` controls how long quarantined rows stay in `Review_Queue` before they are dropped during the next merge rebuild. Default: `7`.
+- `LEAD_ALERT_EMAIL_TO` controls who receives the `New leads!` notification. Default: `antigravity1@timberlinetax.com`.
+- `LEAD_ALERT_WEBHOOK_URL` lets the app post the generic HTML notification payload to an external mailer/automation layer.
+- `LEAD_ALERT_RESEND_API_KEY` plus `LEAD_ALERT_EMAIL_FROM` enables direct Resend delivery for the `New leads!` email.
 - `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
 - In hosted Cloud Run, the first-pass secret migration now expects `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` to be supplied via Secret Manager-backed env vars while keeping the same runtime variable names.
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
@@ -155,6 +160,7 @@ For CA SOS scheduled runs specifically:
 - `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are the target finish-by time.
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
+- Cloud Run deploy defaults now schedule both CA SOS and NYC ACRIS for all days of the week unless you intentionally override the per-site `*_WEEKLY_DAYS` env vars.
 
 ## OCR Runtime Notes
 

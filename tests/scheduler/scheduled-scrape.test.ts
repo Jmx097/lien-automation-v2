@@ -197,6 +197,52 @@ describe('runScheduledScrape', () => {
     expect(mockSyncMasterSheetTab).toHaveBeenCalledTimes(1);
   });
 
+  it('sends a new leads notification when Master gains new rows', async () => {
+    process.env.LEAD_ALERT_WEBHOOK_URL = 'https://example.invalid/lead-email';
+    process.env.LEAD_ALERT_EMAIL_TO = 'antigravity1@timberlinetax.com';
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'ok',
+    });
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 1,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 1,
+      purged_review_row_count: 0,
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-12:morning:new-leads-email',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://example.invalid/lead-email',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    const payload = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
+    expect(payload.to).toBe('antigravity1@timberlinetax.com');
+    expect(payload.subject).toBe('New leads!');
+    expect(payload.html).toContain('New leads!');
+    expect(payload.new_master_row_count).toBe(1);
+  });
+
   it('fails the run when sheet upload count mismatches', async () => {
     mockProbeCASOSResultCount.mockResolvedValueOnce(1);
     mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);

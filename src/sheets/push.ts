@@ -10,6 +10,7 @@ const DEFAULT_MERGED_SHEET_ID = '1qa32AEUMC4TYHh4G6AV4msRS4GjQQZFTNPpYHMh4n5A';
 const DEFAULT_MASTER_TAB_TITLE = 'Master';
 const DEFAULT_REVIEW_TAB_TITLE = 'Review_Queue';
 const MIN_DIRECTOR_CONFIDENCE = 0.85;
+const DEFAULT_REVIEW_QUEUE_RETENTION_DAYS = 7;
 
 export const DIRECTOR_SHEET_HEADERS = [
   'Site Id',
@@ -266,6 +267,8 @@ export interface MasterSheetSyncResult {
   fallback_used: boolean;
   quarantined_row_count: number;
   review_tab_title: string;
+  new_master_row_count: number;
+  purged_review_row_count: number;
 }
 
 type BuildRowOptions = {
@@ -279,10 +282,61 @@ type DirectorCandidate = {
   runPartial: boolean;
   confidenceScore: number;
   reviewReasons: string[];
+  sourceTabCapturedAt?: Date;
+};
+
+type CollectedSourceRow = {
+  row: any[];
+  sourceTab: string;
+  sourceTabCapturedAt?: Date;
 };
 
 function directorHeadersEndColumn(headers: readonly string[]): string {
   return String.fromCharCode('A'.charCodeAt(0) + headers.length - 1);
+}
+
+function getReviewQueueRetentionDays(): number {
+  const configured = Number.parseInt(process.env.REVIEW_QUEUE_RETENTION_DAYS ?? '', 10);
+  if (!Number.isFinite(configured) || configured < 0) return DEFAULT_REVIEW_QUEUE_RETENTION_DAYS;
+  return configured;
+}
+
+function getReviewQueueRetentionCutoff(now = new Date()): Date | undefined {
+  const retentionDays = getReviewQueueRetentionDays();
+  if (retentionDays <= 0) return undefined;
+
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(cutoff.getUTCDate() - retentionDays);
+  return cutoff;
+}
+
+function parseSourceTabCapturedAt(sourceTab: string): Date | undefined {
+  const pacificTimestamp = sourceTab.match(/_(\d{8}T\d{6})(?:_Pacific)?$/);
+  if (pacificTimestamp) {
+    const [, compact] = pacificTimestamp;
+    const parsed = new Date(`${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T${compact.slice(9, 11)}:${compact.slice(11, 13)}:${compact.slice(13, 15)}-08:00`);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+
+  const dateStamp = sourceTab.match(/_(\d{8})(?:_Pacific)?$/);
+  if (dateStamp) {
+    const [, compact] = dateStamp;
+    const parsed = new Date(`${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T12:00:00Z`);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+
+  const dateRange = sourceTab.match(/_(\d{2})-(\d{2})-(\d{4})_to_(\d{2})-(\d{2})-(\d{4})(?:_|$)/);
+  if (dateRange) {
+    const [, , , , endMonth, endDay, endYear] = dateRange;
+    const parsed = new Date(`${endYear}-${endMonth}-${endDay}T12:00:00Z`);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+
+  return undefined;
+}
+
+function serializeDirectorRow(row: any[]): string {
+  return JSON.stringify(row.map((value) => stringValue(value)));
 }
 
 export function getMergedSheetTargetConfig(): MergedSheetTargetConfig {
@@ -571,7 +625,7 @@ async function collectRowsFromSourceTabs(
   includePrefixes: string[],
   masterTabTitle: string,
   reviewTabTitle: string
-): Promise<{ rows: any[][]; sourceTabs: string[] }> {
+): Promise<{ rows: CollectedSourceRow[]; sourceTabs: string[] }> {
   const existingTitles = await listSheetTitles(sheets, spreadsheetId);
   const sourceTabs = existingTitles.filter((title) =>
     title !== masterTabTitle &&
@@ -579,12 +633,13 @@ async function collectRowsFromSourceTabs(
     includePrefixes.some((prefix) => title.startsWith(prefix))
   );
 
-  const rows: any[][] = [];
+  const rows: CollectedSourceRow[] = [];
   for (const sourceTab of sourceTabs) {
     const range = `'${sourceTab}'!A2:${SOURCE_HEADER_END_COLUMN}`;
     const response = await sheets.spreadsheets.values.get({ spreadsheetId, range });
     const values = response.data.values ?? [];
-    for (const valueRow of values) rows.push(valueRow);
+    const sourceTabCapturedAt = parseSourceTabCapturedAt(sourceTab);
+    for (const valueRow of values) rows.push({ row: valueRow, sourceTab, sourceTabCapturedAt });
   }
 
   return { rows, sourceTabs };
@@ -608,7 +663,8 @@ function directorRowFromSourceRow(row: any[]): any[] {
   return row.slice(0, DIRECTOR_SHEET_HEADERS.length);
 }
 
-function buildCandidate(row: any[]): DirectorCandidate {
+function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
+  const row = sourceRow.row;
   const directorRow = directorRowFromSourceRow(row);
   const recordSource = stringValue(row[SOURCE_METADATA_COLUMN.recordSource]);
   const fileNumber = stringValue(row[SOURCE_METADATA_COLUMN.fileNumber]);
@@ -673,6 +729,7 @@ function buildCandidate(row: any[]): DirectorCandidate {
     runPartial,
     confidenceScore,
     reviewReasons: Array.from(new Set(reviewReasons)),
+    sourceTabCapturedAt: sourceRow.sourceTabCapturedAt,
   };
 }
 
@@ -685,10 +742,19 @@ function buildReviewRow(candidate: DirectorCandidate, reason: string): any[] {
   ];
 }
 
-function classifyMergedRows(rows: any[][]): { acceptedRows: any[][]; quarantinedRows: any[][] } {
+function shouldRetainReviewCandidate(candidate: DirectorCandidate, cutoff?: Date): boolean {
+  if (!cutoff || !candidate.sourceTabCapturedAt) return true;
+  return candidate.sourceTabCapturedAt >= cutoff;
+}
+
+function classifyMergedRows(
+  rows: CollectedSourceRow[],
+  options: { reviewRetentionCutoff?: Date } = {}
+): { acceptedRows: any[][]; quarantinedRows: any[][]; purgedReviewRowCount: number } {
   const candidates = rows.map(buildCandidate);
   const acceptedRows: any[][] = [];
   const quarantinedRows: any[][] = [];
+  let purgedReviewRowCount = 0;
   const grouped = new Map<string, DirectorCandidate[]>();
 
   for (const candidate of candidates) {
@@ -698,7 +764,11 @@ function classifyMergedRows(rows: any[][]): { acceptedRows: any[][]; quarantined
 
     if (!key) {
       const reason = candidate.reviewReasons.join('|') || 'missing_identity';
-      quarantinedRows.push(buildReviewRow(candidate, reason));
+      if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
+        quarantinedRows.push(buildReviewRow(candidate, reason));
+      } else {
+        purgedReviewRowCount += 1;
+      }
       continue;
     }
 
@@ -713,7 +783,11 @@ function classifyMergedRows(rows: any[][]): { acceptedRows: any[][]; quarantined
     if (cleanCandidates.length === 1) {
       acceptedRows.push(cleanCandidates[0].directorRow);
       for (const candidate of bucket.filter((entry) => entry !== cleanCandidates[0])) {
-        quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'duplicate_lower_confidence'));
+        if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
+          quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'duplicate_lower_confidence'));
+        } else {
+          purgedReviewRowCount += 1;
+        }
       }
       continue;
     }
@@ -728,7 +802,11 @@ function classifyMergedRows(rows: any[][]): { acceptedRows: any[][]; quarantined
           const reason = candidate.reviewReasons.length > 0
             ? candidate.reviewReasons.join('|')
             : 'conflict_lower_confidence';
-          quarantinedRows.push(buildReviewRow(candidate, reason));
+          if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
+            quarantinedRows.push(buildReviewRow(candidate, reason));
+          } else {
+            purgedReviewRowCount += 1;
+          }
         }
         continue;
       }
@@ -737,17 +815,41 @@ function classifyMergedRows(rows: any[][]): { acceptedRows: any[][]; quarantined
         const reason = candidate.reviewReasons.length > 0
           ? candidate.reviewReasons.join('|')
           : 'conflict_ambiguous';
-        quarantinedRows.push(buildReviewRow(candidate, reason));
+        if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
+          quarantinedRows.push(buildReviewRow(candidate, reason));
+        } else {
+          purgedReviewRowCount += 1;
+        }
       }
       continue;
     }
 
     for (const candidate of bucket) {
-      quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'quarantined'));
+      if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
+        quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'quarantined'));
+      } else {
+        purgedReviewRowCount += 1;
+      }
     }
   }
 
-  return { acceptedRows, quarantinedRows };
+  return { acceptedRows, quarantinedRows, purgedReviewRowCount };
+}
+
+async function getExistingDirectorRows(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  tabTitle: string
+): Promise<any[][]> {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${tabTitle}'!A2:${DIRECTOR_HEADER_END_COLUMN}`,
+    });
+    return response.data.values ?? [];
+  } catch {
+    return [];
+  }
 }
 
 async function writeRowsToTab(
@@ -823,9 +925,14 @@ export async function syncMasterSheetTab(options: {
   const reviewTabTitle = options.reviewTabTitle ?? DEFAULT_REVIEW_TAB_TITLE;
   const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
   const { rows, sourceTabs } = await collectRowsFromSourceTabs(sheets, sourceSpreadsheetId, includePrefixes, tabTitle, reviewTabTitle);
-  const { acceptedRows, quarantinedRows } = classifyMergedRows(rows);
+  const { acceptedRows, quarantinedRows, purgedReviewRowCount } = classifyMergedRows(rows, {
+    reviewRetentionCutoff: getReviewQueueRetentionCutoff(),
+  });
 
   const finalize = async (targetSpreadsheetId: string, fallbackUsed: boolean) => {
+    const existingMasterRows = await getExistingDirectorRows(sheets, targetSpreadsheetId, tabTitle);
+    const existingMasterKeys = new Set(existingMasterRows.map(serializeDirectorRow));
+    const newMasterRowCount = acceptedRows.filter((row) => !existingMasterKeys.has(serializeDirectorRow(row))).length;
     const { masterTabTitle, reviewTabTitle: ensuredReviewTabTitle } = await writeMergedRowsToWorkbook(
       sheets,
       targetSpreadsheetId,
@@ -844,6 +951,8 @@ export async function syncMasterSheetTab(options: {
       source_tabs: sourceTabs.length,
       row_count: acceptedRows.length,
       quarantined_row_count: quarantinedRows.length,
+      new_master_row_count: newMasterRowCount,
+      purged_review_row_count: purgedReviewRowCount,
       fallback_used: fallbackUsed,
     });
 
@@ -855,6 +964,8 @@ export async function syncMasterSheetTab(options: {
       fallback_used: fallbackUsed,
       quarantined_row_count: quarantinedRows.length,
       review_tab_title: ensuredReviewTabTitle,
+      new_master_row_count: newMasterRowCount,
+      purged_review_row_count: purgedReviewRowCount,
     };
   };
 
