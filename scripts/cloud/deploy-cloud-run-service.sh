@@ -99,6 +99,23 @@ if [[ -n "${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}" ]]; then
   SECRET_ENVS+=",LEAD_ALERT_WEBHOOK_URL=${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}"
 fi
 
+REMOVE_ENV_VARS=(
+  DATABASE_URL
+  SCHEDULE_RUN_TOKEN
+  SHEETS_KEY
+  SBR_CDP_URL
+)
+
+REMOVE_SECRETS=(
+  SCHEDULE_ALERT_WEBHOOK_URL
+)
+
+if [[ -n "${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}" ]]; then
+  REMOVE_ENV_VARS+=(LEAD_ALERT_WEBHOOK_URL)
+else
+  REMOVE_SECRETS+=(LEAD_ALERT_WEBHOOK_URL)
+fi
+
 DEPLOY_ARGS=(
   --project="${GCP_PROJECT_ID}"
   --region="${GCP_REGION}"
@@ -109,6 +126,14 @@ DEPLOY_ARGS=(
   --env-vars-file="${ENV_VARS_FILE}"
   --set-secrets="${SECRET_ENVS}"
 )
+
+if [[ "${#REMOVE_ENV_VARS[@]}" -gt 0 ]]; then
+  DEPLOY_ARGS+=(--remove-env-vars="$(IFS=,; echo "${REMOVE_ENV_VARS[*]}")")
+fi
+
+if [[ "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
+  DEPLOY_ARGS+=(--remove-secrets="$(IFS=,; echo "${REMOVE_SECRETS[*]}")")
+fi
 
 if [[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]]; then
   DEPLOY_ARGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE_CONNECTION_NAME}")
@@ -123,6 +148,8 @@ if [[ "${DRY_RUN}" == "1" ]]; then
     "service=${SERVICE_NAME}" \
     "env_vars_file=${ENV_VARS_FILE}" \
     "secret_envs=DATABASE_URL,SCHEDULE_RUN_TOKEN,SHEETS_KEY,SBR_CDP_URL" \
+    "remove_env_vars=$(IFS=,; echo "${REMOVE_ENV_VARS[*]}")" \
+    "remove_secrets=$(IFS=,; echo "${REMOVE_SECRETS[*]}")" \
     "cloudsql_attached=$([[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]] && echo true || echo false)"
   exit 0
 fi
