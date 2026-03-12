@@ -7,8 +7,10 @@ set -euo pipefail
 : "${TIME_ZONE:=America/New_York}"
 : "${API_BASE_URL:?Set API_BASE_URL, e.g. https://your-service-url}"
 : "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
-: "${CA_JOB_NAME:=${JOB_NAME}-ca-sos}"
-: "${NYC_JOB_NAME:=${JOB_NAME}-nyc-acris}"
+: "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
+: "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
+: "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
+: "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
 
 # Retry policy requirements.
 : "${RETRY_COUNT:=3}"
@@ -54,12 +56,12 @@ create_or_update_job () {
   fi
 }
 
-# CA Tue/Wed at 09:00 local timezone.
-create_or_update_job "${CA_JOB_NAME}" "0 9 * * 2,3" '{"site":"ca_sos","slot":"morning"}'
+# Daily morning + afternoon runs for each site.
+create_or_update_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}'
+create_or_update_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}'
+create_or_update_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}'
+create_or_update_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}'
 
-# NYC Tue/Wed/Thu/Fri at 14:00 local timezone.
-create_or_update_job "${NYC_JOB_NAME}" "0 14 * * 2,3,4,5" '{"site":"nyc_acris","slot":"afternoon"}'
-
-echo "Scheduler jobs upserted for ${RUN_URI} (CA Tue/Wed 09:00, NYC Tue-Fri 14:00 ${TIME_ZONE})."
+echo "Scheduler jobs upserted for ${RUN_URI} (CA 06:00+12:00, NYC 10:00+14:00 daily ${TIME_ZONE})."
 
 

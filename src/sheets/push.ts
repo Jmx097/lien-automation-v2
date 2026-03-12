@@ -442,6 +442,62 @@ export async function pushToSheetsForTab(
   return { uploaded: rows.length, tab_title: tabTitle };
 }
 
+
+
+export async function syncMasterSheetTab(options: {
+  tabTitle?: string;
+  includePrefixes?: string[];
+} = {}): Promise<{ tab_title: string; row_count: number; source_tabs: number }> {
+  const spreadsheetId = getRequiredEnv('SHEET_ID');
+  const sheets = getSheetsClient();
+  const tabTitle = options.tabTitle ?? 'Master';
+  const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
+
+  const existingTitles = await listSheetTitles(sheets, spreadsheetId);
+  const sourceTabs = existingTitles.filter((title) =>
+    title !== tabTitle && includePrefixes.some((prefix) => title.startsWith(prefix))
+  );
+
+  const rows: any[][] = [];
+  for (const sourceTab of sourceTabs) {
+    const range = `'${sourceTab}'!A2:${HEADER_END_COLUMN}`;
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+    const values = response.data.values ?? [];
+    for (const valueRow of values) rows.push(valueRow);
+  }
+
+  const ensuredTabTitle = await ensureSheetTabExists(sheets, spreadsheetId, tabTitle);
+  await initializeSheetHeaderRow(sheets, spreadsheetId, ensuredTabTitle);
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `'${ensuredTabTitle}'!A2:${HEADER_END_COLUMN}`,
+  });
+
+  if (rows.length > 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${ensuredTabTitle}'!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: rows },
+    });
+  }
+
+  log({
+    stage: 'sheets_master_sync_complete',
+    spreadsheet_id_suffix: spreadsheetId.slice(-6),
+    tab_title: ensuredTabTitle,
+    source_tabs: sourceTabs.length,
+    row_count: rows.length,
+  });
+
+  return {
+    tab_title: ensuredTabTitle,
+    row_count: rows.length,
+    source_tabs: sourceTabs.length,
+  };
+}
+
 export async function pushRunToNewSheetTab(
   rows: LienRecord[],
   options: {
