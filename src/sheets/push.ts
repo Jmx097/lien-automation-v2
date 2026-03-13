@@ -9,7 +9,8 @@ const INVALID_SHEET_TITLE_CHARS_REGEX = /[[\]/?*:]/g;
 const DEFAULT_MERGED_SHEET_ID = '1qa32AEUMC4TYHh4G6AV4msRS4GjQQZFTNPpYHMh4n5A';
 const DEFAULT_MASTER_TAB_TITLE = 'Master';
 const DEFAULT_REVIEW_TAB_TITLE = 'Review_Queue';
-const MIN_DIRECTOR_CONFIDENCE = 0.85;
+const DEFAULT_DIRECTOR_MIN_CONFIDENCE_ACCEPT = 0.85;
+const DEFAULT_DIRECTOR_MIN_CONFIDENCE_REVIEW = 0.75;
 const DEFAULT_REVIEW_QUEUE_RETENTION_DAYS = 7;
 
 export const DIRECTOR_SHEET_HEADERS = [
@@ -269,11 +270,34 @@ export interface MasterSheetSyncResult {
   review_tab_title: string;
   new_master_row_count: number;
   purged_review_row_count: number;
+  review_summary: ReviewClassificationSummary;
 }
 
 type BuildRowOptions = {
   runPartial?: boolean;
 };
+
+type ReviewReason =
+  | 'missing_required_fields'
+  | 'missing_name_fields'
+  | 'name_conflict'
+  | 'address_incomplete'
+  | 'legacy_missing_metadata'
+  | 'partial_run'
+  | 'low_confidence';
+
+type ReviewReasonCategory = 'hard' | 'soft';
+
+type DirectorCandidateDisposition = 'accepted' | 'quarantined';
+
+type ReviewReasonCounts = Partial<Record<ReviewReason | 'conflict_lower_confidence' | 'conflict_ambiguous' | 'missing_identity' | 'quarantined', number>>;
+
+export interface ReviewClassificationSummary {
+  accepted_row_count: number;
+  quarantined_row_count: number;
+  purged_review_row_count: number;
+  review_reason_counts: ReviewReasonCounts;
+}
 
 type DirectorCandidate = {
   directorRow: any[];
@@ -281,7 +305,10 @@ type DirectorCandidate = {
   fileNumber: string;
   runPartial: boolean;
   confidenceScore: number;
-  reviewReasons: string[];
+  reviewReasons: ReviewReason[];
+  hardReasons: ReviewReason[];
+  softReasons: ReviewReason[];
+  disposition: DirectorCandidateDisposition;
   sourceTabCapturedAt?: Date;
 };
 
@@ -299,6 +326,18 @@ function getReviewQueueRetentionDays(): number {
   const configured = Number.parseInt(process.env.REVIEW_QUEUE_RETENTION_DAYS ?? '', 10);
   if (!Number.isFinite(configured) || configured < 0) return DEFAULT_REVIEW_QUEUE_RETENTION_DAYS;
   return configured;
+}
+
+function getDirectorMinConfidenceAccept(): number {
+  const configured = Number.parseFloat(process.env.DIRECTOR_MIN_CONFIDENCE_ACCEPT ?? '');
+  if (!Number.isFinite(configured)) return DEFAULT_DIRECTOR_MIN_CONFIDENCE_ACCEPT;
+  return Math.max(0, Math.min(configured, 1));
+}
+
+function getDirectorMinConfidenceReview(): number {
+  const configured = Number.parseFloat(process.env.DIRECTOR_MIN_CONFIDENCE_REVIEW ?? '');
+  if (!Number.isFinite(configured)) return DEFAULT_DIRECTOR_MIN_CONFIDENCE_REVIEW;
+  return Math.max(0, Math.min(configured, 1));
 }
 
 function getReviewQueueRetentionCutoff(now = new Date()): Date | undefined {
@@ -663,6 +702,44 @@ function directorRowFromSourceRow(row: any[]): any[] {
   return row.slice(0, DIRECTOR_SHEET_HEADERS.length);
 }
 
+function reviewReasonCategory(reason: ReviewReason): ReviewReasonCategory {
+  switch (reason) {
+    case 'missing_required_fields':
+    case 'missing_name_fields':
+    case 'name_conflict':
+    case 'address_incomplete':
+    case 'legacy_missing_metadata':
+      return 'hard';
+    case 'partial_run':
+    case 'low_confidence':
+      return 'soft';
+  }
+}
+
+function categorizeReviewReasons(reviewReasons: ReviewReason[]): { hardReasons: ReviewReason[]; softReasons: ReviewReason[] } {
+  const hardReasons: ReviewReason[] = [];
+  const softReasons: ReviewReason[] = [];
+
+  for (const reason of reviewReasons) {
+    if (reviewReasonCategory(reason) === 'hard') {
+      hardReasons.push(reason);
+    } else {
+      softReasons.push(reason);
+    }
+  }
+
+  return { hardReasons, softReasons };
+}
+
+function resolveCandidateDisposition(hardReasons: ReviewReason[], softReasons: ReviewReason[], confidenceScore: number): DirectorCandidateDisposition {
+  if (hardReasons.length > 0) return 'quarantined';
+
+  const reviewThreshold = getDirectorMinConfidenceReview();
+  const softTolerance = confidenceScore < reviewThreshold ? 0 : 1;
+
+  return softReasons.length > softTolerance ? 'quarantined' : 'accepted';
+}
+
 function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
   const row = sourceRow.row;
   const directorRow = directorRowFromSourceRow(row);
@@ -670,7 +747,7 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
   const fileNumber = stringValue(row[SOURCE_METADATA_COLUMN.fileNumber]);
   const runPartial = parseRunPartial(row[SOURCE_METADATA_COLUMN.runPartial]);
   const confidenceScore = parseConfidence(directorRow[DIRECTOR_COLUMN.confidenceScore]);
-  const reviewReasons: string[] = [];
+  const reviewReasons: ReviewReason[] = [];
 
   const requiredValues = [
     directorRow[DIRECTOR_COLUMN.siteId],
@@ -714,7 +791,7 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
     reviewReasons.push('partial_run');
   }
 
-  if (confidenceScore < MIN_DIRECTOR_CONFIDENCE) {
+  if (confidenceScore < getDirectorMinConfidenceAccept()) {
     reviewReasons.push('low_confidence');
   }
 
@@ -722,13 +799,19 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
     reviewReasons.push('legacy_missing_metadata');
   }
 
+  const dedupedReviewReasons = Array.from(new Set(reviewReasons));
+  const { hardReasons, softReasons } = categorizeReviewReasons(dedupedReviewReasons);
+
   return {
     directorRow,
     recordSource,
     fileNumber,
     runPartial,
     confidenceScore,
-    reviewReasons: Array.from(new Set(reviewReasons)),
+    reviewReasons: dedupedReviewReasons,
+    hardReasons,
+    softReasons,
+    disposition: resolveCandidateDisposition(hardReasons, softReasons, confidenceScore),
     sourceTabCapturedAt: sourceRow.sourceTabCapturedAt,
   };
 }
@@ -747,14 +830,74 @@ function shouldRetainReviewCandidate(candidate: DirectorCandidate, cutoff?: Date
   return candidate.sourceTabCapturedAt >= cutoff;
 }
 
-function classifyMergedRows(
+function candidateSortValue(candidate: DirectorCandidate): [number, number, number, number, number] {
+  return [
+    candidate.hardReasons.length,
+    candidate.reviewReasons.length,
+    -candidate.confidenceScore,
+    candidate.runPartial ? 1 : 0,
+    -(candidate.sourceTabCapturedAt?.getTime() ?? 0),
+  ];
+}
+
+function compareCandidatePreference(left: DirectorCandidate, right: DirectorCandidate): number {
+  const leftValue = candidateSortValue(left);
+  const rightValue = candidateSortValue(right);
+
+  for (let index = 0; index < leftValue.length; index += 1) {
+    const delta = leftValue[index] - rightValue[index];
+    if (delta !== 0) return delta;
+  }
+
+  return 0;
+}
+
+function buildQuarantineReason(candidate: DirectorCandidate, fallbackReason: 'conflict_lower_confidence' | 'conflict_ambiguous' | 'missing_identity' | 'quarantined'): string {
+  return candidate.reviewReasons.join('|') || fallbackReason;
+}
+
+function accumulateReviewReasonCounts(counts: ReviewReasonCounts, reasonText: string): void {
+  const reasons = reasonText
+    .split('|')
+    .map((reason) => reason.trim())
+    .filter(Boolean) as Array<keyof ReviewReasonCounts>;
+
+  for (const reason of reasons) {
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+}
+
+function quarantineCandidate(
+  candidate: DirectorCandidate,
+  quarantinedRows: any[][],
+  reviewReasonCounts: ReviewReasonCounts,
+  cutoff: Date | undefined,
+  fallbackReason: 'conflict_lower_confidence' | 'conflict_ambiguous' | 'missing_identity' | 'quarantined'
+): boolean {
+  const reason = buildQuarantineReason(candidate, fallbackReason);
+  if (!shouldRetainReviewCandidate(candidate, cutoff)) {
+    return false;
+  }
+
+  quarantinedRows.push(buildReviewRow(candidate, reason));
+  accumulateReviewReasonCounts(reviewReasonCounts, reason);
+  return true;
+}
+
+export function classifyMergedRows(
   rows: CollectedSourceRow[],
   options: { reviewRetentionCutoff?: Date } = {}
-): { acceptedRows: any[][]; quarantinedRows: any[][]; purgedReviewRowCount: number } {
+): {
+  acceptedRows: any[][];
+  quarantinedRows: any[][];
+  purgedReviewRowCount: number;
+  reviewSummary: ReviewClassificationSummary;
+} {
   const candidates = rows.map(buildCandidate);
   const acceptedRows: any[][] = [];
   const quarantinedRows: any[][] = [];
   let purgedReviewRowCount = 0;
+  const reviewReasonCounts: ReviewReasonCounts = {};
   const grouped = new Map<string, DirectorCandidate[]>();
 
   for (const candidate of candidates) {
@@ -763,10 +906,14 @@ function classifyMergedRows(
       : '';
 
     if (!key) {
-      const reason = candidate.reviewReasons.join('|') || 'missing_identity';
-      if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
-        quarantinedRows.push(buildReviewRow(candidate, reason));
-      } else {
+      const retained = quarantineCandidate(
+        candidate,
+        quarantinedRows,
+        reviewReasonCounts,
+        options.reviewRetentionCutoff,
+        'missing_identity'
+      );
+      if (!retained) {
         purgedReviewRowCount += 1;
       }
       continue;
@@ -778,62 +925,64 @@ function classifyMergedRows(
   }
 
   for (const bucket of grouped.values()) {
-    const cleanCandidates = bucket.filter((candidate) => candidate.reviewReasons.length === 0);
+    const acceptedCandidates = bucket.filter((candidate) => candidate.disposition === 'accepted');
 
-    if (cleanCandidates.length === 1) {
-      acceptedRows.push(cleanCandidates[0].directorRow);
-      for (const candidate of bucket.filter((entry) => entry !== cleanCandidates[0])) {
-        if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
-          quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'duplicate_lower_confidence'));
-        } else {
-          purgedReviewRowCount += 1;
-        }
-      }
-      continue;
-    }
-
-    if (cleanCandidates.length > 1) {
-      const highestConfidence = Math.max(...cleanCandidates.map((candidate) => candidate.confidenceScore));
-      const highest = cleanCandidates.filter((candidate) => candidate.confidenceScore === highestConfidence);
-
-      if (highest.length === 1) {
-        acceptedRows.push(highest[0].directorRow);
-        for (const candidate of bucket.filter((entry) => entry !== highest[0])) {
-          const reason = candidate.reviewReasons.length > 0
-            ? candidate.reviewReasons.join('|')
-            : 'conflict_lower_confidence';
-          if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
-            quarantinedRows.push(buildReviewRow(candidate, reason));
-          } else {
-            purgedReviewRowCount += 1;
-          }
-        }
-        continue;
-      }
-
+    if (acceptedCandidates.length === 0) {
       for (const candidate of bucket) {
-        const reason = candidate.reviewReasons.length > 0
-          ? candidate.reviewReasons.join('|')
-          : 'conflict_ambiguous';
-        if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
-          quarantinedRows.push(buildReviewRow(candidate, reason));
-        } else {
-          purgedReviewRowCount += 1;
-        }
+        const retained = quarantineCandidate(
+          candidate,
+          quarantinedRows,
+          reviewReasonCounts,
+          options.reviewRetentionCutoff,
+          'quarantined'
+        );
+        if (!retained) purgedReviewRowCount += 1;
       }
       continue;
     }
 
-    for (const candidate of bucket) {
-      if (shouldRetainReviewCandidate(candidate, options.reviewRetentionCutoff)) {
-        quarantinedRows.push(buildReviewRow(candidate, candidate.reviewReasons.join('|') || 'quarantined'));
-      } else {
-        purgedReviewRowCount += 1;
+    const sortedAccepted = [...acceptedCandidates].sort(compareCandidatePreference);
+    const preferredCandidate = sortedAccepted[0];
+    const equallyPreferred = sortedAccepted.filter((candidate) => compareCandidatePreference(candidate, preferredCandidate) === 0);
+
+    if (equallyPreferred.length !== 1) {
+      for (const candidate of bucket) {
+        const retained = quarantineCandidate(
+          candidate,
+          quarantinedRows,
+          reviewReasonCounts,
+          options.reviewRetentionCutoff,
+          'conflict_ambiguous'
+        );
+        if (!retained) purgedReviewRowCount += 1;
       }
+      continue;
+    }
+
+    acceptedRows.push(preferredCandidate.directorRow);
+    for (const candidate of bucket.filter((entry) => entry !== preferredCandidate)) {
+      const retained = quarantineCandidate(
+        candidate,
+        quarantinedRows,
+        reviewReasonCounts,
+        options.reviewRetentionCutoff,
+        'conflict_lower_confidence'
+      );
+      if (!retained) purgedReviewRowCount += 1;
     }
   }
 
-  return { acceptedRows, quarantinedRows, purgedReviewRowCount };
+  return {
+    acceptedRows,
+    quarantinedRows,
+    purgedReviewRowCount,
+    reviewSummary: {
+      accepted_row_count: acceptedRows.length,
+      quarantined_row_count: quarantinedRows.length,
+      purged_review_row_count: purgedReviewRowCount,
+      review_reason_counts: reviewReasonCounts,
+    },
+  };
 }
 
 async function getExistingDirectorRows(
@@ -925,7 +1074,7 @@ export async function syncMasterSheetTab(options: {
   const reviewTabTitle = options.reviewTabTitle ?? DEFAULT_REVIEW_TAB_TITLE;
   const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
   const { rows, sourceTabs } = await collectRowsFromSourceTabs(sheets, sourceSpreadsheetId, includePrefixes, tabTitle, reviewTabTitle);
-  const { acceptedRows, quarantinedRows, purgedReviewRowCount } = classifyMergedRows(rows, {
+  const { acceptedRows, quarantinedRows, purgedReviewRowCount, reviewSummary } = classifyMergedRows(rows, {
     reviewRetentionCutoff: getReviewQueueRetentionCutoff(),
   });
 
@@ -951,6 +1100,8 @@ export async function syncMasterSheetTab(options: {
       source_tabs: sourceTabs.length,
       row_count: acceptedRows.length,
       quarantined_row_count: quarantinedRows.length,
+      accepted_row_count: reviewSummary.accepted_row_count,
+      review_reason_counts: reviewSummary.review_reason_counts,
       new_master_row_count: newMasterRowCount,
       purged_review_row_count: purgedReviewRowCount,
       fallback_used: fallbackUsed,
@@ -966,6 +1117,7 @@ export async function syncMasterSheetTab(options: {
       review_tab_title: ensuredReviewTabTitle,
       new_master_row_count: newMasterRowCount,
       purged_review_row_count: purgedReviewRowCount,
+      review_summary: reviewSummary,
     };
   };
 

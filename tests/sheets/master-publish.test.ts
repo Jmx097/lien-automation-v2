@@ -126,6 +126,8 @@ describe('syncMasterSheetTab', () => {
     process.env.SHEET_ID = 'source-sheet';
     process.env.MERGED_SHEET_ID = 'target-sheet';
     process.env.REVIEW_QUEUE_RETENTION_DAYS = '7';
+    delete process.env.DIRECTOR_MIN_CONFIDENCE_ACCEPT;
+    delete process.env.DIRECTOR_MIN_CONFIDENCE_REVIEW;
     workbookAccess.set('source-sheet', { read: true, write: true });
     workbookAccess.set('target-sheet', { read: true, write: true });
   });
@@ -182,6 +184,11 @@ describe('syncMasterSheetTab', () => {
       fallback_used: false,
       quarantined_row_count: 0,
       review_tab_title: 'Review_Queue',
+      review_summary: expect.objectContaining({
+        accepted_row_count: 3,
+        quarantined_row_count: 0,
+        review_reason_counts: {},
+      }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
       sourceRow({ 0: 11, 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
@@ -207,23 +214,17 @@ describe('syncMasterSheetTab', () => {
     const result = await syncMasterSheetTab();
 
     expect(result).toEqual(expect.objectContaining({
-      row_count: 1,
+      row_count: 2,
       source_tabs: 2,
       target_spreadsheet_id: 'source-sheet',
       fallback_used: true,
-      quarantined_row_count: 1,
+      quarantined_row_count: 0,
     }));
     expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([
       sourceRow({ 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
+      sourceRow({ 16: 'ny-file-1', 17: '1' }).slice(0, 15),
     ]);
-    expect(ensureWorkbook('source-sheet').get('Review_Queue')?.rows).toEqual([
-      [
-        ...sourceRow({ 16: 'ny-file-1', 17: '1' }).slice(0, 15),
-        'nyc_acris',
-        'ny-file-1',
-        'partial_run',
-      ],
-    ]);
+    expect(ensureWorkbook('source-sheet').get('Review_Queue')?.rows).toEqual([]);
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([Array(15).fill('stale-target')]);
   });
 
@@ -238,9 +239,90 @@ describe('syncMasterSheetTab', () => {
     expect(result).toEqual(expect.objectContaining({
       row_count: 0,
       quarantined_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          low_confidence: 1,
+        }),
+      }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toContain('low_confidence');
+  });
+
+  it('accepts otherwise-clean mid-confidence rows when they are above the review threshold', async () => {
+    process.env.DIRECTOR_MIN_CONFIDENCE_ACCEPT = '0.85';
+    process.env.DIRECTOR_MIN_CONFIDENCE_REVIEW = '0.75';
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [sourceRow({ 14: 0.8, 16: 'ny-mid-confidence' })],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 0,
+      review_summary: expect.objectContaining({
+        accepted_row_count: 1,
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 14: 0.8, 16: 'ny-mid-confidence' }).slice(0, 15),
+    ]);
+  });
+
+  it('still quarantines mid-confidence rows when another soft flag is present', async () => {
+    process.env.DIRECTOR_MIN_CONFIDENCE_ACCEPT = '0.85';
+    process.env.DIRECTOR_MIN_CONFIDENCE_REVIEW = '0.75';
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [sourceRow({ 14: 0.8, 16: 'ny-mid-confidence-partial', 17: '1' })],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          low_confidence: 1,
+          partial_run: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
+      [
+        ...sourceRow({ 14: 0.8, 16: 'ny-mid-confidence-partial', 17: '1' }).slice(0, 15),
+        'nyc_acris',
+        'ny-mid-confidence-partial',
+        'partial_run|low_confidence',
+      ],
+    ]);
+  });
+
+  it('still quarantines partial-run rows when they also have a hard validation issue', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [
+        sourceRow({ 10: '', 11: '', 13: '', 16: 'ny-partial-hard-fail', 17: '1' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          missing_required_fields: 1,
+          address_incomplete: 1,
+          partial_run: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toContain('missing_required_fields');
   });
 
   it('keeps only the highest-confidence duplicate row in Master and quarantines the other copy', async () => {
@@ -262,6 +344,89 @@ describe('syncMasterSheetTab', () => {
       sourceRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }).slice(0, 15),
     ]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toBe('conflict_lower_confidence');
+  });
+
+  it('prefers a non-partial duplicate over an equally confident partial duplicate', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC: [
+        sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '1' }),
+        sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '0' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 1,
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '0' }).slice(0, 15),
+    ]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
+      [
+        ...sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '1' }).slice(0, 15),
+        'nyc_acris',
+        'duplicate-partial-file',
+        'partial_run',
+      ],
+    ]);
+  });
+
+  it('prefers the newer duplicate when confidence and review flags are otherwise tied', async () => {
+    seedWorkbook('source-sheet', {
+      'Scheduled_NYC_03-12-2026_to_03-12-2026_20260312T010101_Pacific': [
+        sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-newer-file' }),
+      ],
+      'Scheduled_NYC_03-13-2026_to_03-13-2026_20260313T010101_Pacific': [
+        sourceRow({ 2: '125', 14: 0.9, 16: 'duplicate-newer-file' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          conflict_lower_confidence: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      sourceRow({ 2: '125', 14: 0.9, 16: 'duplicate-newer-file' }).slice(0, 15),
+    ]);
+  });
+
+  it('quarantines truly ambiguous duplicates when ranking still ties', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_NYC_A: [
+        sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-ambiguous-file' }),
+      ],
+      Scheduled_NYC_B: [
+        sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-ambiguous-file' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 2,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          conflict_ambiguous: 2,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[17])).toEqual([
+      'conflict_ambiguous',
+      'conflict_ambiguous',
+    ]);
   });
 
   it('purges quarantined rows older than the review retention window while keeping recent ones', async () => {

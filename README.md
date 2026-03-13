@@ -142,6 +142,8 @@ Important optional environment variables:
 
 - `MERGED_SHEET_ID` points the scheduled-run merged `Master` publish at a separate Google Sheet. When omitted, the app uses the currently configured default destination sheet and falls back to the source workbook `Master` tab if that destination is not reachable yet.
 - `REVIEW_QUEUE_RETENTION_DAYS` controls how long quarantined rows stay in `Review_Queue` before they are dropped during the next merge rebuild. Default: `7`.
+- `DIRECTOR_MIN_CONFIDENCE_ACCEPT` controls when a row is considered fully confident for `Master` publishing. Default: `0.85`.
+- `DIRECTOR_MIN_CONFIDENCE_REVIEW` controls when a low-confidence row must be sent to `Review_Queue` even if it is otherwise clean. Default: `0.75`.
 - `LEAD_ALERT_EMAIL_TO` controls who receives the `New leads!` notification. Default: `antigravity1@timberlinetax.com`.
 - `LEAD_ALERT_WEBHOOK_URL` lets the app post the generic HTML notification payload to an external mailer/automation layer.
 - `LEAD_ALERT_RESEND_API_KEY` plus `LEAD_ALERT_EMAIL_FROM` enables direct Resend delivery for the `New leads!` email.
@@ -426,7 +428,7 @@ bash scripts/cloud/verify-cloud-scheduler-jobs.sh
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`. It is used for missed runs, connectivity alerts, and successful-run quality anomalies.
 5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
 6. Successful scheduled runs write raw `Scheduled_*` tabs into the source workbook (`SHEET_ID`) and then publish a filtered merged `Master` dataset to the destination workbook (`MERGED_SHEET_ID` or the built-in default target). If the destination workbook is not reachable yet, the merged `Master` publish falls back to the source workbook so scheduled runs remain operational.
-7. The director-facing `Master` sheet now publishes only rows that have all required fields, `partial = 0`, and `ConfidenceScore >= 0.85`. Questionable rows are written to `Review_Queue` instead of being mixed into `Master`.
+7. The director-facing `Master` sheet publishes rows that pass structural validation and duplicate resolution. `partial_run` is now treated as a soft review signal instead of an automatic quarantine, and confidence thresholds are configurable through `DIRECTOR_MIN_CONFIDENCE_ACCEPT` / `DIRECTOR_MIN_CONFIDENCE_REVIEW`. Questionable rows are written to `Review_Queue` instead of being mixed into `Master`.
 8. Scheduled runs now keep one logical run record across retryable failures, recording `attempt_count`, `max_attempts`, `retried`, and `retry_exhausted` while using bounded backoff for transient scrape and sheet-export failures.
 9. Successful scheduled runs also compare their row-count and quality metrics against recent successful baselines and emit advisory anomaly alerts without changing the final run status.
 
