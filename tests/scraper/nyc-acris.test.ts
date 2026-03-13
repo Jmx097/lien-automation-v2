@@ -3,6 +3,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   chooseBetterDebtorName,
+  extractNYCAcrisDetailFromHtml,
   extractNYCAcrisFieldsFromText,
   extractDocIdsFromResultsHtml,
   extractViewerArtifactFromHtml,
@@ -35,6 +36,53 @@ describe('nyc acris fixture parsing', () => {
     expect(artifact.title).toContain('New York Web Public Inquiry');
     expect(artifact.viewerSrc).toContain('/DS/DocumentSearch/DocumentImageVtu');
     expect(artifact.imageUrls).toEqual(['https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?img=1']);
+  });
+
+  it('extracts structured detail-page fields for audited ACRIS records', () => {
+    const html = `
+      <html>
+        <body>
+          <h1>Detailed Document Information</h1>
+          <table>
+            <tr><td>DOC. DATE:</td><td>2/25/2026</td></tr>
+            <tr><td>RECORDED / FILED:</td><td>3/12/2026 5:06:05 PM</td></tr>
+            <tr><td>DOC. AMOUNT:</td><td>$75,585.60</td></tr>
+          </table>
+          <div>PARTY 1</div>
+          <table>
+            <tr>
+              <td>ALTAGRACIA JIMENEZ, SUSANA</td>
+              <td>3018 KINGSBRIDGE AVE APT 1N</td>
+              <td></td>
+              <td>BRONX</td>
+              <td>NY</td>
+              <td>10463-5104</td>
+            </tr>
+          </table>
+          <div>PARTY 2</div>
+          <table>
+            <tr>
+              <td>INTERNAL REVENUE SERVICE</td>
+              <td>135 HIGH STREET, STOP 155</td>
+              <td></td>
+              <td>HARTFORD</td>
+              <td>CT</td>
+              <td>06103</td>
+            </tr>
+          </table>
+        </body>
+      </html>
+    `;
+
+    expect(extractNYCAcrisDetailFromHtml(html)).toEqual({
+      filingDate: '2/25/2026',
+      recordedFiledAt: '3/12/2026 5:06:05 PM',
+      debtorName: 'ALTAGRACIA JIMENEZ, SUSANA',
+      debtorAddress: '3018 KINGSBRIDGE AVE APT 1N, BRONX, NY 10463-5104',
+      securedPartyName: 'INTERNAL REVENUE SERVICE',
+      securedPartyAddress: '135 HIGH STREET, STOP 155, HARTFORD, CT 06103',
+      amount: '75585',
+    });
   });
 
   it('accepts index html when ACRIS shell markers are present', () => {
@@ -93,6 +141,23 @@ describe('nyc acris fixture parsing', () => {
       hasToken: true,
       hasResultMarker: true,
       reason: 'result_markers_present',
+    });
+  });
+
+  it('accepts detail-page html when detail markers are present', () => {
+    const html = `
+      <html>
+        <body>
+          <h1>Detailed Document Information</h1>
+          <div>DOC. DATE</div>
+          <div>PARTY 1</div>
+        </body>
+      </html>
+    `;
+
+    expect(inspectNYCAcrisPageReadiness(html, 'detail')).toMatchObject({
+      ok: true,
+      reason: 'detail_markers_present',
     });
   });
 

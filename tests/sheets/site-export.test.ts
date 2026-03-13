@@ -198,6 +198,35 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][13]).toBe('11201');
   });
 
+  it('splits comma-ordered personal names from ACRIS detail pages correctly', () => {
+    const rows = buildRowValues([
+      {
+        state: 'NY',
+        source: 'nyc_acris',
+        county: 'New York City',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'ALTAGRACIA JIMENEZ, SUSANA',
+        debtor_address: '3018 KINGSBRIDGE AVE APT 1N, BRONX, NY 10463-5104',
+        file_number: '2026030400357008',
+        secured_party_name: 'Internal Revenue Service',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '02/25/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'FEDERAL LIEN-IRS',
+        pdf_filename: '',
+        processed: true,
+        confidence_score: 0.98,
+      },
+    ]);
+
+    expect(rows[0][8]).toBe('SUSANA');
+    expect(rows[0][9]).toBe('ALTAGRACIA JIMENEZ');
+    expect(rows[0][10]).toBe('3018 KINGSBRIDGE AVE APT 1N');
+    expect(rows[0][11]).toBe('BRONX');
+    expect(rows[0][13]).toBe('10463');
+  });
+
   it('leaves structured address fields blank when OCR address text is unusable', () => {
     const rows = buildRowValues([
       {

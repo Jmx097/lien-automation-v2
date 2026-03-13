@@ -804,9 +804,13 @@ export function chooseBetterDebtorName(currentName: string, candidateName: strin
 }
 
 function joinAddressParts(parts: Array<string | undefined>): string | undefined {
-  const cleaned = parts.map((part) => normalizeText(part ?? '')).filter(Boolean);
-  if (cleaned.length === 0) return undefined;
-  return normalizeOcrAddress(cleaned.join(', ')) ?? normalizeOcrAddress(cleaned.join(' '));
+  const [address1, address2, city, state, zip] = parts.map((part) => normalizeText(part ?? ''));
+  const streetParts = [address1, address2].filter(Boolean);
+  const locality = [city, state].filter(Boolean).join(', ');
+  const tail = [locality, zip].filter(Boolean).join(' ');
+  const combined = [...streetParts, tail].filter(Boolean);
+  if (combined.length === 0) return undefined;
+  return normalizeOcrAddress(combined.join(', ')) ?? normalizeOcrAddress(combined.join(' '));
 }
 
 function normalizeCurrencyToWholeDollars(raw: string | undefined): string | undefined {
@@ -822,6 +826,12 @@ function normalizePartyNameFromDetail(value: string | undefined): string | undef
   return normalized || undefined;
 }
 
+function normalizeFreeformPartyName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const normalized = normalizeText(value);
+  return normalized || undefined;
+}
+
 export function extractNYCAcrisDetailFromHtml(html: string): DetailExtraction {
   const readLabel = (labelPattern: RegExp): string | undefined => {
     const match = html.match(labelPattern);
@@ -833,33 +843,37 @@ export function extractNYCAcrisDetailFromHtml(html: string): DetailExtraction {
     return raw || undefined;
   };
 
-  const readParty = (label: string) => {
-    const blockMatch = html.match(new RegExp(`${label}[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>`, 'i'));
+  const readParty = (label: string, normalizeName: (value: string | undefined) => string | undefined) => {
+    const blockMatch = html.match(new RegExp(`${label}[\\s\\S]*?(<tr[^>]*>[\\s\\S]*?<\\/tr>)`, 'i'));
     const block = blockMatch?.[1] ?? '';
-    const rowMatch = block.match(/<tr[^>]*>([\s\S]*?)<\/tr>/i);
-    const row = rowMatch?.[1] ?? '';
-    const cells = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)]
-      .map((match) =>
-        normalizeText(
-          match[1]
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/gi, ' ')
+    const rows = [...block.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
+    const cells =
+      rows
+        .map((row) =>
+          [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+            .map((match) =>
+              normalizeText(
+                match[1]
+                  .replace(/<[^>]+>/g, ' ')
+                  .replace(/&nbsp;/gi, ' ')
+              )
+            )
         )
-      )
-      .filter(Boolean);
+        .sort((left, right) => right.length - left.length)[0] ?? [];
 
-    if (cells.length < 6) {
+    if (cells.length < 5) {
       return { name: undefined, address: undefined };
     }
 
+    const [name, address1, address2, city, state, zip] = cells;
     return {
-      name: normalizePartyNameFromDetail(cells[0]),
-      address: joinAddressParts([cells[1], cells[2], cells[3], cells[4], cells[5]]),
+      name: normalizeName(name),
+      address: joinAddressParts([address1, address2, city, state, zip]),
     };
   };
 
-  const party1 = readParty('PARTY\\s*1');
-  const party2 = readParty('PARTY\\s*2');
+  const party1 = readParty('PARTY\\s*1', normalizePartyNameFromDetail);
+  const party2 = readParty('PARTY\\s*2', normalizeFreeformPartyName);
 
   return {
     filingDate: readLabel(/DOC\.\s*DATE:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/i),
