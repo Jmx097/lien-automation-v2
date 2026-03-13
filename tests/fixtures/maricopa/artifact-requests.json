@@ -1,0 +1,20 @@
+[
+  {
+    "method": "GET",
+    "url": "https://publicapi.recorder.maricopa.gov/documents/search?documentCode=FL&pageSize=20&pageNumber=1&maxResults=500",
+    "status": 200,
+    "resourceType": "fetch"
+  },
+  {
+    "method": "GET",
+    "url": "https://recorder.maricopa.gov/recording/api/document/20260017884/preview.pdf",
+    "status": 200,
+    "resourceType": "fetch"
+  },
+  {
+    "method": "GET",
+    "url": "https://recorder.maricopa.gov/recording/api/document/20260017884/page/1.png",
+    "status": 200,
+    "resourceType": "image"
+  }
+]

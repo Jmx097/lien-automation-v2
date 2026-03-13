@@ -160,6 +160,10 @@ Important optional environment variables:
 - `SITE_ID_CA_SOS=20`, `SITE_ID_NYC_ACRIS=12`, and `SITE_ID_MARICOPA_RECORDER=13` control downstream sheet site IDs.
 - `MARICOPA_DOCUMENT_CODE` defaults to `FL`.
 - `MARICOPA_MAX_RECORDS` caps Maricopa direct-scrape volume when `max_records` is omitted.
+- `MARICOPA_ENABLE_ARTIFACT_RETRIEVAL=1` enables Maricopa artifact lookup + OCR enrichment. Set `0` to force API-only fallback rows.
+- `MARICOPA_ARTIFACT_URL_TEMPLATE` can pin a discovered public artifact URL shape using `{recordingNumber}` as the placeholder.
+- `MARICOPA_SESSION_MAX_AGE_MINUTES`, `MARICOPA_RETRY_ATTEMPTS`, `MARICOPA_RETRY_BASE_DELAY_MS`, `MARICOPA_RETRY_MAX_DELAY_MS`, and `MARICOPA_OCR_MAX_PAGES` tune Maricopa session freshness, retry behavior, and OCR scope.
+- `MARICOPA_OUT_DIR` overrides the default `out/maricopa` workspace for session state, discovery artifacts, and downloaded artifacts.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
@@ -251,6 +255,11 @@ These settings reduce overhead while keeping scraper behavior and output unchang
 
 ## Test Commands
 
+## Maricopa Notes
+
+- Maricopa can use a discovered public artifact URL plus a persisted browser session to download a record artifact, run OCR, and populate debtor address, amount, and lead type when available.
+- Maricopa rows that still cannot be completed are marked with internal reasons such as `artifact_not_found`, `ocr_no_text`, or `address_missing` so downstream review logic can quarantine them.
+
 Use the local checks independently (doctor, types, selector fixture, runtime smoke):
 
 ```bash
@@ -258,6 +267,8 @@ npm run test:types
 npm run test:selector-smoke
 npm run test:smoke
 npm run doctor
+npm run refresh:maricopa-session
+npm run discover:maricopa-live
 npm run validate:maricopa-live
 ```
 
@@ -265,8 +276,25 @@ npm run validate:maricopa-live
 - `test:smoke` runs the cross-platform `scripts/smoke-health.js` health probe and checks the live `/health` route.
 - `doctor` runs the cross-platform `scripts/doctor.js` preflight and verifies local prerequisites before smoke/runtime checks.
 - `npm test` runs `test:types` + `test:selector-smoke` companion checks.
-- `validate:maricopa-live` checks one positive Maricopa range and one zero-result range, and reports the latest searchable date.
-- `discover:maricopa-live` uses a live browser session to record Maricopa network requests after opening the results page, which is useful for discovering preview/image endpoints without changing production code.
+- `refresh:maricopa-session` opens the Maricopa results page, waits for the challenge-cleared table, and saves Playwright storage state under `out/maricopa/session/`.
+- `discover:maricopa-live` uses the persisted browser session to capture Maricopa network requests and stores candidate public artifact URL templates under `out/maricopa/discovery-candidates.json`.
+- `validate:maricopa-live` reports session freshness, discovery candidate availability, complete vs incomplete row counts, and first sample complete/incomplete rows.
+
+## Maricopa Workflow
+
+Use this order before enabling sustained Maricopa runs:
+
+```bash
+npm run refresh:maricopa-session
+npm run discover:maricopa-live
+npm run validate:maricopa-live
+npm run canary:maricopa
+```
+
+- `refresh:maricopa-session` is the operator step that persists a legitimately cleared browser session.
+- `discover:maricopa-live` should be rerun whenever the site changes its preview/image/document request shape.
+- `validate:maricopa-live` confirms both API reachability and whether the current artifact setup is producing complete OCR-backed records.
+- `canary:maricopa` uploads both complete and review-bound rows through the standard sheet pipeline, letting `Review_Queue` absorb incomplete records.
 
 ## Setup Troubleshooting (stale clone symptom)
 

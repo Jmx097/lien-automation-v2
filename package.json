@@ -25,6 +25,7 @@
     "validate:maricopa-live": "ts-node scripts/validate-maricopa-live.ts",
     "canary:maricopa": "ts-node scripts/run-maricopa-canary.ts",
     "discover:maricopa-live": "ts-node scripts/discover-maricopa-live.ts",
+    "refresh:maricopa-session": "ts-node scripts/refresh-maricopa-session.ts",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",

@@ -40,6 +40,8 @@ async function main(): Promise<void> {
         date_end,
         max_records,
         records_scraped: rows.length,
+        complete_records: rows.filter((row) => !row.error).length,
+        incomplete_records: rows.filter((row) => Boolean(row.error)).length,
         rows_uploaded: upload.uploaded,
         tab_title: upload.tab_title,
       },

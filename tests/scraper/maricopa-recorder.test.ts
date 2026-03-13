@@ -77,6 +77,30 @@ describe('maricopa recorder mapping', () => {
     expect(record.confidence_score).toBeLessThan(0.5);
   });
 
+  it('maps OCR enrichment into complete Maricopa records', () => {
+    const detail = JSON.parse(fs.readFileSync(path.join(fixtureDir, 'document-detail.json'), 'utf8'));
+    const record = mapMaricopaDetailToLienRecord(detail, {
+      artifactUrl: 'https://example.test/20260017884.pdf',
+      artifactPath: 'C:\\temp\\20260017884.pdf',
+      artifactContentType: 'application/pdf',
+      amount: '12345',
+      amountConfidence: 0.98,
+      amountReason: 'ok',
+      leadType: 'Lien',
+      debtorName: 'DAVID BASCH',
+      debtorAddress: '123 MAIN ST, PHOENIX, AZ 85003',
+    });
+
+    expect(record).toMatchObject({
+      debtor_address: '123 MAIN ST, PHOENIX, AZ 85003',
+      amount: '12345',
+      amount_reason: 'ok',
+      lead_type: 'Lien',
+      error: '',
+    });
+    expect(record.confidence_score).toBeGreaterThan(0.8);
+  });
+
   it('fetches and normalizes the latest searchable date', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
