@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import { scrapeNYCAcris } from '../src/scraper/nyc_acris';
-import { pushRunToNewSheetTab } from '../src/sheets/push';
+import { pushRunToNewSheetTab, syncMasterSheetTab } from '../src/sheets/push';
 
 dotenv.config();
 
@@ -32,6 +32,11 @@ async function main(): Promise<void> {
     date_end,
     run_started_at: new Date(),
   });
+  const masterSync = await syncMasterSheetTab({
+    tabTitle: 'Master_canary',
+    reviewTabTitle: 'Review_Queue_canary',
+    includePrefixes: ['nyc_acris_canary_'],
+  });
 
   console.log(
     JSON.stringify(
@@ -42,6 +47,10 @@ async function main(): Promise<void> {
         records_scraped: rows.length,
         rows_uploaded: upload.uploaded,
         tab_title: upload.tab_title,
+        master_tab_title: masterSync.tab_title,
+        review_tab_title: masterSync.review_tab_title,
+        quarantined_row_count: masterSync.quarantined_row_count,
+        new_master_row_count: masterSync.new_master_row_count,
       },
       null,
       2

@@ -77,7 +77,7 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][13]).toBe('10001');
     expect(rows[0][14]).toBe(0.88);
     expect(rows[0][15]).toBe('nyc_acris');
-    expect(rows[0][16]).toBe('2026022700399005');
+    expect(rows[0][16]).toBe("'2026022700399005");
     expect(rows[0][17]).toBe('0');
   });
 
@@ -109,7 +109,7 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][9]).toBe('DAVID');
     expect(rows[0][12]).toBe('AZ');
     expect(rows[0][15]).toBe('maricopa_recorder');
-    expect(rows[0][16]).toBe('20260017884');
+    expect(rows[0][16]).toBe("'20260017884");
   });
 
   it('parses OCR-style addresses without commas into street city and zip', () => {

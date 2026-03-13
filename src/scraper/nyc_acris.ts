@@ -844,8 +844,13 @@ export function extractNYCAcrisDetailFromHtml(html: string): DetailExtraction {
   };
 
   const readParty = (label: string, normalizeName: (value: string | undefined) => string | undefined) => {
-    const blockMatch = html.match(new RegExp(`${label}[\\s\\S]*?(<tr[^>]*>[\\s\\S]*?<\\/tr>)`, 'i'));
-    const block = blockMatch?.[1] ?? '';
+    const scrollBlockMatch = html.match(
+      new RegExp(`${label}[\\s\\S]*?<div[^>]+overflow:\\s*scroll[^>]*>([\\s\\S]*?)<\\/div>`, 'i')
+    );
+    const fallbackTableMatch = html.match(
+      new RegExp(`${label}[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>`, 'i')
+    );
+    const block = scrollBlockMatch?.[1] ?? fallbackTableMatch?.[1] ?? '';
     const rows = [...block.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((match) => match[1]);
     const cells =
       rows
@@ -859,6 +864,7 @@ export function extractNYCAcrisDetailFromHtml(html: string): DetailExtraction {
               )
             )
         )
+        .filter((rowCells) => rowCells.some((cell) => cell && !/^(?:NAME|ADDRESS 1|ADDRESS 2|CITY|STATE|ZIP|COUNTRY)$/i.test(cell)))
         .sort((left, right) => right.length - left.length)[0] ?? [];
 
     if (cells.length < 5) {

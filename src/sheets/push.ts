@@ -598,7 +598,7 @@ export function buildRowValues(rows: LienRecord[], options: BuildRowOptions = {}
     return [
       ...directorRow,
       row.source ?? '',
-      row.file_number ?? '',
+      row.file_number ? `'${row.file_number}` : '',
       options.runPartial ? '1' : '0',
     ];
   });
