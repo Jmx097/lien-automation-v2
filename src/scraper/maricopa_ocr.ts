@@ -71,6 +71,14 @@ export function normalizeMaricopaOcrAddress(value: string | undefined): string |
 }
 
 function extractResidenceBlock(text: string): string | undefined {
+  const inlineBlockMatch = text.match(
+    /Residence\b[:\-\s]*([^\n\r]+)[\r\n\s]+([A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)/i,
+  );
+  if (inlineBlockMatch) {
+    const normalized = normalizeMaricopaOcrAddress(`${inlineBlockMatch[1]}, ${inlineBlockMatch[2]}`);
+    if (normalized) return normalized;
+  }
+
   const lines = text
     .replace(/\r/g, '\n')
     .split('\n')
@@ -134,6 +142,8 @@ function sanitizeDebtorName(value: string | undefined): string | undefined {
   if (!/[A-Za-z]/.test(normalized)) return undefined;
   if (/^(?:internal revenue service|irs)$/i.test(normalized)) return undefined;
   if (/^\d{1,2}\/\d{1,2}\/\d{4}/.test(normalized)) return undefined;
+  if (/[0-9\[\]{}|]/.test(normalized)) return undefined;
+  if ((normalized.match(/[^A-Za-z\s,'.&-]/g)?.length ?? 0) > 2) return undefined;
   if (normalized.length > 120) return undefined;
   return normalized;
 }

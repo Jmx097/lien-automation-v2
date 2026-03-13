@@ -235,4 +235,35 @@ describe('live proof helpers', () => {
     expect(summary.quarantined_row_count).toBe(1);
     expect(summary.review_tab_title).toBe('Review_Queue');
   });
+
+  it('surfaces invalid Maricopa candidate state as a readiness block', async () => {
+    const readiness = await getMaricopaProofReadiness({
+      getReadiness: vi.fn().mockResolvedValue({
+        artifactRetrievalEnabled: true,
+        sessionPresent: true,
+        sessionFresh: true,
+        sessionCapturedAt: '2026-03-13T10:00:00.000Z',
+        artifactCandidatesPresent: false,
+        artifactCandidateCount: 0,
+        refreshRequired: true,
+        refreshReason: 'artifact_candidates_missing',
+        detail: 'Maricopa artifact candidates are present but invalid. Rerun discover:maricopa-live to capture preview/document endpoints.',
+      }),
+      loadSession: vi.fn().mockResolvedValue({
+        version: 1,
+        captured_at: '2026-03-13T10:00:00.000Z',
+        transport_mode: 'brightdata-browser-api',
+        source_url: 'https://example.test',
+        cookie_summary: [],
+        storage_state_path: 'out/maricopa/session/storage-state.json',
+      }),
+      loadCandidates: vi.fn().mockResolvedValue([
+        { urlTemplate: 'https://recorder.maricopa.gov/recording/document-search-results.html?documentCode=FL', sampleUrl: 'https://recorder.maricopa.gov/recording/document-search-results.html?documentCode=FL', kind: 'document' },
+      ]),
+      fetchLatestDate: vi.fn().mockResolvedValue('2026-03-12'),
+    });
+
+    expect(readiness.refresh_required).toBe(true);
+    expect(readiness.detail).toContain('present but invalid');
+  });
 });

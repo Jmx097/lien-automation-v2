@@ -234,7 +234,7 @@ export async function getMaricopaProofReadiness(
     session_present: readiness.sessionPresent,
     session_fresh: session?.captured_at ? isFreshMaricopaSession(session.captured_at) : readiness.sessionFresh,
     session_captured_at: readiness.sessionCapturedAt ?? session?.captured_at,
-    discovery_candidate_count: candidates.length,
+    discovery_candidate_count: readiness.artifactCandidateCount,
     refresh_required: readiness.refreshRequired,
     refresh_reason: readiness.refreshReason,
     detail: readiness.detail,

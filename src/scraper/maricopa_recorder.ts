@@ -9,7 +9,9 @@ import {
   getMaricopaArtifactDir,
   getMaricopaPersistedStateReadiness,
   isMaricopaArtifactRetrievalEnabled,
+  loadMaricopaArtifactCandidates,
   resolveMaricopaArtifactUrl,
+  filterValidMaricopaArtifactCandidates,
 } from './maricopa_artifacts';
 import { extractMaricopaFieldsFromArtifact, type MaricopaOcrExtraction } from './maricopa_ocr';
 
@@ -403,6 +405,8 @@ function chooseDebtorName(currentName: string, candidateName?: string): string {
 function resolveMaricopaCompletenessReason(enrichment?: MaricopaArtifactEnrichment): string | undefined {
   if (!MARICOPA_ARTIFACT_RETRIEVAL_ENABLED) return undefined;
   if (!enrichment) return 'artifact_not_found';
+  if (enrichment.completenessReason === 'artifact_candidate_invalid') return 'artifact_candidate_invalid';
+  if (enrichment.completenessReason === 'artifact_fetch_failed') return 'artifact_fetch_failed';
   if (!enrichment.artifactUrl) return 'artifact_not_found';
   if (enrichment.amountReason === 'ocr_missing') return 'ocr_missing';
   if (enrichment.amountReason === 'ocr_no_text') return 'ocr_no_text';
@@ -584,14 +588,22 @@ async function saveArtifact(recordingNumber: string, result: NonNullable<Awaited
 async function enrichMaricopaDetail(detail: MaricopaDocumentDetail): Promise<MaricopaArtifactEnrichment | undefined> {
   if (!MARICOPA_ARTIFACT_RETRIEVAL_ENABLED) return undefined;
 
+  const validCandidates = filterValidMaricopaArtifactCandidates(
+    await loadMaricopaArtifactCandidates(),
+    detail.recordingNumber,
+  );
+  if (validCandidates.length === 0) {
+    return { completenessReason: 'artifact_candidate_invalid' };
+  }
+
   const artifactUrl = await resolveMaricopaArtifactUrl(detail.recordingNumber);
   if (!artifactUrl) {
-    return { completenessReason: 'artifact_not_found' };
+    return { completenessReason: 'artifact_candidate_invalid' };
   }
 
   const artifact = await fetchMaricopaArtifactWithSession(artifactUrl);
   if (!artifact) {
-    return { artifactUrl, completenessReason: 'artifact_not_found' };
+    return { artifactUrl, completenessReason: 'artifact_fetch_failed' };
   }
 
   const artifactPath = await saveArtifact(detail.recordingNumber, artifact);

@@ -27,6 +27,11 @@ export interface MaricopaArtifactCandidate {
   kind: 'pdf' | 'image' | 'document' | 'unknown';
 }
 
+export interface MaricopaArtifactCandidateValidation {
+  valid: boolean;
+  reason?: string;
+}
+
 export interface MaricopaArtifactFetchResult {
   buffer: Buffer;
   contentType?: string;
@@ -230,8 +235,54 @@ export function buildMaricopaArtifactPath(recordingNumber: string, ext: string):
 function inferArtifactKind(url: string): MaricopaArtifactCandidate['kind'] {
   if (/\.pdf(?:$|[?#])/i.test(url)) return 'pdf';
   if (/\.(?:png|jpe?g|webp)(?:$|[?#])/i.test(url)) return 'image';
+  if (/\/preview\/pdf\?/i.test(url)) return 'pdf';
+  if (/\/document-preview\.html\?/i.test(url)) return 'image';
   if (/pdf|image|preview|viewer|document/i.test(url)) return 'document';
   return 'unknown';
+}
+
+export function validateMaricopaArtifactCandidate(
+  candidate: MaricopaArtifactCandidate,
+  recordingNumber?: string,
+): MaricopaArtifactCandidateValidation {
+  const url = candidate.sampleUrl || candidate.urlTemplate;
+
+  if (!/^https:\/\/(?:publicapi\.recorder\.maricopa\.gov|recorder\.maricopa\.gov)/i.test(url)) {
+    return { valid: false, reason: 'non_maricopa_host' };
+  }
+  if (/analytics\.google|google-analytics|privacy-sandbox/i.test(url)) {
+    return { valid: false, reason: 'analytics_url' };
+  }
+  if (/cdn-cgi|challenge-platform/i.test(url)) {
+    return { valid: false, reason: 'challenge_asset' };
+  }
+  if (/\/asset\/jcr:|logo-|seal\.png|iStock/i.test(url)) {
+    return { valid: false, reason: 'static_asset' };
+  }
+  if (/document-search-results\.html|\/documents\/search|\/documents\/index/i.test(url)) {
+    return { valid: false, reason: 'search_or_results_page' };
+  }
+  if (recordingNumber && !url.includes(recordingNumber) && !candidate.urlTemplate.includes('{recordingNumber}')) {
+    return { valid: false, reason: 'recording_number_mismatch' };
+  }
+
+  const isPdfPreview = /\/preview\/pdf\?(?:.*&)??recordingNumber=(?:\{recordingNumber\}|\d{11})/i.test(url);
+  const isPngPreviewPage =
+    /\/document-preview\.html\?(?:.*&)??recordingNumber=(?:\{recordingNumber\}|\d{11})/i.test(url)
+    || /\/recording\/api\/document\/(?:\{recordingNumber\}|\d{11})\/page\/\d+\.(?:png|jpe?g|webp)/i.test(url);
+
+  if (isPdfPreview || isPngPreviewPage) {
+    return { valid: true };
+  }
+
+  return { valid: false, reason: 'not_artifact_preview' };
+}
+
+export function filterValidMaricopaArtifactCandidates(
+  candidates: MaricopaArtifactCandidate[],
+  recordingNumber?: string,
+): MaricopaArtifactCandidate[] {
+  return candidates.filter((candidate) => validateMaricopaArtifactCandidate(candidate, recordingNumber).valid);
 }
 
 export function discoverMaricopaArtifactCandidates(
@@ -260,7 +311,7 @@ export function discoverMaricopaArtifactCandidates(
     });
   }
 
-  return candidates;
+  return filterValidMaricopaArtifactCandidates(candidates, recordingNumber);
 }
 
 export async function saveMaricopaArtifactCandidates(candidates: MaricopaArtifactCandidate[]): Promise<void> {
@@ -286,6 +337,7 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
   const artifactRetrievalEnabled = isMaricopaArtifactRetrievalEnabled();
   const session = await loadMaricopaSessionState();
   const candidates = await loadMaricopaArtifactCandidates();
+  const validCandidates = filterValidMaricopaArtifactCandidates(candidates);
   const sessionFresh = Boolean(session?.captured_at && isFreshMaricopaSession(session.captured_at));
 
   if (!artifactRetrievalEnabled) {
@@ -294,8 +346,8 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       sessionPresent: Boolean(session),
       sessionFresh,
       sessionCapturedAt: session?.captured_at,
-      artifactCandidatesPresent: candidates.length > 0,
-      artifactCandidateCount: candidates.length,
+      artifactCandidatesPresent: validCandidates.length > 0,
+      artifactCandidateCount: validCandidates.length,
       refreshRequired: false,
       refreshReason: 'artifact_retrieval_disabled',
       detail: 'Maricopa artifact retrieval is disabled by configuration.',
@@ -308,8 +360,8 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       sessionPresent: Boolean(session),
       sessionFresh,
       sessionCapturedAt: session?.captured_at,
-      artifactCandidatesPresent: candidates.length > 0,
-      artifactCandidateCount: candidates.length,
+      artifactCandidatesPresent: validCandidates.length > 0,
+      artifactCandidateCount: validCandidates.length,
       refreshRequired: true,
       refreshReason: 'session_missing_or_stale',
       detail: session
@@ -318,7 +370,7 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
     };
   }
 
-  if (candidates.length === 0) {
+  if (validCandidates.length === 0) {
     return {
       artifactRetrievalEnabled,
       sessionPresent: true,
@@ -328,7 +380,9 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       artifactCandidateCount: 0,
       refreshRequired: true,
       refreshReason: 'artifact_candidates_missing',
-      detail: 'Maricopa artifact candidates are missing. Run discover:maricopa-live on the droplet.',
+      detail: candidates.length === 0
+        ? 'Maricopa artifact candidates are missing. Run discover:maricopa-live on the droplet.'
+        : 'Maricopa artifact candidates are present but invalid. Rerun discover:maricopa-live to capture preview/document endpoints.',
     };
   }
 
@@ -338,7 +392,7 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
     sessionFresh: true,
     sessionCapturedAt: session.captured_at,
     artifactCandidatesPresent: true,
-    artifactCandidateCount: candidates.length,
+    artifactCandidateCount: validCandidates.length,
     refreshRequired: false,
     detail: 'Maricopa persisted session and artifact candidates are available.',
   };
@@ -350,7 +404,7 @@ export async function resolveMaricopaArtifactUrl(recordingNumber: string): Promi
     return envTemplate.split('{recordingNumber}').join(recordingNumber);
   }
 
-  const candidates = await loadMaricopaArtifactCandidates();
+  const candidates = filterValidMaricopaArtifactCandidates(await loadMaricopaArtifactCandidates(), recordingNumber);
   const preferred = candidates.find((candidate) => candidate.kind === 'pdf')
     ?? candidates.find((candidate) => candidate.kind === 'image')
     ?? candidates[0];
@@ -361,38 +415,68 @@ export async function resolveMaricopaArtifactUrl(recordingNumber: string): Promi
 
 export async function fetchMaricopaArtifactWithSession(url: string): Promise<MaricopaArtifactFetchResult | null> {
   const session = await loadMaricopaSessionState();
-  const handle = await createIsolatedBrowserContext({
-    contextOptions: session?.storage_state_path ? { storageState: session.storage_state_path } : undefined,
-  });
+  const attempts = Math.max(1, Number(process.env.MARICOPA_ARTIFACT_FETCH_ATTEMPTS ?? '2'));
 
-  try {
-    const page = await handle.context.newPage();
-    await page.goto(RESULTS_URL, { waitUntil: 'domcontentloaded' }).catch(() => null);
-    const payload = await page.evaluate(async (artifactUrl: string) => {
-      try {
-        const response = await fetch(artifactUrl, { credentials: 'include' });
-        if (!response.ok) {
-          return { ok: false, status: response.status, contentType: response.headers.get('content-type') ?? undefined, body: '' };
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const handle = await createIsolatedBrowserContext({
+      contextOptions: session?.storage_state_path ? { storageState: session.storage_state_path } : undefined,
+    });
+
+    try {
+      const requestTimeout = Number(process.env.MARICOPA_ARTIFACT_FETCH_TIMEOUT_MS ?? '60000');
+      const apiResponse = await handle.context.request.get(url, {
+        timeout: requestTimeout,
+        failOnStatusCode: false,
+      }).catch(() => null);
+
+      if (apiResponse?.ok()) {
+        const contentType = apiResponse.headers()['content-type'] ?? undefined;
+        if (!/text\/html/i.test(contentType ?? '')) {
+          return {
+            buffer: Buffer.from(await apiResponse.body()),
+            contentType,
+            url: apiResponse.url(),
+          };
         }
-        const contentType = response.headers.get('content-type') ?? undefined;
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        let binary = '';
-        for (let index = 0; index < bytes.length; index += 1) {
-          binary += String.fromCharCode(bytes[index]);
-        }
-        return { ok: true, contentType, body: btoa(binary) };
-      } catch (error) {
-        return { ok: false, error: String(error) };
       }
-    }, url);
 
-    if (!payload.ok || !payload.body) return null;
-    return {
-      buffer: Buffer.from(payload.body, 'base64'),
-      contentType: payload.contentType,
-      url,
-    };
-  } finally {
-    await handle.close();
+      const page = await handle.context.newPage();
+      const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: requestTimeout,
+      }).catch(() => null);
+
+      if (!response || !response.ok()) return null;
+
+      const contentType = response.headers()['content-type'] ?? undefined;
+
+      if (/text\/html/i.test(contentType ?? '') && /document-preview\.html/i.test(url)) {
+        const imageUrl = await page.locator('img').first().getAttribute('src').catch(() => null);
+        if (!imageUrl) return null;
+        const absoluteImageUrl = new URL(imageUrl, page.url()).toString();
+        const imageResponse = await handle.context.request.get(absoluteImageUrl, {
+          timeout: requestTimeout,
+          failOnStatusCode: false,
+        }).catch(() => null);
+        if (!imageResponse || !imageResponse.ok()) return null;
+        return {
+          buffer: Buffer.from(await imageResponse.body()),
+          contentType: imageResponse.headers()['content-type'] ?? undefined,
+          url: absoluteImageUrl,
+        };
+      }
+
+      return {
+        buffer: Buffer.from(await response.body()),
+        contentType,
+        url: response.url(),
+      };
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+    } finally {
+      await handle.close().catch(() => null);
+    }
   }
+
+  return null;
 }

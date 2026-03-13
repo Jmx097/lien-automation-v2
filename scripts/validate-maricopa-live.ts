@@ -1,6 +1,11 @@
 import dotenv from 'dotenv';
 import { fetchLatestMaricopaSearchableDate, scrapeMaricopaRecorder } from '../src/scraper/maricopa_recorder';
-import { isFreshMaricopaSession, loadMaricopaArtifactCandidates, loadMaricopaSessionState } from '../src/scraper/maricopa_artifacts';
+import {
+  filterValidMaricopaArtifactCandidates,
+  isFreshMaricopaSession,
+  loadMaricopaArtifactCandidates,
+  loadMaricopaSessionState,
+} from '../src/scraper/maricopa_artifacts';
 
 dotenv.config({ quiet: true });
 
@@ -13,6 +18,7 @@ async function main(): Promise<void> {
 
   const session = await loadMaricopaSessionState();
   const candidates = await loadMaricopaArtifactCandidates();
+  const validCandidates = filterValidMaricopaArtifactCandidates(candidates);
   const latestSearchableDate = await fetchLatestMaricopaSearchableDate();
   const positiveRows = await scrapeMaricopaRecorder({
     date_start: positiveDateStart,
@@ -41,7 +47,9 @@ async function main(): Promise<void> {
           : null,
         discovery_candidates: {
           count: candidates.length,
+          valid_count: validCandidates.length,
           first: candidates[0] ?? null,
+          first_valid: validCandidates[0] ?? null,
         },
         positive_range: {
           date_start: positiveDateStart,
