@@ -1,5 +1,5 @@
 import { Page } from 'playwright';
-import { LienRecord } from '../types';
+import { attachScrapeQualitySummary, type LienRecord, type ScrapeResult } from '../types';
 import { log } from '../utils/logger';
 import { SQLiteQueueStore } from '../queue/sqlite';
 import fs from 'fs';
@@ -35,6 +35,14 @@ interface ScrapeCheckpoint {
   updated_at: string;
 }
 
+interface QuarantinedCASOSRow {
+  row_index: number;
+  file_number?: string;
+  filing_date?: string;
+  reason: string;
+  quarantined_at: string;
+}
+
 function humanDelay() {
   return new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 400));
 }
@@ -50,6 +58,15 @@ function getCheckpointPath(key: string): string {
   }
   const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_');
   return path.join(checkpointDir, `ca_sos_${safeKey}.json`);
+}
+
+function getQuarantinePath(key: string): string {
+  const checkpointDir = path.join(process.cwd(), 'data/checkpoints');
+  if (!fs.existsSync(checkpointDir)) {
+    fs.mkdirSync(checkpointDir, { recursive: true });
+  }
+  const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return path.join(checkpointDir, `ca_sos_${safeKey}_quarantine.json`);
 }
 
 function loadCheckpoint(key: string): ScrapeCheckpoint | null {
@@ -478,6 +495,29 @@ export async function probeCASOSResultCount(options: Pick<ScrapeOptions, 'date_s
   }
 }
 
+function loadQuarantinedRows(key: string): QuarantinedCASOSRow[] {
+  try {
+    const quarantinePath = getQuarantinePath(key);
+    if (!fs.existsSync(quarantinePath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(quarantinePath, 'utf8'));
+    return Array.isArray(parsed) ? parsed as QuarantinedCASOSRow[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveQuarantinedRows(key: string, rows: QuarantinedCASOSRow[]): void {
+  const quarantinePath = getQuarantinePath(key);
+  fs.writeFileSync(quarantinePath, JSON.stringify(rows, null, 2));
+}
+
+function clearQuarantinedRows(key: string): void {
+  const quarantinePath = getQuarantinePath(key);
+  if (fs.existsSync(quarantinePath)) {
+    fs.unlinkSync(quarantinePath);
+  }
+}
+
 async function closeDrawer(page: Page): Promise<void> {
   const drawer = page.locator('div.drawer.show');
   if (!(await drawer.isVisible({ timeout: 1000 }).catch(() => false))) return;
@@ -630,7 +670,7 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
   }
 }
 
-export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<LienRecord[]> {
+export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<ScrapeResult> {
   const {
     date_start,
     date_end,
@@ -645,10 +685,12 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
   const queue = new SQLiteQueueStore();
   const processedRecords: LienRecord[] = [];
   const checkpoint = loadCheckpoint(checkpoint_key);
+  const quarantinedRows = loadQuarantinedRows(checkpoint_key);
   let nextIndex = Math.max(start_index, checkpoint?.next_index ?? 0);
   let knownRowCount = Number.POSITIVE_INFINITY;
   let successfulChunks = 0;
   let failedChunks = 0;
+  let skippedExistingRecords = 0;
   let firstChunkStart: number | null = null;
   let lastChunkStart: number | null = null;
   const deadlineMs = deadline_at_iso ? new Date(deadline_at_iso).getTime() : null;
@@ -685,6 +727,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     let lastErr: Error | null = null;
     let chunkRowCount = knownRowCount;
     const chunkRecords: LienRecord[] = [];
+    let confirmedNextIndex = nextIndex;
 
     if (firstChunkStart === null) firstChunkStart = chunkStart;
     lastChunkStart = chunkStart;
@@ -746,27 +789,56 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
           if (peekFileNumber && peekFilingDate) {
             const fp = computeFingerprint('ca_sos', peekFileNumber, peekFilingDate);
             if (queue.hasFingerprint(fp)) {
+              skippedExistingRecords += 1;
               saveCheckpoint(checkpoint_key, i + 1);
+              confirmedNextIndex = i + 1;
               continue;
             }
           }
 
-          const record = await processDetailRow(page, i);
+          let record: LienRecord | null = null;
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            record = await processDetailRow(page, i);
+            if (record) break;
+            log({
+              stage: 'detail_row_retry',
+              site: 'ca_sos',
+              row: i,
+              attempt,
+              file_number: peekFileNumber,
+              filing_date: peekFilingDate,
+            });
+          }
+
           if (record) {
             consecutiveFailures = 0;
             chunkRecords.push(record);
           } else {
             consecutiveFailures++;
-            if (consecutiveFailures >= 5) {
-              throw new Error(`chunk_failed_consecutive_rows_${consecutiveFailures}`);
-            }
+            quarantinedRows.push({
+              row_index: i,
+              file_number: peekFileNumber || undefined,
+              filing_date: peekFilingDate || undefined,
+              reason: 'detail_row_failed_after_retries',
+              quarantined_at: new Date().toISOString(),
+            });
+            saveQuarantinedRows(checkpoint_key, quarantinedRows);
+            log({
+              stage: 'detail_row_quarantined',
+              site: 'ca_sos',
+              row: i,
+              file_number: peekFileNumber,
+              filing_date: peekFilingDate,
+              reason: 'detail_row_failed_after_retries',
+            });
           }
 
           saveCheckpoint(checkpoint_key, i + 1);
+          confirmedNextIndex = i + 1;
           await humanDelay();
         }
 
-        nextIndex = chunkEndExclusive;
+        nextIndex = confirmedNextIndex;
         lastErr = null;
         successfulChunks += 1;
         break;
@@ -796,7 +868,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
         row_count: chunkRowCount,
         error: lastErr.message,
       });
-      nextIndex = chunkEndExclusive;
+      nextIndex = confirmedNextIndex;
       saveCheckpoint(checkpoint_key, nextIndex);
       failedChunks += 1;
       if (failedChunks >= 8) {
@@ -812,11 +884,15 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
 
   if (processedRecords.length >= max_records || nextIndex >= knownRowCount) {
     clearCheckpoint(checkpoint_key);
+    clearQuarantinedRows(checkpoint_key);
   }
 
   log({
     stage: 'scraper_complete',
     processed: processedRecords.length,
+    scraped_records: processedRecords.length,
+    quarantined_records: quarantinedRows.length,
+    skipped_existing_records: skippedExistingRecords,
     next_index: nextIndex,
     row_count: Number.isFinite(knownRowCount) ? knownRowCount : null,
     total_chunks_successful: successfulChunks,
@@ -825,7 +901,22 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Lien
     last_chunk_start: lastChunkStart,
   });
 
-  return processedRecords;
+  return attachScrapeQualitySummary(processedRecords, {
+    requested_date_start: date_start,
+    requested_date_end: date_end,
+    discovered_count: Number.isFinite(knownRowCount) ? knownRowCount : undefined,
+    returned_count: processedRecords.length,
+    quarantined_count: quarantinedRows.length,
+    partial_run: quarantinedRows.length > 0 || failedChunks > 0 || nextIndex < knownRowCount,
+    partial_reason: quarantinedRows.length > 0
+      ? 'quarantined_failed_rows'
+      : failedChunks > 0
+        ? 'chunk_failures_remaining'
+        : nextIndex < knownRowCount
+          ? 'deadline_or_stop_before_completion'
+          : undefined,
+    skipped_existing_count: skippedExistingRecords,
+  });
 }
 
 

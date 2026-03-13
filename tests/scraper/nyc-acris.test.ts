@@ -2,11 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+  buildSearchPayload,
   chooseBetterDebtorName,
   extractNYCAcrisDetailFromHtml,
   extractNYCAcrisFieldsFromText,
   extractDocIdsFromResultsHtml,
   extractViewerArtifactFromHtml,
+  filterRowsByAcrisDateRange,
   inspectNYCAcrisPageReadiness,
   isPlausibleDebtorName,
   isUnexpectedViewerPageUrl,
@@ -324,5 +326,64 @@ describe('nyc acris fixture parsing', () => {
     expect(resolveNYCAcrisDelay(2000, 4000, 1)).toBe(4000);
     expect(resolveNYCAcrisDelay(8000, 15000, 0.5)).toBeGreaterThanOrEqual(8000);
     expect(resolveNYCAcrisDelay(8000, 15000, 0.5)).toBeLessThanOrEqual(15000);
+  });
+
+  it('builds a specific-date-range search payload for requested scrape windows', () => {
+    const payload = buildSearchPayload(
+      2,
+      {
+        hid_doctype: 'FL',
+        hid_doctype_name: 'FEDERAL LIEN-IRS',
+        hid_selectdate: '7',
+        hid_borough: '0',
+        hid_borough_name: 'ALL BOROUGHS',
+        hid_max_rows: '10',
+        hid_SearchType: 'DOCTYPE',
+        hid_ISIntranet: 'N',
+        hid_sort: '',
+      },
+      { start: '03/01/2026', end: '03/07/2026' }
+    );
+
+    expect(payload).toMatchObject({
+      hid_selectdate: 'DR',
+      hid_datefromm: '03',
+      hid_datefromd: '01',
+      hid_datefromy: '2026',
+      hid_datetom: '03',
+      hid_datetod: '07',
+      hid_datetoy: '2026',
+      hid_page: '2',
+    });
+  });
+
+  it('filters out result rows that fall outside the requested filing-date range', () => {
+    const result = filterRowsByAcrisDateRange(
+      [
+        {
+          docId: '2026022700399005',
+          filingDate: '02/27/2026',
+          debtorName: 'In range',
+          securedPartyName: 'IRS',
+          documentType: 'FEDERAL LIEN-IRS',
+          rowText: '',
+          cells: [],
+        },
+        {
+          docId: '2026031200399005',
+          filingDate: '03/12/2026',
+          debtorName: 'Too new',
+          securedPartyName: 'IRS',
+          documentType: 'FEDERAL LIEN-IRS',
+          rowText: '',
+          cells: [],
+        },
+      ],
+      { date_start: '02/25/2026', date_end: '03/01/2026' }
+    );
+
+    expect(result.rows.map((row) => row.docId)).toEqual(['2026022700399005']);
+    expect(result.filteredOutCount).toBe(1);
+    expect(result.hadOutOfRangeRows).toBe(true);
   });
 });

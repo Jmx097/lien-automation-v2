@@ -25,7 +25,7 @@ import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
 import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import { sendNewLeadsNotification } from './notifications/email';
-import type { LienRecord } from './types';
+import type { LienRecord, ScrapeResult, ScrapeRunQualitySummary } from './types';
 import { supportedSites, type SupportedSite } from './sites';
 
 const LOOKBACK_DAYS = 7;
@@ -344,13 +344,20 @@ function getLast7DaysRange(): { date_start: string; date_end: string } {
   return { date_start: formatDate(start), date_end: formatDate(end) };
 }
 
-function computeQualityMetrics(records: any[], effectiveMaxRecords: number, deadlineHit: boolean) {
+function computeQualityMetrics(
+  records: any[],
+  effectiveMaxRecords: number,
+  deadlineHit: boolean,
+  qualitySummary?: ScrapeRunQualitySummary,
+) {
   const amountFound = records.filter((row) => Boolean(row.amount)).length;
   const amountMissing = Math.max(records.length - amountFound, 0);
   const amountCoveragePct = records.length > 0 ? (amountFound / records.length) * 100 : 0;
   const ocrSuccessCount = records.filter((row) => row.amount_reason !== 'ocr_missing' && row.amount_reason !== 'ocr_error').length;
   const ocrSuccessPct = records.length > 0 ? (ocrSuccessCount / records.length) * 100 : 0;
-  const rowFailPct = effectiveMaxRecords > 0 ? ((effectiveMaxRecords - records.length) / effectiveMaxRecords) * 100 : 0;
+  const discoveredCount = qualitySummary?.discovered_count ?? effectiveMaxRecords;
+  const returnedCount = qualitySummary?.returned_count ?? records.length;
+  const rowFailPct = discoveredCount > 0 ? ((discoveredCount - returnedCount) / discoveredCount) * 100 : 0;
 
   return {
     amountFound,
@@ -358,7 +365,14 @@ function computeQualityMetrics(records: any[], effectiveMaxRecords: number, dead
     amountCoveragePct,
     ocrSuccessPct,
     rowFailPct: Math.max(rowFailPct, 0),
-    partial: deadlineHit || records.length < effectiveMaxRecords ? 1 : 0,
+    partial: deadlineHit || qualitySummary?.partial_run || returnedCount < effectiveMaxRecords ? 1 : 0,
+    discoveredCount,
+    returnedCount,
+    partialReason: qualitySummary?.partial_reason,
+    requestedDateStart: qualitySummary?.requested_date_start,
+    requestedDateEnd: qualitySummary?.requested_date_end,
+    quarantinedCount: qualitySummary?.quarantined_count ?? 0,
+    recordsSkipped: qualitySummary?.skipped_existing_count ?? 0,
   };
 }
 
@@ -754,7 +768,7 @@ async function getRecordsForScheduledRun(
     const cached = await loadNYCCachedRecords(idempotencyKey);
     if (cached && cached.length > 0) {
       log({ stage: 'scheduled_run_cached_records_reused', site, idempotency_key: idempotencyKey, records: cached.length });
-      return { records: cached, reusedCache: true };
+      return { records: cached, reusedCache: true, qualitySummary: undefined as ScrapeRunQualitySummary | undefined };
     }
   }
 
@@ -765,9 +779,9 @@ async function getRecordsForScheduledRun(
     max_records: effectiveMaxRecords,
     stop_requested: () => isPastDeadline(site, slot, new Date()),
     connectivity_status_at_start: connectivityAtStart.status,
-  } as any);
+  } as any) as ScrapeResult;
 
-  return { records, reusedCache: false };
+  return { records, reusedCache: false, qualitySummary: records.quality_summary };
 }
 
 export async function checkSiteConnectivity(): Promise<void> {
@@ -928,6 +942,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     master_tab_title: undefined,
     review_tab_title: undefined,
     quarantined_row_count: 0,
+    requested_date_start: date_start,
+    requested_date_end: date_end,
+    discovered_count: 0,
+    returned_count: 0,
+    partial_reason: undefined,
     new_master_row_count: 0,
     purged_review_row_count: 0,
     lead_alert_attempted: 0,
@@ -1044,7 +1063,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw buildInjectedFailureError(testFailureClass);
         }
 
-        const { records, reusedCache } = await getRecordsForScheduledRun(
+        const { records, reusedCache, qualitySummary } = await getRecordsForScheduledRun(
           site,
           idempotencyKey,
           date_start,
@@ -1072,7 +1091,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         }
 
         const deadlineHit = isPastDeadline(site, slot, new Date());
-        const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
+        const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit, qualitySummary);
         const tabTitle = formatRunTabName(`Scheduled_${site}_${slot}_${runId}`, date_start, date_end, new Date());
         const uploadResult = await pushToSheetsForTab(records, tabTitle, { runPartial: quality.partial === 1 });
         if (uploadResult.uploaded !== records.length) {
@@ -1093,6 +1112,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         }
 
         run.records_scraped = records.length;
+        run.records_skipped = quality.recordsSkipped;
         run.rows_uploaded = uploadResult.uploaded;
         run.amount_found_count = quality.amountFound;
         run.amount_missing_count = quality.amountMissing;
@@ -1101,6 +1121,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.row_fail_pct = quality.rowFailPct;
         run.deadline_hit = deadlineHit ? 1 : 0;
         run.partial = quality.partial;
+        run.partial_reason = quality.partialReason;
+        run.requested_date_start = quality.requestedDateStart ?? date_start;
+        run.requested_date_end = quality.requestedDateEnd ?? date_end;
+        run.discovered_count = quality.discoveredCount;
+        run.returned_count = quality.returnedCount;
         run.status = 'success';
         run.error = undefined;
         run.failure_class = undefined;
@@ -1109,7 +1134,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.source_tab_title = uploadResult.tab_title;
         run.master_tab_title = masterSync?.tab_title;
         run.review_tab_title = masterSync?.review_tab_title;
-        run.quarantined_row_count = masterSync?.quarantined_row_count ?? 0;
+        run.quarantined_row_count = quality.quarantinedCount + (masterSync?.quarantined_row_count ?? 0);
         run.new_master_row_count = masterSync?.new_master_row_count ?? 0;
         run.purged_review_row_count = masterSync?.purged_review_row_count ?? 0;
         run.lead_alert_attempted = leadAlertResult.attempted ? 1 : 0;
@@ -1201,6 +1226,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           deadline_hit: run.deadline_hit,
           effective_max_records: nextCap,
           partial: run.partial,
+          partial_reason: run.partial_reason,
+          requested_date_start: run.requested_date_start,
+          requested_date_end: run.requested_date_end,
+          discovered_count: run.discovered_count,
+          returned_count: run.returned_count,
           retried: run.retried,
           tab_title: uploadResult.tab_title,
           master_tab_title: masterSync?.tab_title,

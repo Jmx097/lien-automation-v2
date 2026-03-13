@@ -10,6 +10,7 @@ import {
   MaricopaScrapeError,
   normalizeMaricopaDate,
   parseMaricopaIndexDate,
+  resolveMaricopaTruncationState,
   scrapeMaricopaRecorder,
   toMaricopaIsoDate,
 } from '../../src/scraper/maricopa_recorder';
@@ -162,5 +163,15 @@ describe('maricopa recorder mapping', () => {
 
     expect(rows).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags a single-day search window that hits the upstream max-results cap', () => {
+    expect(resolveMaricopaTruncationState(500, '2026-01-12', '2026-01-12')).toEqual({
+      truncated: true,
+      reason: 'search_cap_reached_single_day:2026-01-12',
+    });
+    expect(resolveMaricopaTruncationState(500, '2026-01-12', '2026-01-13')).toEqual({
+      truncated: false,
+    });
   });
 });

@@ -8,7 +8,7 @@ import { extractAmountFromText, type AmountReason } from './amount-extraction';
 import { checkOCRRuntime, getOCRBinaryCommands } from './ocr-runtime';
 import type { NYCAcrisFailureClass, SiteConnectivityStatus } from '../scheduler/connectivity';
 import { classifyNYCAcrisFailure } from '../scheduler/connectivity';
-import type { LienRecord } from '../types';
+import { attachScrapeQualitySummary, type LienRecord, type ScrapeResult } from '../types';
 import { log } from '../utils/logger';
 import { redactSecret, sanitizeErrorMessage } from '../utils/redaction';
 
@@ -69,6 +69,10 @@ export interface ValidationOptions {
 interface SearchState {
   pageNum: number;
   profile: SearchProfile;
+  requestDateRange?: {
+    start: string;
+    end: string;
+  };
 }
 
 interface ResultRowCandidate {
@@ -163,6 +167,13 @@ interface RunManifest {
     pageNum: number;
     docIndex: number;
   };
+  requestedDateStart?: string;
+  requestedDateEnd?: string;
+  discoveredCount?: number;
+  returnedCount?: number;
+  filteredOutCount?: number;
+  returnedMinFilingDate?: string;
+  returnedMaxFilingDate?: string;
 }
 
 interface ProbeResult {
@@ -188,6 +199,12 @@ interface DetailExtraction {
   securedPartyName?: string;
   securedPartyAddress?: string;
   amount?: string;
+}
+
+interface AcrisDateParts {
+  month: string;
+  day: string;
+  year: string;
 }
 
 function unique<T>(items: T[]): T[] {
@@ -365,6 +382,81 @@ function throwIfSessionBudgetExceeded(startedAtMs: number): void {
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function parseAcrisDateParts(value: string): AcrisDateParts | null {
+  const match = value.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+  const [, month, day, year] = match;
+  const mm = month.padStart(2, '0');
+  const dd = day.padStart(2, '0');
+  const yyyy = year;
+  const parsed = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getUTCFullYear() !== Number(yyyy) ||
+    parsed.getUTCMonth() !== Number(mm) - 1 ||
+    parsed.getUTCDate() !== Number(dd)
+  ) {
+    return null;
+  }
+  return { month: mm, day: dd, year: yyyy };
+}
+
+export function normalizeAcrisDate(value: string): string | undefined {
+  const parsed = parseAcrisDateParts(value);
+  if (!parsed) return undefined;
+  return `${parsed.month}/${parsed.day}/${parsed.year}`;
+}
+
+function toAcrisDateKey(value: string): string | undefined {
+  const parsed = parseAcrisDateParts(value);
+  if (!parsed) return undefined;
+  return `${parsed.year}-${parsed.month}-${parsed.day}`;
+}
+
+function summarizeDateRange(rows: ResultRowCandidate[]): { min?: string; max?: string } {
+  const normalized = rows
+    .map((row) => normalizeAcrisDate(row.filingDate))
+    .filter((value): value is string => Boolean(value));
+  if (normalized.length === 0) return {};
+  const sorted = normalized
+    .map((value) => ({ value, key: toAcrisDateKey(value)! }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+  return {
+    min: sorted[0]?.value,
+    max: sorted[sorted.length - 1]?.value,
+  };
+}
+
+export function filterRowsByAcrisDateRange(
+  rows: ResultRowCandidate[],
+  options: Pick<ScrapeOptions, 'date_start' | 'date_end'>,
+): { rows: ResultRowCandidate[]; filteredOutCount: number; hadOutOfRangeRows: boolean } {
+  const startKey = toAcrisDateKey(options.date_start);
+  const endKey = toAcrisDateKey(options.date_end);
+  if (!startKey || !endKey) {
+    throw new Error(`Invalid ACRIS date range ${options.date_start} - ${options.date_end}`);
+  }
+
+  let filteredOutCount = 0;
+  let hadOutOfRangeRows = false;
+  const filteredRows = rows.filter((row) => {
+    const rowKey = toAcrisDateKey(row.filingDate);
+    if (!rowKey) {
+      filteredOutCount += 1;
+      hadOutOfRangeRows = true;
+      return false;
+    }
+    const inRange = rowKey >= startKey && rowKey <= endKey;
+    if (!inRange) {
+      filteredOutCount += 1;
+      hadOutOfRangeRows = true;
+    }
+    return inRange;
+  });
+
+  return { rows: filteredRows, filteredOutCount, hadOutOfRangeRows };
 }
 
 function trimTrailingAddressNoiseAfterZip(value: string): string {
@@ -574,15 +666,22 @@ function resolveRecordConfidenceScore(
   return Math.max(...candidates);
 }
 
-function buildSearchPayload(pageNum: number, profile: SearchProfile = { ...SEARCH_PROFILE }): Record<string, string> {
+export function buildSearchPayload(
+  pageNum: number,
+  profile: SearchProfile = { ...SEARCH_PROFILE },
+  dateRange?: { start: string; end: string },
+): Record<string, string> {
+  const start = dateRange ? parseAcrisDateParts(dateRange.start) : null;
+  const end = dateRange ? parseAcrisDateParts(dateRange.end) : null;
   return {
     ...profile,
-    hid_datefromm: '',
-    hid_datefromd: '',
-    hid_datefromy: '',
-    hid_datetom: '',
-    hid_datetod: '',
-    hid_datetoy: '',
+    hid_selectdate: start && end ? 'DR' : profile.hid_selectdate,
+    hid_datefromm: start?.month ?? '',
+    hid_datefromd: start?.day ?? '',
+    hid_datefromy: start?.year ?? '',
+    hid_datetom: end?.month ?? '',
+    hid_datetod: end?.day ?? '',
+    hid_datetoy: end?.year ?? '',
     hid_page: String(pageNum),
     hid_ReqID: '',
   };
@@ -1093,7 +1192,7 @@ async function loadResultPage(page: Page, pageNum: number, state: SearchState, m
   const profile = state.profile;
   await submitHiddenPostToResults(page, manifest, `${BASE}${PATHS.result}`, {
     __RequestVerificationToken: token,
-    ...buildSearchPayload(pageNum, profile),
+    ...buildSearchPayload(pageNum, profile, state.requestDateRange),
   }, `submit_result_page_${pageNum}`);
   state.pageNum = pageNum;
 }
@@ -1581,7 +1680,7 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
   });
 }
 
-export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord[]> {
+export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResult> {
   return nycAcrisLimiter.schedule(async () => {
     const startedAtMs = Date.now();
     const limits = resolveSafeRunLimits(options.max_records);
@@ -1600,6 +1699,8 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
       completedDocs: 0,
       connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
       checkpoint: checkpoint ? { pageNum: checkpoint.pageNum, docIndex: checkpoint.docIndex } : undefined,
+      requestedDateStart: normalizeAcrisDate(options.date_start) ?? options.date_start,
+      requestedDateEnd: normalizeAcrisDate(options.date_end) ?? options.date_end,
     };
 
     const handle = await createAcrisContext();
@@ -1610,6 +1711,10 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
     const state: SearchState = {
       pageNum: checkpoint?.pageNum ?? 1,
       profile: { ...SEARCH_PROFILE },
+      requestDateRange: {
+        start: normalizeAcrisDate(options.date_start) ?? options.date_start,
+        end: normalizeAcrisDate(options.date_end) ?? options.date_end,
+      },
     };
 
     try {
@@ -1645,8 +1750,26 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
         if (collectedRows.length >= limits.maxRecords) break;
       }
 
-      const selectedRows = collectedRows.slice(0, limits.maxRecords);
+      manifest.discoveredCount = collectedRows.length;
+      const rangeBeforeFilter = summarizeDateRange(collectedRows);
+      const filtered = filterRowsByAcrisDateRange(collectedRows, options);
+      manifest.filteredOutCount = filtered.filteredOutCount;
+      const filteredRange = summarizeDateRange(filtered.rows);
+      manifest.returnedMinFilingDate = filteredRange.min;
+      manifest.returnedMaxFilingDate = filteredRange.max;
+
+      if (filtered.rows.length === 0 && collectedRows.length > 0 && filtered.hadOutOfRangeRows) {
+        const requestedStart = state.requestDateRange?.start ?? options.date_start;
+        const requestedEnd = state.requestDateRange?.end ?? options.date_end;
+        throw new Error(
+          `ACRIS returned ${collectedRows.length} rows outside requested range ${requestedStart}-${requestedEnd}` +
+          ` upstream_range=${rangeBeforeFilter.min ?? 'unknown'}-${rangeBeforeFilter.max ?? 'unknown'}`
+        );
+      }
+
+      const selectedRows = filtered.rows.slice(0, limits.maxRecords);
       manifest.docIds = selectedRows.map((row) => row.docId);
+      manifest.returnedCount = selectedRows.length;
 
       const startIndex = checkpoint?.docIndex ?? 0;
       for (let index = startIndex; index < selectedRows.length; index++) {
@@ -1698,13 +1821,34 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<LienRecord
         proxy_server_present: Boolean(process.env.BRIGHTDATA_PROXY_SERVER),
         proxy_server_redacted: redactSecret(process.env.BRIGHTDATA_PROXY_SERVER),
         records_scraped: selectedRows.length,
+        requested_date_start: manifest.requestedDateStart,
+        requested_date_end: manifest.requestedDateEnd,
+        discovered_count: manifest.discoveredCount ?? collectedRows.length,
+        returned_count: manifest.returnedCount ?? selectedRows.length,
+        filtered_out_count: manifest.filteredOutCount ?? 0,
+        returned_min_filing_date: manifest.returnedMinFilingDate,
+        returned_max_filing_date: manifest.returnedMaxFilingDate,
         failure_count: manifest.failures.length,
         manifest_file: manifestFile,
         initial_cap_enforced: ENFORCE_INITIAL_CAP,
         session_duration_ms: manifest.sessionDurationMs,
       });
 
-      return selectedRows.map((row) => toLienRecord(row, artifactsByDocId.get(row.docId)));
+      return attachScrapeQualitySummary(
+        selectedRows.map((row) => toLienRecord(row, artifactsByDocId.get(row.docId))),
+        {
+          requested_date_start: manifest.requestedDateStart ?? options.date_start,
+          requested_date_end: manifest.requestedDateEnd ?? options.date_end,
+          discovered_count: manifest.discoveredCount ?? collectedRows.length,
+          returned_count: manifest.returnedCount ?? selectedRows.length,
+          quarantined_count: 0,
+          partial_run: manifest.filteredOutCount !== undefined && manifest.filteredOutCount > 0,
+          partial_reason: manifest.filteredOutCount && manifest.filteredOutCount > 0 ? 'rows_filtered_outside_requested_range' : undefined,
+          filtered_out_count: manifest.filteredOutCount ?? 0,
+          returned_min_filing_date: manifest.returnedMinFilingDate,
+          returned_max_filing_date: manifest.returnedMaxFilingDate,
+        }
+      );
     } catch (err: unknown) {
       const message = sanitizeErrorMessage(err);
       manifest.finishedAt = nowIso();

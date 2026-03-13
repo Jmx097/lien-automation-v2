@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import type { LienRecord } from '../types';
+import { attachScrapeQualitySummary, type LienRecord, type ScrapeResult } from '../types';
 import { log } from '../utils/logger';
 import { checkOCRRuntime } from './ocr-runtime';
 import {
@@ -69,6 +69,14 @@ export interface MaricopaArtifactEnrichment extends Partial<MaricopaOcrExtractio
   artifactContentType?: string;
   artifactPath?: string;
   completenessReason?: string;
+}
+
+interface MaricopaRangeCollection {
+  rows: MaricopaSearchRow[];
+  discoveredCount: number;
+  truncationDetected: boolean;
+  truncationReason?: string;
+  searchResultsSeen: number;
 }
 
 export type MaricopaFailureKind =
@@ -159,6 +167,43 @@ function subtractDaysFromIsoDate(input: string, days: number): string {
   const date = new Date(`${input}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() - days);
   return date.toISOString().slice(0, 10);
+}
+
+function addDaysToIsoDate(input: string, days: number): string {
+  const date = new Date(`${input}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daySpanInclusive(startIso: string, endIso: string): number {
+  const start = new Date(`${startIso}T00:00:00.000Z`);
+  const end = new Date(`${endIso}T00:00:00.000Z`);
+  return Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+}
+
+function splitIsoDateRange(startIso: string, endIso: string): { leftEndIso: string; rightStartIso: string } {
+  const span = daySpanInclusive(startIso, endIso);
+  const leftSpan = Math.max(1, Math.floor(span / 2));
+  const leftEndIso = addDaysToIsoDate(startIso, leftSpan - 1);
+  const rightStartIso = addDaysToIsoDate(leftEndIso, 1);
+  return { leftEndIso, rightStartIso };
+}
+
+export function resolveMaricopaTruncationState(
+  totalResults: number,
+  dateStartIso: string,
+  dateEndIso: string,
+): { truncated: boolean; reason?: string } {
+  if (totalResults < MARICOPA_SEARCH_MAX_RESULTS) {
+    return { truncated: false };
+  }
+  if (daySpanInclusive(dateStartIso, dateEndIso) <= 1) {
+    return {
+      truncated: true,
+      reason: `search_cap_reached_single_day:${dateStartIso}`,
+    };
+  }
+  return { truncated: false };
 }
 
 async function withMaricopaRetry<T>(
@@ -469,6 +514,76 @@ async function fetchSearchPage(dateStartIso: string, dateEndIso: string, pageNum
   );
 }
 
+async function collectMaricopaRowsForRange(
+  dateStartIso: string,
+  dateEndIso: string,
+  maxRecords: number,
+  stopRequested?: () => boolean,
+): Promise<MaricopaRangeCollection> {
+  const firstPage = await fetchSearchPage(dateStartIso, dateEndIso, 1);
+  let searchResultsSeen = firstPage.searchResults.length;
+
+  if (stopRequested?.()) {
+    return {
+      rows: firstPage.searchResults.slice(0, maxRecords),
+      discoveredCount: firstPage.totalResults,
+      truncationDetected: false,
+      searchResultsSeen,
+    };
+  }
+
+  const truncation = resolveMaricopaTruncationState(firstPage.totalResults, dateStartIso, dateEndIso);
+  if (firstPage.totalResults >= MARICOPA_SEARCH_MAX_RESULTS) {
+    if (truncation.truncated) {
+      return {
+        rows: firstPage.searchResults.slice(0, maxRecords),
+        discoveredCount: firstPage.totalResults,
+        truncationDetected: true,
+        truncationReason: truncation.reason,
+        searchResultsSeen,
+      };
+    }
+
+    const { leftEndIso, rightStartIso } = splitIsoDateRange(dateStartIso, dateEndIso);
+    const left = await collectMaricopaRowsForRange(dateStartIso, leftEndIso, maxRecords, stopRequested);
+    const remaining = Math.max(maxRecords - left.rows.length, 0);
+    const right = remaining > 0
+      ? await collectMaricopaRowsForRange(rightStartIso, dateEndIso, remaining, stopRequested)
+      : { rows: [], discoveredCount: 0, truncationDetected: false, searchResultsSeen: 0 } as MaricopaRangeCollection;
+
+    return {
+      rows: [...left.rows, ...right.rows].slice(0, maxRecords),
+      discoveredCount: left.discoveredCount + right.discoveredCount,
+      truncationDetected: left.truncationDetected || right.truncationDetected,
+      truncationReason: left.truncationReason ?? right.truncationReason,
+      searchResultsSeen: searchResultsSeen + left.searchResultsSeen + right.searchResultsSeen,
+    };
+  }
+
+  const allRows = [...firstPage.searchResults];
+  let pageNumber = 2;
+
+  while (
+    allRows.length < Math.min(maxRecords, firstPage.totalResults) &&
+    allRows.length < firstPage.totalResults
+  ) {
+    if (stopRequested?.()) break;
+    const page = await fetchSearchPage(dateStartIso, dateEndIso, pageNumber);
+    if (page.searchResults.length === 0) break;
+    allRows.push(...page.searchResults);
+    searchResultsSeen += page.searchResults.length;
+    if (page.searchResults.length < MARICOPA_SEARCH_PAGE_SIZE) break;
+    pageNumber += 1;
+  }
+
+  return {
+    rows: allRows.slice(0, maxRecords),
+    discoveredCount: firstPage.totalResults,
+    truncationDetected: false,
+    searchResultsSeen,
+  };
+}
+
 export async function fetchLatestMaricopaSearchableDate(): Promise<string> {
   const raw = await withMaricopaRetry(
     'latest_searchable_date',
@@ -630,7 +745,7 @@ async function enrichMaricopaDetail(detail: MaricopaDocumentDetail): Promise<Mar
   };
 }
 
-export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<LienRecord[]> {
+export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<ScrapeResult> {
   const dateStartIso = toMaricopaIsoDate(options.date_start);
   const dateEndIso = toMaricopaIsoDate(options.date_end);
   const latestSearchableIso = await fetchLatestMaricopaSearchableDate();
@@ -639,7 +754,7 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Li
     1,
     Math.min(options.max_records ?? MARICOPA_DEFAULT_MAX_RECORDS, MARICOPA_DEFAULT_MAX_RECORDS),
   );
-  const allRows: MaricopaSearchRow[] = [];
+  let searchResultsSeen = 0;
 
   log({
     stage: 'scraper_start',
@@ -674,49 +789,25 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Li
     return [];
   }
 
-  let pageNumber = 1;
-  let totalResults = 0;
-
-  while (allRows.length < maxRecords) {
-    if (options.stop_requested?.()) {
-      log({
-        stage: 'scraper_stop_requested',
-        site: 'maricopa_recorder',
-        page_number: pageNumber,
-        records_collected: allRows.length,
-      });
-      break;
-    }
-
-    const page = await fetchSearchPage(
-      resolvedRange.date_start_iso,
-      resolvedRange.date_end_iso,
-      pageNumber,
-    );
-    totalResults = page.totalResults;
-    if (page.searchResults.length === 0) break;
-
-    allRows.push(...page.searchResults);
-
-    if (
-      allRows.length >= maxRecords ||
-      allRows.length >= totalResults ||
-      page.searchResults.length < MARICOPA_SEARCH_PAGE_SIZE
-    ) {
-      break;
-    }
-
-    pageNumber += 1;
-  }
-
-  const limitedRows = allRows.slice(0, maxRecords);
+  const collected = await collectMaricopaRowsForRange(
+    resolvedRange.date_start_iso,
+    resolvedRange.date_end_iso,
+    maxRecords,
+    options.stop_requested,
+  );
+  searchResultsSeen = collected.searchResultsSeen;
+  const totalResults = collected.discoveredCount;
+  const limitedRows = collected.rows.slice(0, maxRecords);
   const records: LienRecord[] = [];
   let completeRecords = 0;
   let incompleteRecords = 0;
+  let enrichedRecords = 0;
+  let detailsFetched = 0;
 
   for (const row of limitedRows) {
     if (options.stop_requested?.()) break;
     const detail = await fetchDocumentDetail(String(row.recordingNumber));
+    detailsFetched += 1;
     const enrichment = await enrichMaricopaDetail(detail).catch((error) => {
       log({
         stage: 'maricopa_artifact_enrichment_failed',
@@ -726,6 +817,9 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Li
       });
       return undefined;
     });
+    if (enrichment?.artifactUrl || enrichment?.amount || enrichment?.debtorAddress) {
+      enrichedRecords += 1;
+    }
     const record = mapMaricopaDetailToLienRecord(detail, enrichment);
     if (record.error) {
       incompleteRecords += 1;
@@ -740,11 +834,32 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Li
     site: 'maricopa_recorder',
     total_results: totalResults,
     records_scraped: records.length,
+    search_results_seen: searchResultsSeen,
+    details_fetched: detailsFetched,
+    enriched_records: enrichedRecords,
+    partial_records: incompleteRecords,
     complete_records: completeRecords,
     incomplete_records: incompleteRecords,
-    pages_visited: allRows.length === 0 ? 0 : pageNumber,
+    truncation_detected: collected.truncationDetected,
+    truncation_reason: collected.truncationReason,
     latest_searchable_date: latestSearchableIso,
   });
 
-  return records;
+  return attachScrapeQualitySummary(records, {
+    requested_date_start: options.date_start,
+    requested_date_end: options.date_end,
+    discovered_count: totalResults,
+    returned_count: records.length,
+    quarantined_count: 0,
+    partial_run: collected.truncationDetected || incompleteRecords > 0,
+    partial_reason: collected.truncationDetected
+      ? collected.truncationReason ?? 'search_cap_reached'
+      : incompleteRecords > 0
+        ? 'artifact_or_ocr_incomplete'
+        : undefined,
+    search_results_seen: searchResultsSeen,
+    details_fetched: detailsFetched,
+    enriched_records: enrichedRecords,
+    partial_records: incompleteRecords,
+  });
 }

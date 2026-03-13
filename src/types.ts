@@ -21,3 +21,34 @@ export interface LienRecord {
   confidence_score?: number;  // Overall record confidence [0,1]
   lead_type?: string;         // "Lien" or "Release" from PDF header
 }
+
+export interface ScrapeRunQualitySummary {
+  requested_date_start: string;
+  requested_date_end: string;
+  discovered_count?: number;
+  returned_count: number;
+  quarantined_count: number;
+  partial_run: boolean;
+  partial_reason?: string;
+  filtered_out_count?: number;
+  skipped_existing_count?: number;
+  search_results_seen?: number;
+  details_fetched?: number;
+  enriched_records?: number;
+  partial_records?: number;
+  returned_min_filing_date?: string;
+  returned_max_filing_date?: string;
+}
+
+export type ScrapeResult = LienRecord[] & {
+  quality_summary?: ScrapeRunQualitySummary;
+};
+
+export function attachScrapeQualitySummary(
+  records: LienRecord[],
+  qualitySummary: ScrapeRunQualitySummary,
+): ScrapeResult {
+  const result = records as ScrapeResult;
+  result.quality_summary = qualitySummary;
+  return result;
+}

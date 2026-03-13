@@ -110,6 +110,11 @@ vi.mock('pg', () => {
           max_attempts: Number(params[22]),
           retried: Number(params[23]),
           retry_exhausted: Number(params[24]),
+          requested_date_start: params[29] == null ? undefined : String(params[29]),
+          requested_date_end: params[30] == null ? undefined : String(params[30]),
+          discovered_count: Number(params[31] ?? 0),
+          returned_count: Number(params[32] ?? 0),
+          partial_reason: params[33] == null ? undefined : String(params[33]),
           created_at: nowIso(),
           updated_at: nowIso(),
         };
@@ -118,7 +123,7 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('UPDATE scheduled_runs')) {
-        const existing = pgState.runs.get(String(params[30]));
+        const existing = pgState.runs.get(String(params[35]));
         if (existing) {
           pgState.runs.set(existing.id, {
             ...existing,
@@ -142,6 +147,11 @@ vi.mock('pg', () => {
             max_attempts: Number(params[17]),
             retried: Number(params[18]),
             retry_exhausted: Number(params[19]),
+            requested_date_start: params[24] == null ? undefined : String(params[24]),
+            requested_date_end: params[25] == null ? undefined : String(params[25]),
+            discovered_count: Number(params[26] ?? 0),
+            returned_count: Number(params[27] ?? 0),
+            partial_reason: params[28] == null ? undefined : String(params[28]),
             updated_at: nowIso(),
           });
         }

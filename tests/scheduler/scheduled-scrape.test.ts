@@ -189,10 +189,23 @@ describe('runScheduledScrape', () => {
 
   it('uploads scraped records to sheets and persists quality metrics', async () => {
     mockProbeCASOSResultCount.mockResolvedValueOnce(2);
-    mockScraper.mockResolvedValueOnce([
+    const records = [
       { filing_number: '1', amount: '100', amount_reason: 'ok' },
       { filing_number: '2', amount: '200', amount_reason: 'ok' },
-    ]);
+    ];
+    Object.assign(records, {
+      quality_summary: {
+        requested_date_start: '03/06/2026',
+        requested_date_end: '03/13/2026',
+        discovered_count: 2,
+        returned_count: 2,
+        quarantined_count: 1,
+        partial_run: true,
+        partial_reason: 'quarantined_failed_rows',
+        skipped_existing_count: 3,
+      },
+    });
+    mockScraper.mockResolvedValueOnce(records);
     mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
     mockSyncMasterSheetTab.mockResolvedValueOnce({
       tab_title: 'Master',
@@ -215,6 +228,11 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('success');
     expect(result.rows_uploaded).toBe(2);
     expect(result.records_scraped).toBe(2);
+    expect(result.records_skipped).toBe(3);
+    expect(result.discovered_count).toBe(2);
+    expect(result.returned_count).toBe(2);
+    expect(result.partial_reason).toBe('quarantined_failed_rows');
+    expect(result.quarantined_row_count).toBe(1);
     expect(result.amount_found_count).toBe(2);
     expect(result.amount_coverage_pct).toBeGreaterThan(90);
     expect(mockSyncMasterSheetTab).toHaveBeenCalledTimes(1);
@@ -223,6 +241,9 @@ describe('runScheduledScrape', () => {
     const history = await getRunHistory(1);
     expect(history[0].confidence?.status).toBe('low');
     expect(history[0].confidence?.reasons).toContain('master_publish_fallback_active');
+    expect(history[0].requested_date_start).toBe('03/06/2026');
+    expect(history[0].requested_date_end).toBe('03/13/2026');
+    expect(history[0].partial_reason).toBe('quarantined_failed_rows');
   });
 
   it('sends a new leads notification when Master gains new rows', async () => {

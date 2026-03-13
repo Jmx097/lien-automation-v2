@@ -101,8 +101,10 @@ function setReadyEnv(): void {
   process.env.SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE = '0';
   process.env.SCHEDULE_NYC_ACRIS_TIMEZONE = 'America/New_York';
   process.env.SCHEDULE_NYC_ACRIS_WEEKLY_DAYS = 'TU,WE,TH,FR';
-  process.env.SCHEDULE_NYC_ACRIS_RUN_HOUR = '14';
-  process.env.SCHEDULE_NYC_ACRIS_RUN_MINUTE = '0';
+  process.env.SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR = '10';
+  process.env.SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE = '0';
+  process.env.SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR = '14';
+  process.env.SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE = '0';
   process.env.SCHEDULE_NYC_ACRIS_MAX_RECORDS = '5';
 }
 
