@@ -99,7 +99,7 @@ Returns a compact recent-runs view intended for operator dashboards, including c
 
 ### POST /schedule/run
 
-Authenticated endpoint for external scheduler triggers. Accepts optional `site`, `slot` (`morning`/`afternoon`), and `idempotency_key`. Scheduled runs create a brand-new sheet tab per run.
+Authenticated endpoint for external scheduler triggers. Accepts optional `site`, `slot` (`morning`/`afternoon`/`evening`), and `idempotency_key`. Scheduled runs create a brand-new sheet tab per run.
 
 When `ENABLE_SCHEDULE_FAILURE_INJECTION=1`, operators may also send `test_retry_failure_class` with one of `timeout_or_navigation`, `viewer_roundtrip`, `token_or_session_state`, or `sheet_export` to force exactly one retryable failure on the first attempt of that logical run. This is intended for controlled canaries only.
 
@@ -165,19 +165,19 @@ Important optional environment variables:
 - `MARICOPA_SESSION_MAX_AGE_MINUTES`, `MARICOPA_RETRY_ATTEMPTS`, `MARICOPA_RETRY_BASE_DELAY_MS`, `MARICOPA_RETRY_MAX_DELAY_MS`, and `MARICOPA_OCR_MAX_PAGES` tune Maricopa session freshness, retry behavior, and OCR scope.
 - `MARICOPA_OUT_DIR` overrides the default `out/maricopa` workspace for session state, discovery artifacts, and downloaded artifacts.
 
-- `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
-- `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
-- `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
+- `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_MORNING_RUN_HOUR`, `SCHEDULE_CA_SOS_MORNING_RUN_MINUTE`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_CA_SOS_EVENING_RUN_HOUR`, `SCHEDULE_CA_SOS_EVENING_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
+- `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
+- `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
 - `TESSERACT_PATH`, `PDFTOPPM_PATH`, `REQUIRE_OCR_TOOLS`
 
 For CA SOS scheduled runs specifically:
 
-- `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are the target finish-by time.
+- `SCHEDULE_CA_SOS_*_RUN_HOUR` / `SCHEDULE_CA_SOS_*_RUN_MINUTE` are the target finish-by times for the `morning`, `afternoon`, and `evening` slots.
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
-- Cloud Run deploy defaults now schedule CA SOS, Maricopa Recorder, and NYC ACRIS for all days of the week unless you intentionally override the per-site `*_WEEKLY_DAYS` env vars.
+- Cloud Run deploy defaults now schedule CA SOS, Maricopa Recorder, and NYC ACRIS on weekdays only in `America/Denver`, with finish-by targets of `10:00`, `14:00`, and `22:00`.
 
 ## OCR Runtime Notes
 
@@ -445,33 +445,33 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 
 - **Execution target:** `POST /schedule/run` only
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
-- **Timezone:** `America/New_York`
-- **CA SOS semantics:** `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
-- **Trigger times:** CA SOS Tue/Wed at `06:00` by default for a `09:00` finish-by; Maricopa daily at `10:00 America/Phoenix`; NYC ACRIS Tue/Wed/Thu/Fri at `14:00`
-- **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
+- **Timezone:** `America/Denver`
+- **CA SOS semantics:** `SCHEDULE_CA_SOS_*_RUN_HOUR` / `SCHEDULE_CA_SOS_*_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
+- **Trigger times:** CA SOS weekdays at `07:00`, `11:00`, and `19:00` Mountain time for `10:00`, `14:00`, and `22:00` finish-by targets; Maricopa and NYC trigger at `10:00`, `14:00`, and `22:00` Mountain time by default
+- **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`/`evening`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
 ### External scheduler configuration (per-site triggers)
 
 Linux cron example:
 
 ```cron
-# CA SOS Tue/Wed 06:00 America/New_York (default 3-hour lead for a 09:00 finish-by time)
-0 6 * * 2,3 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# CA SOS weekdays 07:00 America/Denver (default 3-hour lead for a 10:00 finish-by time)
+0 7 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"ca_sos","slot":"morning"}'
 
-# Maricopa daily 10:00 America/Phoenix
-0 10 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# Maricopa weekdays 14:00 America/Denver
+0 14 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"site":"maricopa_recorder"}'
+  -d '{"site":"maricopa_recorder","slot":"afternoon"}'
 
-# NYC ACRIS Tue/Wed/Thu/Fri 14:00 America/New_York
-0 14 * * 2,3,4,5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# NYC ACRIS weekdays 22:00 America/Denver
+0 22 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"site":"nyc_acris","slot":"afternoon"}'
+  -d '{"site":"nyc_acris","slot":"evening"}'
 ```
 
 Cloud Scheduler equivalent: create one job per site with the appropriate schedule and JSON body.
@@ -487,7 +487,7 @@ bash scripts/cloud/verify-cloud-scheduler-jobs.sh
 
 1. Run records are stored in the scheduler store table `scheduled_runs` (SQLite locally, Postgres when `DATABASE_URL` is set), including `slot_time`, `started_at`, `finished_at`, `status`, `records_scraped`, `rows_uploaded`, and `error`.
 2. Duplicate triggers for the same `idempotency_key` are ignored unless the prior run ended in `error`; cooldown checks also read persisted DB state.
-3. Missed-run monitoring checks for successful morning/afternoon runs and creates alert records in `scheduler_alerts`.
+3. Missed-run monitoring checks for successful morning/afternoon/evening runs and creates alert records in `scheduler_alerts`.
 4. Optional outbound alert webhook can be enabled with `SCHEDULE_ALERT_WEBHOOK_URL`. It is used for missed runs, connectivity alerts, and successful-run quality anomalies.
 5. `GET /schedule/health` returns schedule readiness checks (required env vars, scheduler-store reachability, and Google Sheets credential parsing).
 6. Successful scheduled runs write raw `Scheduled_*` tabs into the source workbook (`SHEET_ID`) and then publish a filtered merged `Master` dataset to the destination workbook (`MERGED_SHEET_ID` or the built-in default target). If the destination workbook is not reachable yet, the merged `Master` publish falls back to the source workbook so scheduled runs remain operational.

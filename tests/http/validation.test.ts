@@ -40,8 +40,21 @@ describe('HTTP validation', () => {
     expect(schedule.ok).toBe(false);
     if (!schedule.ok) {
       expect(schedule.issues.map((issue) => issue.field)).toEqual(
-        expect.arrayContaining(['slot', 'idempotency_key', 'test_retry_failure_class'])
+        expect.arrayContaining(['idempotency_key', 'test_retry_failure_class'])
       );
+    }
+  });
+
+  it('accepts the evening slot for scheduled runs', () => {
+    const schedule = validateScheduleRunRequest({
+      site: 'nyc_acris',
+      slot: 'evening',
+      idempotency_key: 'nyc_acris:2026-03-10:evening',
+    });
+
+    expect(schedule.ok).toBe(true);
+    if (schedule.ok) {
+      expect(schedule.value.slot).toBe('evening');
     }
   });
 });

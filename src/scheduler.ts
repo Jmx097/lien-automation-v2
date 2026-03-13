@@ -34,9 +34,9 @@ const SCHEDULE_COOLDOWN_MINUTES = 10;
 const ENABLE_SCHEDULE_IDEMPOTENCY = process.env.ENABLE_SCHEDULE_IDEMPOTENCY === '1';
 const AMOUNT_MIN_COVERAGE_PCT = Number(process.env.AMOUNT_MIN_COVERAGE_PCT ?? '95');
 const SCHEDULE_AUTO_THROTTLE = process.env.SCHEDULE_AUTO_THROTTLE !== '0';
-const SCHEDULE_MAX_RECORDS = Number(process.env.SCHEDULE_MAX_RECORDS ?? '1000');
-const SCHEDULE_MAX_RECORDS_FLOOR = Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '25');
-const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000');
+const SCHEDULE_MAX_RECORDS = Number(process.env.SCHEDULE_MAX_RECORDS ?? '75');
+const SCHEDULE_MAX_RECORDS_FLOOR = Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '75');
+const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '75');
 const SCHEDULE_RUN_MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
 const SCHEDULE_RUN_BASE_DELAY_MS = Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
 const SCHEDULE_RUN_MAX_DELAY_MS = Math.max(SCHEDULE_RUN_BASE_DELAY_MS, Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
@@ -48,7 +48,7 @@ const SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS = Math.max(0, Number(process.env.SCH
 const SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS ?? '20'));
 export const SCHEDULE_FAILURE_INJECTION_ENABLED = process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
 
-type Slot = 'morning' | 'afternoon';
+export type Slot = 'morning' | 'afternoon' | 'evening';
 type TriggerSource = 'external' | 'manual';
 export type RetryableScheduledFailureClass =
   | 'timeout_or_navigation'
@@ -69,7 +69,8 @@ interface SiteScheduleConfig {
   slot: Slot;
 }
 
-const ALL_DAYS = 'MO,TU,WE,TH,FR,SA,SU';
+const DEFAULT_WEEKDAYS = 'MO,TU,WE,TH,FR';
+const DEFAULT_TIMEZONE = 'America/Denver';
 
 export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
@@ -194,86 +195,46 @@ function getSiteEnv(site: SupportedSite, suffix: string, legacyName?: string): s
 }
 
 function getSiteSchedules(site: SupportedSite): SiteScheduleConfig[] {
-  if (site === 'nyc_acris') {
-    const timezone = getSiteEnv(site, 'TIMEZONE') ?? 'America/New_York';
-    const days = (getSiteEnv(site, 'WEEKLY_DAYS') ?? ALL_DAYS).split(',').map((value) => value.trim().toUpperCase());
-    const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? '5');
+  const timezone = getSiteEnv(site, 'TIMEZONE', 'SCHEDULE_TARGET_TIMEZONE') ?? DEFAULT_TIMEZONE;
+  const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? DEFAULT_WEEKDAYS)
+    .split(',')
+    .map((value) => value.trim().toUpperCase());
+  const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? SCHEDULE_MAX_RECORDS);
+  const triggerLeadMinutes = Number(getSiteEnv(site, 'TRIGGER_LEAD_MINUTES') ?? (site === 'ca_sos' ? '180' : '0'));
 
-    const morningRunHour = Number(getSiteEnv(site, 'MORNING_RUN_HOUR') ?? '10');
-    const morningRunMinute = Number(getSiteEnv(site, 'MORNING_RUN_MINUTE') ?? '0');
-    const morningDeadlineHour = Number(getSiteEnv(site, 'MORNING_DEADLINE_HOUR') ?? '14');
-    const morningDeadlineMinute = Number(getSiteEnv(site, 'MORNING_DEADLINE_MINUTE') ?? '0');
-    const afternoonRunHour = Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR') ?? getSiteEnv(site, 'RUN_HOUR') ?? '14');
-    const afternoonRunMinute = Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE') ?? getSiteEnv(site, 'RUN_MINUTE') ?? '0');
-    const afternoonDeadlineHour = Number(getSiteEnv(site, 'AFTERNOON_DEADLINE_HOUR') ?? getSiteEnv(site, 'DEADLINE_HOUR') ?? '18');
-    const afternoonDeadlineMinute = Number(getSiteEnv(site, 'AFTERNOON_DEADLINE_MINUTE') ?? getSiteEnv(site, 'DEADLINE_MINUTE') ?? '0');
-
-    return [
-      {
-        site,
-        timezone,
-        days,
-        triggerHour: morningRunHour,
-        triggerMinute: morningRunMinute,
-        finishByHour: morningDeadlineHour,
-        finishByMinute: morningDeadlineMinute,
-        triggerLeadMinutes: 0,
-        maxRecords,
-        slot: 'morning',
-      },
-      {
-        site,
-        timezone,
-        days,
-        triggerHour: afternoonRunHour,
-        triggerMinute: afternoonRunMinute,
-        finishByHour: afternoonDeadlineHour,
-        finishByMinute: afternoonDeadlineMinute,
-        triggerLeadMinutes: 0,
-        maxRecords,
-        slot: 'afternoon',
-      },
-    ];
-  }
-
-  const timezone = getSiteEnv(site, 'TIMEZONE', 'SCHEDULE_TARGET_TIMEZONE') ?? 'America/New_York';
-  const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? ALL_DAYS).split(',').map((value) => value.trim().toUpperCase());
-  const morningFinishByHour = Number(getSiteEnv(site, 'MORNING_RUN_HOUR') ?? '9');
-  const morningFinishByMinute = Number(getSiteEnv(site, 'MORNING_RUN_MINUTE') ?? '0');
-  const afternoonFinishByHour = Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '15');
-  const afternoonFinishByMinute = Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0');
-  const triggerLeadMinutes = Number(getSiteEnv(site, 'TRIGGER_LEAD_MINUTES') ?? '180');
-  const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? SCHEDULE_MAX_RECORDS);
-
-  const morningTriggerTime = subtractMinutes(morningFinishByHour, morningFinishByMinute, triggerLeadMinutes);
-  const afternoonTriggerTime = subtractMinutes(afternoonFinishByHour, afternoonFinishByMinute, triggerLeadMinutes);
-
-  return [
+  const slotTimes: Array<{ slot: Slot; finishByHour: number; finishByMinute: number }> = [
     {
-      site,
-      timezone,
-      days,
-      triggerHour: morningTriggerTime.hour,
-      triggerMinute: morningTriggerTime.minute,
-      finishByHour: morningFinishByHour,
-      finishByMinute: morningFinishByMinute,
-      triggerLeadMinutes,
-      maxRecords,
       slot: 'morning',
+      finishByHour: Number(getSiteEnv(site, 'MORNING_RUN_HOUR') ?? '10'),
+      finishByMinute: Number(getSiteEnv(site, 'MORNING_RUN_MINUTE') ?? '0'),
     },
     {
-      site,
-      timezone,
-      days,
-      triggerHour: afternoonTriggerTime.hour,
-      triggerMinute: afternoonTriggerTime.minute,
-      finishByHour: afternoonFinishByHour,
-      finishByMinute: afternoonFinishByMinute,
-      triggerLeadMinutes,
-      maxRecords,
       slot: 'afternoon',
+      finishByHour: Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '14'),
+      finishByMinute: Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0'),
+    },
+    {
+      slot: 'evening',
+      finishByHour: Number(getSiteEnv(site, 'EVENING_RUN_HOUR', 'SCHEDULE_DEADLINE_HOUR') ?? '22'),
+      finishByMinute: Number(getSiteEnv(site, 'EVENING_RUN_MINUTE', 'SCHEDULE_DEADLINE_MINUTE') ?? '0'),
     },
   ];
+
+  return slotTimes.map(({ slot, finishByHour, finishByMinute }) => {
+    const triggerTime = subtractMinutes(finishByHour, finishByMinute, triggerLeadMinutes);
+    return {
+      site,
+      timezone,
+      days,
+      triggerHour: triggerTime.hour,
+      triggerMinute: triggerTime.minute,
+      finishByHour,
+      finishByMinute,
+      triggerLeadMinutes,
+      maxRecords,
+      slot,
+    };
+  });
 }
 
 function getSiteSchedule(site: SupportedSite, slot?: Slot): SiteScheduleConfig {
@@ -281,7 +242,9 @@ function getSiteSchedule(site: SupportedSite, slot?: Slot): SiteScheduleConfig {
   if (slot) return schedules.find((config) => config.slot === slot) ?? schedules[0];
 
   const now = getDateParts(new Date(), schedules[0].timezone);
-  return now.hour < 12 ? schedules[0] : schedules[1];
+  if (now.hour < schedules[1].finishByHour) return schedules[0];
+  if (now.hour < schedules[2].finishByHour) return schedules[1];
+  return schedules[2];
 }
 
 function getScheduleForSlot(site: SupportedSite, slot: Slot): SiteScheduleConfig {
@@ -530,12 +493,11 @@ function buildInjectedFailureError(failureClass: RetryableScheduledFailureClass)
 }
 
 function getSiteRecordBounds(site: SupportedSite): { min: number; max: number } {
-  if (site === 'nyc_acris') {
-    const max = getSiteSchedule(site).maxRecords;
-    return { min: 1, max };
-  }
-
-  return { min: SCHEDULE_MAX_RECORDS_FLOOR, max: SCHEDULE_MAX_RECORDS_CEILING };
+  const configuredMax = getSiteSchedule(site).maxRecords;
+  return {
+    min: clamp(configuredMax, SCHEDULE_MAX_RECORDS_FLOOR, SCHEDULE_MAX_RECORDS_CEILING),
+    max: clamp(configuredMax, SCHEDULE_MAX_RECORDS_FLOOR, SCHEDULE_MAX_RECORDS_CEILING),
+  };
 }
 
 async function resolveEffectiveMaxRecords(site: SupportedSite): Promise<number> {

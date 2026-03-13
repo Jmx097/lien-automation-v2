@@ -1,5 +1,5 @@
 [Unit]
-Description=Trigger scheduled lien scrape slot
+Description=Legacy single-endpoint scheduled scrape trigger
 After=lien-automation-api.service
 Requires=lien-automation-api.service
 

@@ -15,7 +15,7 @@ const pgState = {
   alerts: new Map<string, {
     site: string;
     idempotency_key: string;
-    slot: 'morning' | 'afternoon';
+    slot: 'morning' | 'afternoon' | 'evening';
     expected_by: string;
     alert_type: 'missed_run' | 'quality_anomaly';
     run_id?: string;
@@ -258,7 +258,7 @@ vi.mock('pg', () => {
           pgState.alerts.set(key, {
             site: String(params[0]) as ScheduledRunRecord['site'],
             idempotency_key: String(params[1]),
-            slot: String(params[2]) as 'morning' | 'afternoon',
+            slot: String(params[2]) as 'morning' | 'afternoon' | 'evening',
             expected_by: String(params[3]),
             alert_type: normalized.includes("'quality_anomaly'") ? 'quality_anomaly' : 'missed_run',
             run_id: params[4] == null ? undefined : String(params[4]),
@@ -321,7 +321,7 @@ function buildRun(id: string, site: ScheduledRunRecord['site'], startedAt: strin
     ocr_success_pct: 100,
     row_fail_pct: 0,
     deadline_hit: 0,
-    effective_max_records: 5,
+    effective_max_records: 75,
     partial: 0,
   };
 }
@@ -375,11 +375,11 @@ async function exerciseStore(store: ScheduledRunStore): Promise<void> {
 
   await store.insertMissedAlert({
     site: 'nyc_acris',
-    idempotency_key: 'nyc_acris:2026-03-11:afternoon',
-    slot: 'afternoon',
-    expected_by: '2026-03-11T18:45:00.000Z',
+    idempotency_key: 'nyc_acris:2026-03-11:evening',
+    slot: 'evening',
+    expected_by: '2026-03-11T22:45:00.000Z',
   });
-  expect((await store.getMissedAlertByKey('nyc_acris:2026-03-11:afternoon'))?.slot).toBe('afternoon');
+  expect((await store.getMissedAlertByKey('nyc_acris:2026-03-11:evening'))?.slot).toBe('evening');
 
   await store.insertQualityAnomalyAlert({
     site: 'nyc_acris',

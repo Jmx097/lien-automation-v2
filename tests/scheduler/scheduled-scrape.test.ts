@@ -382,7 +382,7 @@ describe('runScheduledScrape', () => {
     expect(mockPushToSheetsForTab).not.toHaveBeenCalled();
   });
 
-  it('falls back to the seeded cap when the CA probe fails', async () => {
+  it('keeps CA scheduled runs pinned to the fixed 75-record cap when the probe fails', async () => {
     controlState = { site: 'ca_sos', effective_max_records: 55 };
     mockProbeCASOSResultCount.mockRejectedValueOnce(new Error('probe failed'));
     mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
@@ -397,7 +397,7 @@ describe('runScheduledScrape', () => {
       triggerSource: 'manual',
     });
 
-    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 55 }));
+    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 75 }));
   });
 
   it('defers blocked nyc scheduled runs before scraping', async () => {
@@ -742,13 +742,20 @@ describe('runScheduledScrape', () => {
       { id: 'baseline-52', records_scraped: 5, amount_coverage_pct: 96, ocr_success_pct: 96, row_fail_pct: 4 },
       { id: 'baseline-53', records_scraped: 5, amount_coverage_pct: 97, ocr_success_pct: 97, row_fail_pct: 3 },
     ]);
-    mockScraper.mockResolvedValueOnce([
+    const records = [
       { filing_number: '1', amount: '100', amount_reason: 'ok' },
       { filing_number: '2', amount: '200', amount_reason: 'ok' },
       { filing_number: '3', amount: '300', amount_reason: 'ok' },
       { filing_number: '4', amount: '400', amount_reason: 'ok' },
       { filing_number: '5', amount: '500', amount_reason: 'ok' },
-    ]);
+    ];
+    Object.assign(records, {
+      quality_summary: {
+        discovered_count: 5,
+        returned_count: 5,
+      },
+    });
+    mockScraper.mockResolvedValueOnce(records);
     mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 5, tab_title: 'tab-name' });
 
     const { runScheduledScrape } = await import('../../src/scheduler');

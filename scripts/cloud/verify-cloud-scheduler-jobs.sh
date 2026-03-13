@@ -5,14 +5,18 @@ set -euo pipefail
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
-: "${SCHEDULE_CA_SOS_TIMEZONE:=America/New_York}"
-: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Phoenix}"
-: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/New_York}"
+: "${SCHEDULE_CA_SOS_TIMEZONE:=America/Denver}"
+: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Denver}"
+: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/Denver}"
 : "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
 : "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
-: "${MARICOPA_DAILY_JOB_NAME:=${JOB_NAME}-maricopa-recorder-daily}"
+: "${CA_EVENING_JOB_NAME:=${JOB_NAME}-ca-sos-evening}"
+: "${MARICOPA_MORNING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-morning}"
+: "${MARICOPA_AFTERNOON_JOB_NAME:=${JOB_NAME}-maricopa-recorder-afternoon}"
+: "${MARICOPA_EVENING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-evening}"
 : "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
 : "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
+: "${NYC_EVENING_JOB_NAME:=${JOB_NAME}-nyc-acris-evening}"
 
 RUN_URI="${API_BASE_URL%/}/schedule/run"
 
@@ -41,10 +45,14 @@ verify_job() {
   [[ "${bodies_match}" == "true" ]] || { echo "${name}: expected body ${expected_body}, got ${actual_body}" >&2; exit 1; }
 }
 
-verify_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-verify_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-verify_job "${MARICOPA_DAILY_JOB_NAME}" "0 10 * * *" '{"site":"maricopa_recorder"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-verify_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
-verify_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+verify_job "${CA_MORNING_JOB_NAME}" "0 7 * * 1-5" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+verify_job "${CA_AFTERNOON_JOB_NAME}" "0 11 * * 1-5" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+verify_job "${CA_EVENING_JOB_NAME}" "0 19 * * 1-5" '{"site":"ca_sos","slot":"evening"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+verify_job "${MARICOPA_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"maricopa_recorder","slot":"morning"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
+verify_job "${MARICOPA_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"maricopa_recorder","slot":"afternoon"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
+verify_job "${MARICOPA_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"maricopa_recorder","slot":"evening"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
+verify_job "${NYC_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+verify_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+verify_job "${NYC_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"nyc_acris","slot":"evening"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
 
 echo "Cloud Scheduler jobs verified for ${RUN_URI}"

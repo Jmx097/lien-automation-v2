@@ -115,7 +115,7 @@ function recreateSchedulerAlertsTable(db: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
-      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
       alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
@@ -175,6 +175,7 @@ function migrateSchedulerAlertsIfNeeded(db: Database.Database): void {
   if (!table?.sql) return;
   if (
     table.sql.includes("'quality_anomaly'") &&
+    table.sql.includes("'evening'") &&
     table.sql.includes('run_id') &&
     table.sql.includes('detected_at')
   ) return;
@@ -249,7 +250,7 @@ export function ensureDatabaseReady(): string {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
-      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
       alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
       expected_by TEXT NOT NULL,
       run_id TEXT,

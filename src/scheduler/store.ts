@@ -52,7 +52,7 @@ export type SchedulerAlertType = 'missed_run' | 'quality_anomaly';
 interface MissedAlertRecord {
   site: SupportedSite;
   idempotency_key: string;
-  slot: 'morning' | 'afternoon';
+  slot: 'morning' | 'afternoon' | 'evening';
   expected_by: string;
 }
 
@@ -60,7 +60,7 @@ export interface QualityAnomalyAlertRecord {
   site: SupportedSite;
   idempotency_key: string;
   run_id: string;
-  slot: 'morning' | 'afternoon';
+  slot: 'morning' | 'afternoon' | 'evening';
   metrics_triggered: string[];
   summary: string;
   baseline_records_scraped: number;
@@ -320,7 +320,7 @@ function createCommonSchemaSql(): string[] {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         site TEXT NOT NULL DEFAULT 'ca_sos',
         idempotency_key TEXT NOT NULL,
-        slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+        slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
         alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
         expected_by TEXT NOT NULL,
         run_id TEXT,
@@ -388,7 +388,7 @@ function recreateSchedulerAlertsTable(db: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
-      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+      slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
       alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
@@ -478,6 +478,7 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       | undefined;
     const alertsNeedRecreate = !alertsTable?.sql ||
       !alertsTable.sql.includes("'quality_anomaly'") ||
+      !alertsTable.sql.includes("'evening'") ||
       !alertColumns.some((column) => column.name === 'run_id') ||
       !alertColumns.some((column) => column.name === 'detected_at');
     if (alertsNeedRecreate) {
@@ -974,7 +975,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           id BIGSERIAL PRIMARY KEY,
           site TEXT NOT NULL DEFAULT 'ca_sos',
           idempotency_key TEXT NOT NULL,
-          slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon')),
+          slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
           alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
           expected_by TIMESTAMPTZ NOT NULL,
           run_id TEXT,

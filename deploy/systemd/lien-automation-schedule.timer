@@ -1,9 +1,10 @@
 [Unit]
-Description=Two daily scheduled scrape triggers (07:30 and 19:30 America/New_York)
+Description=Legacy single-endpoint scheduler example (production uses per-site weekday Mountain-time triggers)
 
 [Timer]
-OnCalendar=*-*-* 07:30:00 America/New_York
-OnCalendar=*-*-* 19:30:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 07:00:00 America/Denver
+OnCalendar=Mon..Fri *-*-* 11:00:00 America/Denver
+OnCalendar=Mon..Fri *-*-* 19:00:00 America/Denver
 Persistent=true
 Unit=lien-automation-schedule.service
 

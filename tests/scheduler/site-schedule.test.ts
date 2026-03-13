@@ -87,11 +87,13 @@ describe('site-aware scheduler', () => {
     const { getNextRuns } = await import('../../src/scheduler');
     const nextRuns = getNextRuns();
 
+    expect(nextRuns).toHaveLength(9);
     expect(nextRuns).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
-        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
-        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '14:00', trigger_time: '14:00', finish_by_time: '18:00', deadline_time: '18:00' }),
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR', run_time: '07:00', trigger_time: '07:00', finish_by_time: '10:00', deadline_time: '10:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '19:00', trigger_time: '19:00', finish_by_time: '22:00', deadline_time: '22:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR', run_time: '14:00', trigger_time: '14:00', finish_by_time: '14:00', deadline_time: '14:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '22:00', trigger_time: '22:00', finish_by_time: '22:00', deadline_time: '22:00', timezone: 'America/Denver' }),
       ])
     );
   });

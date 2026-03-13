@@ -1,5 +1,5 @@
 import { supportedSites, type SupportedSite } from '../sites';
-import type { RetryableScheduledFailureClass } from '../scheduler';
+import type { RetryableScheduledFailureClass, Slot } from '../scheduler';
 
 export interface ValidationIssue {
   field: string;
@@ -23,7 +23,7 @@ export interface ScrapeRequest {
 
 export interface ScheduleRunRequest {
   site?: SupportedSite;
-  slot?: 'morning' | 'afternoon';
+  slot?: Slot;
   idempotency_key?: string;
   test_retry_failure_class?: RetryableScheduledFailureClass;
 }
@@ -131,8 +131,8 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
     issues.push({ field: 'site', message: `site must be one of: ${supportedSites.join(', ')}` });
   }
 
-  if (slot && slot !== 'morning' && slot !== 'afternoon') {
-    issues.push({ field: 'slot', message: 'slot must be either morning or afternoon' });
+  if (slot && slot !== 'morning' && slot !== 'afternoon' && slot !== 'evening') {
+    issues.push({ field: 'slot', message: 'slot must be morning, afternoon, or evening' });
   }
 
   if (typeof body.idempotency_key === 'string' && !idempotencyKey) {
@@ -152,7 +152,7 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
     ok: true,
     value: {
       site: site as SupportedSite | undefined,
-      slot: slot as 'morning' | 'afternoon' | undefined,
+      slot: slot as Slot | undefined,
       idempotency_key: idempotencyKey,
       test_retry_failure_class: failureClass as RetryableScheduledFailureClass | undefined,
     },

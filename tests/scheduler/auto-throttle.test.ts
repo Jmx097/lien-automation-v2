@@ -62,7 +62,7 @@ describe('scheduler auto-throttle', () => {
   beforeEach(() => {
     vi.resetModules();
     runs.clear();
-    controlState = { site: 'ca_sos', effective_max_records: 100 };
+    controlState = { site: 'ca_sos', effective_max_records: 75 };
     connectivityState.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
@@ -76,8 +76,9 @@ describe('scheduler auto-throttle', () => {
     });
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';
-    process.env.SCHEDULE_DEADLINE_HOUR = '23';
-    process.env.SCHEDULE_DEADLINE_MINUTE = '59';
+    process.env.SCHEDULE_MAX_RECORDS = '75';
+    process.env.SCHEDULE_MAX_RECORDS_FLOOR = '75';
+    process.env.SCHEDULE_MAX_RECORDS_CEILING = '75';
   });
 
   it('does not auto-throttle ca_sos after dynamic probing', async () => {
@@ -102,12 +103,12 @@ describe('scheduler auto-throttle', () => {
     expect(result.effective_max_records).toBe(40);
 
     const state = await getScheduleState();
-    expect(state.ca_sos.effective_max_records).toBe(100);
+    expect(state.ca_sos.effective_max_records).toBe(75);
     expect(state.ca_sos.auto_throttle).toBe(false);
   });
 
-  it('continues auto-throttling nyc_acris when amount coverage falls below threshold', async () => {
-    controlState = { site: 'nyc_acris', effective_max_records: 100 };
+  it('keeps nyc_acris pinned to the fixed scheduled cap of 75', async () => {
+    controlState = { site: 'nyc_acris', effective_max_records: 75 };
     mockScraper.mockResolvedValueOnce([
       { amount: '100', amount_reason: 'ok' },
       { amount: undefined, amount_reason: 'amount_not_found' },
@@ -127,7 +128,7 @@ describe('scheduler auto-throttle', () => {
     expect(result.amount_coverage_pct).toBeLessThan(95);
 
     const state = await getScheduleState();
-    expect(state.nyc_acris.effective_max_records).toBeLessThan(100);
+    expect(state.nyc_acris.effective_max_records).toBe(75);
     expect(state.nyc_acris.auto_throttle).toBe(true);
   });
 });
