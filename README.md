@@ -177,7 +177,7 @@ For CA SOS scheduled runs specifically:
 - `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are the target finish-by time.
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
-- Cloud Run deploy defaults now schedule both CA SOS and NYC ACRIS for all days of the week unless you intentionally override the per-site `*_WEEKLY_DAYS` env vars.
+- Cloud Run deploy defaults now schedule CA SOS, Maricopa Recorder, and NYC ACRIS for all days of the week unless you intentionally override the per-site `*_WEEKLY_DAYS` env vars.
 
 ## OCR Runtime Notes
 
@@ -447,7 +447,7 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
 - **Timezone:** `America/New_York`
 - **CA SOS semantics:** `SCHEDULE_CA_SOS_RUN_HOUR` / `SCHEDULE_CA_SOS_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
-- **Trigger times:** CA SOS Tue/Wed at `06:00` by default for a `09:00` finish-by; NYC ACRIS Tue/Wed/Thu/Fri at `14:00`
+- **Trigger times:** CA SOS Tue/Wed at `06:00` by default for a `09:00` finish-by; Maricopa daily at `10:00 America/Phoenix`; NYC ACRIS Tue/Wed/Thu/Fri at `14:00`
 - **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
 ### External scheduler configuration (per-site triggers)
@@ -460,6 +460,12 @@ Linux cron example:
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"ca_sos","slot":"morning"}'
+
+# Maricopa daily 10:00 America/Phoenix
+0 10 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+  -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"site":"maricopa_recorder"}'
 
 # NYC ACRIS Tue/Wed/Thu/Fri 14:00 America/New_York
 0 14 * * 2,3,4,5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \

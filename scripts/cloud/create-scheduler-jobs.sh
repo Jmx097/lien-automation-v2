@@ -4,11 +4,14 @@ set -euo pipefail
 : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID}"
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
-: "${TIME_ZONE:=America/New_York}"
 : "${API_BASE_URL:?Set API_BASE_URL, e.g. https://your-service-url}"
 : "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
+: "${SCHEDULE_CA_SOS_TIMEZONE:=America/New_York}"
+: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Phoenix}"
+: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/New_York}"
 : "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
 : "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
+: "${MARICOPA_DAILY_JOB_NAME:=${JOB_NAME}-maricopa-recorder-daily}"
 : "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
 : "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
 
@@ -24,13 +27,14 @@ create_or_update_job () {
   local name="$1"
   local schedule="$2"
   local body="$3"
+  local time_zone="$4"
 
   if gcloud scheduler jobs describe "${name}" --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "${name}" \
       --location="${GCP_REGION}" \
       --project="${GCP_PROJECT_ID}" \
       --schedule="${schedule}" \
-      --time-zone="${TIME_ZONE}" \
+      --time-zone="${time_zone}" \
       --uri="${RUN_URI}" \
       --http-method=POST \
       --max-retry-attempts="${RETRY_COUNT}" \
@@ -44,7 +48,7 @@ create_or_update_job () {
       --location="${GCP_REGION}" \
       --project="${GCP_PROJECT_ID}" \
       --schedule="${schedule}" \
-      --time-zone="${TIME_ZONE}" \
+      --time-zone="${time_zone}" \
       --uri="${RUN_URI}" \
       --http-method=POST \
       --max-retry-attempts="${RETRY_COUNT}" \
@@ -56,12 +60,13 @@ create_or_update_job () {
   fi
 }
 
-# Daily morning + afternoon runs for each site.
-create_or_update_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}'
-create_or_update_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}'
-create_or_update_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}'
-create_or_update_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}'
+# Daily runs for each site.
+create_or_update_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+create_or_update_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+create_or_update_job "${MARICOPA_DAILY_JOB_NAME}" "0 10 * * *" '{"site":"maricopa_recorder"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
+create_or_update_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+create_or_update_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
 
-echo "Scheduler jobs upserted for ${RUN_URI} (CA 06:00+12:00, NYC 10:00+14:00 daily ${TIME_ZONE})."
+echo "Scheduler jobs upserted for ${RUN_URI} (CA 06:00+12:00 ${SCHEDULE_CA_SOS_TIMEZONE}, Maricopa 10:00 ${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}, NYC 10:00+14:00 ${SCHEDULE_NYC_ACRIS_TIMEZONE})."
 
 

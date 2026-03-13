@@ -5,9 +5,12 @@ set -euo pipefail
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
-: "${TIME_ZONE:=America/New_York}"
+: "${SCHEDULE_CA_SOS_TIMEZONE:=America/New_York}"
+: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Phoenix}"
+: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/New_York}"
 : "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
 : "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
+: "${MARICOPA_DAILY_JOB_NAME:=${JOB_NAME}-maricopa-recorder-daily}"
 : "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
 : "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
 
@@ -17,6 +20,7 @@ verify_job() {
   local name="$1"
   local expected_schedule="$2"
   local expected_body="$3"
+  local expected_timezone="$4"
 
   local description
   description="$(gcloud scheduler jobs describe "${name}" --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
@@ -31,15 +35,16 @@ verify_job() {
   bodies_match="$(node -e "const actual=JSON.parse(process.argv[1]); const expected=JSON.parse(process.argv[2]); process.stdout.write(JSON.stringify(actual) === JSON.stringify(expected) ? 'true' : 'false');" "${actual_body}" "${expected_body}")"
 
   [[ "${actual_schedule}" == "${expected_schedule}" ]] || { echo "${name}: expected schedule ${expected_schedule}, got ${actual_schedule}" >&2; exit 1; }
-  [[ "${actual_timezone}" == "${TIME_ZONE}" ]] || { echo "${name}: expected time zone ${TIME_ZONE}, got ${actual_timezone}" >&2; exit 1; }
+  [[ "${actual_timezone}" == "${expected_timezone}" ]] || { echo "${name}: expected time zone ${expected_timezone}, got ${actual_timezone}" >&2; exit 1; }
   [[ "${actual_uri}" == "${RUN_URI}" ]] || { echo "${name}: expected URI ${RUN_URI}, got ${actual_uri}" >&2; exit 1; }
   [[ "${actual_method}" == "POST" ]] || { echo "${name}: expected HTTP method POST, got ${actual_method}" >&2; exit 1; }
   [[ "${bodies_match}" == "true" ]] || { echo "${name}: expected body ${expected_body}, got ${actual_body}" >&2; exit 1; }
 }
 
-verify_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}'
-verify_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}'
-verify_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}'
-verify_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}'
+verify_job "${CA_MORNING_JOB_NAME}" "0 6 * * *" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+verify_job "${CA_AFTERNOON_JOB_NAME}" "0 12 * * *" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
+verify_job "${MARICOPA_DAILY_JOB_NAME}" "0 10 * * *" '{"site":"maricopa_recorder"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
+verify_job "${NYC_MORNING_JOB_NAME}" "0 10 * * *" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+verify_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * *" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
 
 echo "Cloud Scheduler jobs verified for ${RUN_URI}"
