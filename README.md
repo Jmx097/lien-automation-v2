@@ -294,7 +294,7 @@ npm run canary:maricopa
 - `refresh:maricopa-session` is the operator step that persists a legitimately cleared browser session.
 - `discover:maricopa-live` should be rerun whenever the site changes its preview/image/document request shape.
 - `validate:maricopa-live` confirms both API reachability and whether the current artifact setup is producing complete OCR-backed records.
-- `canary:maricopa` uploads both complete and review-bound rows through the standard sheet pipeline, letting `Review_Queue` absorb incomplete records.
+- `canary:maricopa` now fails fast if artifact retrieval is disabled or persisted session/discovery state is stale, then uploads both complete and review-bound rows through the standard sheet pipeline and syncs into shared `Master` / `Review_Queue`.
 - When `DATABASE_URL` is set, Maricopa session state and discovered artifact candidates are persisted in the scheduler database so Cloud Run can reuse them across instances. Run `refresh:maricopa-session` and `discover:maricopa-live` against the production `DATABASE_URL` before turning on `MARICOPA_ENABLE_ARTIFACT_RETRIEVAL`.
 - `GET /schedule/health` now includes a top-level `maricopa` section showing session presence/freshness, artifact candidate availability, `refresh_required`, and the latest Maricopa connectivity timestamps.
 - When Maricopa artifact retrieval is enabled, stale/missing Maricopa state now blocks scheduled Maricopa runs and moves the site into the same blocked/probing recovery flow used for NYC ACRIS.
@@ -345,32 +345,18 @@ Example one-week 2026 test request:
 curl -sS -X POST http://127.0.0.1:8080/scrape   -H 'Content-Type: application/json'   -d '{"site":"ca_sos","date_start":"01/05/2026","date_end":"01/11/2026","max_records":25}'
 ```
 
-## 2026 Range Test (writes to a new Sheet tab)
+## CA SOS Live Proof
 
-If you want a reproducible CA SOS scrape that **creates a new tab** in the same spreadsheet for that run (tab name includes **label + date range + Pacific timestamp**), use:
-
-```bash
-npm run test:ca-sos-range
-```
-
-Defaults:
-
-- **LABEL**: `California` (customize for county-specific tabs)
-- **DATE_START**: `02/02/2026`
-- **DATE_END**: `03/02/2026`
-- **MAX_RECORDS**: `25` (set `MAX_RECORDS=0` to remove the cap)
-
-Examples:
+Use the CA SOS canary when you want the same proof path as NYC and Maricopa:
 
 ```bash
-# Default California run
-DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_RECORDS=25 npm run test:ca-sos-range
-
-# Custom county label
-LABEL="Los Angeles County" DATE_START="02/02/2026" DATE_END="03/02/2026" MAX_RECORDS=25 npm run test:ca-sos-range
+npm run canary:ca-sos
 ```
 
-This uses the same required environment variables (`SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`) and appends the results to a freshly created tab via the Google Sheets API.
+- Scrapes a capped recent window.
+- Writes a `ca_sos_canary_*` source tab into `SHEET_ID`.
+- Syncs accepted rows into shared `Master` and quarantined rows into shared `Review_Queue`.
+- Prints a JSON summary with the source tab title plus merged-tab accepted/quarantine counts.
 
 ## NYC ACRIS Live Validation
 
@@ -389,6 +375,24 @@ For a capped end-to-end canary that also writes to Sheets:
 ```bash
 npm run canary:nyc-acris
 ```
+
+- Writes a `nyc_acris_canary_*` source tab.
+- Syncs into shared `Master` / `Review_Queue`.
+- Prints the same summary shape as the CA SOS and Maricopa canaries.
+
+## All-Sites Live Proof
+
+To see all three sites in one operator run:
+
+```bash
+npm run proof:all-sites-live
+```
+
+- Runs CA SOS canary.
+- Runs NYC live validation, then NYC canary.
+- Checks Maricopa persisted-state readiness, then runs Maricopa canary if ready.
+- Prints one final JSON summary covering per-site status, source tab, accepted counts, quarantined counts, and any blocking reason.
+- Exits nonzero if any site is blocked or fails.
 
 ## Last 7 Days Helper (default max 10)
 

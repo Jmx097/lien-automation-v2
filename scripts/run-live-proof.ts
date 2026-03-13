@@ -1,11 +1,14 @@
 import dotenv from 'dotenv';
-import { runNYCAcrisCanary } from '../src/proof/live-proof';
+import { runAllSitesLiveProof } from '../src/proof/live-proof';
 
 dotenv.config();
 
 async function main(): Promise<void> {
-  const summary = await runNYCAcrisCanary();
+  const summary = await runAllSitesLiveProof();
   console.log(JSON.stringify(summary, null, 2));
+  if (summary.error_count > 0) {
+    process.exitCode = 1;
+  }
 }
 
 void main().catch((err) => {

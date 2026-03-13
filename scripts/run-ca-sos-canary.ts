@@ -1,10 +1,10 @@
 import dotenv from 'dotenv';
-import { runNYCAcrisCanary } from '../src/proof/live-proof';
+import { runCASOSCanary } from '../src/proof/live-proof';
 
 dotenv.config();
 
 async function main(): Promise<void> {
-  const summary = await runNYCAcrisCanary();
+  const summary = await runCASOSCanary();
   console.log(JSON.stringify(summary, null, 2));
 }
 
