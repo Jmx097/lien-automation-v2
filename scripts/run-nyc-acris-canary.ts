@@ -33,9 +33,7 @@ async function main(): Promise<void> {
     run_started_at: new Date(),
   });
   const masterSync = await syncMasterSheetTab({
-    tabTitle: 'Master_canary',
-    reviewTabTitle: 'Review_Queue_canary',
-    includePrefixes: ['nyc_acris_canary_'],
+    includePrefixes: ['Scheduled_', 'nyc_acris_canary_'],
   });
 
   console.log(
