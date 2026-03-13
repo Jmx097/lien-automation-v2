@@ -17,6 +17,7 @@ const anomalyAlerts = new Map<string, any>();
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
     ca_sos: mockScraper,
+    maricopa_recorder: mockScraper,
     nyc_acris: mockScraper,
   },
 }));

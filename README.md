@@ -6,7 +6,7 @@ A web scraper and automation tool for retrieving lien records from multiple publ
 
 This project provides an Express.js API server that scrapes lien data from the CA Secretary of State's UCC filing system and automatically pushes the results to Google Sheets for analysis and tracking.
 
-**Current Status**: Production-oriented API with live CA SOS scraping, NYC ACRIS support, queueing, schedule readiness checks, externally triggered per-site schedule runs, and persisted scheduler run history backed by SQLite locally or Postgres when `DATABASE_URL` is set.
+**Current Status**: Production-oriented API with live CA SOS scraping, NYC ACRIS support, Maricopa Recorder support, queueing, schedule readiness checks, externally triggered per-site schedule runs, and persisted scheduler run history backed by SQLite locally or Postgres when `DATABASE_URL` is set.
 
 ## Planning Documents
 
@@ -15,7 +15,7 @@ This project provides an Express.js API server that scrapes lien data from the C
 
 ## Features
 
-- **Multi-site scraping API**: Supports CA SOS and NYC ACRIS via Playwright-based browser automation.
+- **Multi-site scraping API**: Supports CA SOS, NYC ACRIS, and Maricopa Recorder.
 - **Direct and queued execution paths**: `POST /scrape` pushes to Sheets immediately, while `POST /enqueue` stores records in SQLite-backed queue storage.
 - **Enhanced scrape mode**: `POST /scrape-enhanced` runs scrape processing without sheet upload in the same response flow.
 - **Scheduler readiness + introspection**:
@@ -30,7 +30,7 @@ This project provides an Express.js API server that scrapes lien data from the C
 
 The project is organized into three main modules:
 
-- **Scraper** (`src/scraper/`): Handles web scraping logic for CA SOS and NYC ACRIS
+- **Scraper** (`src/scraper/`): Handles web scraping logic for CA SOS, NYC ACRIS, and Maricopa Recorder
 - **Sheets** (`src/sheets/`): Manages Google Sheets API integration
 - **Utils** (`src/utils/`): Utility functions for delays, rate limiting, retries, and logging
 - **Server** (`src/server.ts`): Express.js API server with `/scrape` endpoint
@@ -54,7 +54,7 @@ Runs a scrape for a single site/date range and uploads results to Google Sheets.
 **Request Body**:
 ```json
 {
-  "site": "ca_sos",
+  "site": "maricopa_recorder",
   "date_start": "01/01/2024",
   "date_end": "01/31/2024",
   "max_records": 100
@@ -157,8 +157,12 @@ Important optional environment variables:
 - `SCHEDULE_ANOMALY_MIN_BASELINE_RUNS` is the minimum number of eligible successful runs required before anomaly detection activates. Default: `3`.
 - `SCHEDULE_ANOMALY_RECORDS_DROP_PCT`, `SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS`, `SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS`, and `SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS` tune successful-run anomaly thresholds. Defaults: `40`, `15`, `20`, and `20`.
 - `ENABLE_SCHEDULE_FAILURE_INJECTION=1` enables a canary-only test hook for `POST /schedule/run`. Leave it unset for normal production operation.
+- `SITE_ID_CA_SOS=20`, `SITE_ID_NYC_ACRIS=12`, and `SITE_ID_MARICOPA_RECORDER=13` control downstream sheet site IDs.
+- `MARICOPA_DOCUMENT_CODE` defaults to `FL`.
+- `MARICOPA_MAX_RECORDS` caps Maricopa direct-scrape volume when `max_records` is omitted.
 
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_RUN_HOUR`, `SCHEDULE_CA_SOS_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
+- `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_DEADLINE_HOUR`, `SCHEDULE_NYC_ACRIS_DEADLINE_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
@@ -238,8 +242,11 @@ These settings reduce overhead while keeping scraper behavior and output unchang
 
 - The scraper is configured to run in headless mode with sandbox disabled for container compatibility.
 - Human-like delays are implemented between actions to mimic natural browsing patterns.
-- Supported sites are `ca_sos` and `nyc_acris`.
+- Supported sites are `ca_sos`, `nyc_acris`, and `maricopa_recorder`.
 - NYC ACRIS uses a session-preserving browser flow with hidden-form submits, fresh anti-forgery tokens, and viewer extraction via `iframe[name="mainframe"]`.
+- Maricopa Recorder uses the site’s public JSON endpoints for search/detail. It clamps future `date_end` values to the latest searchable date returned by `publicapi.recorder.maricopa.gov/documents/index`.
+- Maricopa currently exposes names and recording metadata through the observed public API, but not debtor address or amount fields. Those remain blank/low-confidence until a public artifact/detail endpoint is confirmed.
+- Maricopa may return Cloudflare challenge/interstitial pages. The scraper detects these and raises a Maricopa-specific retryable failure instead of treating the body as valid JSON.
 - The scraper supports Bright Data Browser API first, direct proxy mode second, and legacy `SBR_CDP_URL` as a compatibility fallback.
 
 ## Test Commands
@@ -251,12 +258,15 @@ npm run test:types
 npm run test:selector-smoke
 npm run test:smoke
 npm run doctor
+npm run validate:maricopa-live
 ```
 
 - `test:selector-smoke` runs a non-production Playwright fixture test for file-type selector variants (combobox, labeled select, and DOM fallback) with no external dependencies.
 - `test:smoke` runs the cross-platform `scripts/smoke-health.js` health probe and checks the live `/health` route.
 - `doctor` runs the cross-platform `scripts/doctor.js` preflight and verifies local prerequisites before smoke/runtime checks.
 - `npm test` runs `test:types` + `test:selector-smoke` companion checks.
+- `validate:maricopa-live` checks one positive Maricopa range and one zero-result range, and reports the latest searchable date.
+- `discover:maricopa-live` uses a live browser session to record Maricopa network requests after opening the results page, which is useful for discovering preview/image endpoints without changing production code.
 
 ## Setup Troubleshooting (stale clone symptom)
 

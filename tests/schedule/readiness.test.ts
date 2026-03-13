@@ -77,6 +77,12 @@ function setReadyEnv(): void {
   });
   process.env.SCHEDULE_RUN_TOKEN = 'token';
   process.env.SBR_CDP_URL = 'wss://example.invalid';
+  process.env.SCHEDULE_CA_SOS_WEEKLY_DAYS = 'MO,TU,WE,TH,FR';
+  process.env.SCHEDULE_CA_SOS_RUN_HOUR = '9';
+  process.env.SCHEDULE_CA_SOS_RUN_MINUTE = '0';
+  process.env.SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS = 'MO,TU,WE,TH,FR';
+  process.env.SCHEDULE_MARICOPA_RECORDER_RUN_HOUR = '9';
+  process.env.SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE = '0';
   process.env.SCHEDULE_NYC_ACRIS_TIMEZONE = 'America/New_York';
   process.env.SCHEDULE_NYC_ACRIS_WEEKLY_DAYS = 'TU,WE,TH,FR';
   process.env.SCHEDULE_NYC_ACRIS_RUN_HOUR = '14';

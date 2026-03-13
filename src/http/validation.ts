@@ -31,6 +31,7 @@ export interface ScheduleRunRequest {
 const DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
 const MAX_RECORDS_BY_SITE: Record<SupportedSite, number> = {
   ca_sos: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
+  maricopa_recorder: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
   nyc_acris: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
 };
 

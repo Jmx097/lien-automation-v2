@@ -12,6 +12,7 @@ const anomalyAlerts = new Map<string, any>();
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
     ca_sos: mockScraper,
+    maricopa_recorder: mockScraper,
     nyc_acris: mockScraper,
   },
 }));
@@ -89,6 +90,7 @@ describe('site-aware scheduler', () => {
     expect(nextRuns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ site: 'ca_sos', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
+        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '06:00', trigger_time: '06:00', finish_by_time: '09:00', deadline_time: '09:00' }),
         expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR,SA,SU', run_time: '14:00', trigger_time: '14:00', finish_by_time: '18:00', deadline_time: '18:00' }),
       ])
     );
@@ -105,6 +107,7 @@ describe('site-aware scheduler', () => {
 
     const state = await getScheduleState();
     expect(state.ca_sos).toBeDefined();
+    expect(state.maricopa_recorder).toBeDefined();
     expect(state.nyc_acris).toBeDefined();
     expect(state.ca_sos.latest_anomaly).toBeUndefined();
     expect(Array.from(runs.keys())).toEqual(

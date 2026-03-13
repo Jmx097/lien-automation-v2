@@ -162,8 +162,8 @@ describe('syncMasterSheetTab', () => {
   it('publishes merged scheduled rows into the destination workbook', async () => {
     seedWorkbook('source-sheet', {
       Scheduled_CA: [
-        sourceRow({ 0: 11, 15: 'ca_sos', 16: 'ca-file-1' }),
-        sourceRow({ 0: 11, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }),
+        sourceRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }),
+        sourceRow({ 0: 20, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }),
       ],
       Scheduled_NYC: [
         sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }),
@@ -191,8 +191,8 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 0: 11, 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
-      sourceRow({ 0: 11, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }).slice(0, 15),
+      sourceRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
+      sourceRow({ 0: 20, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }).slice(0, 15),
       sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }).slice(0, 15),
     ]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([]);

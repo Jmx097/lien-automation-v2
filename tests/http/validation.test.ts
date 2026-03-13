@@ -4,7 +4,7 @@ import { validateScheduleRunRequest, validateScrapeRequest } from '../../src/htt
 describe('HTTP validation', () => {
   it('accepts a well-formed scrape request', () => {
     const result = validateScrapeRequest({
-      site: 'ca_sos',
+      site: 'maricopa_recorder',
       date_start: '03/01/2026',
       date_end: '03/07/2026',
       max_records: 25,
@@ -12,7 +12,7 @@ describe('HTTP validation', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.site).toBe('ca_sos');
+      expect(result.value.site).toBe('maricopa_recorder');
       expect(result.value.max_records).toBe(25);
     }
   });

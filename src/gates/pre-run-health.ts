@@ -70,6 +70,11 @@ function checkRuntimeEnv(errors: string[], env: NodeJS.ProcessEnv, sites: Suppor
 
   const requiredSiteVars: Record<SupportedSite, string[]> = {
     ca_sos: ['SCHEDULE_CA_SOS_WEEKLY_DAYS', 'SCHEDULE_CA_SOS_RUN_HOUR', 'SCHEDULE_CA_SOS_RUN_MINUTE'],
+    maricopa_recorder: [
+      'SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS',
+      'SCHEDULE_MARICOPA_RECORDER_RUN_HOUR',
+      'SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE',
+    ],
     nyc_acris: [
       'SCHEDULE_NYC_ACRIS_WEEKLY_DAYS',
       'SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR',

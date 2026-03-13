@@ -57,6 +57,12 @@ function checkRequiredEnv(): ReadinessCheck {
 
 function checkSiteScheduleConfig(): ReadinessCheck {
   const requiredSiteScheduleVars = [
+    'SCHEDULE_CA_SOS_WEEKLY_DAYS',
+    'SCHEDULE_CA_SOS_RUN_HOUR',
+    'SCHEDULE_CA_SOS_RUN_MINUTE',
+    'SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS',
+    'SCHEDULE_MARICOPA_RECORDER_RUN_HOUR',
+    'SCHEDULE_MARICOPA_RECORDER_RUN_MINUTE',
     'SCHEDULE_NYC_ACRIS_TIMEZONE',
     'SCHEDULE_NYC_ACRIS_WEEKLY_DAYS',
     'SCHEDULE_NYC_ACRIS_RUN_HOUR',

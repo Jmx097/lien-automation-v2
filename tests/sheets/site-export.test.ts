@@ -81,6 +81,37 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][17]).toBe('0');
   });
 
+  it('uses the Maricopa AZ site config when exporting recorder rows', () => {
+    const rows = buildRowValues([
+      {
+        state: 'AZ',
+        source: 'maricopa_recorder',
+        county: 'Maricopa',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'BASCH DAVID',
+        debtor_address: '',
+        file_number: '20260017884',
+        secured_party_name: 'INTERNAL REVENUE SERVICE',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '01/12/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'FED TAX L',
+        pdf_filename: '',
+        processed: true,
+        confidence_score: 0.46,
+      },
+    ]);
+
+    expect(rows[0][0]).toBe(13);
+    expect(rows[0][3]).toBe('Lien');
+    expect(rows[0][8]).toBe('BASCH');
+    expect(rows[0][9]).toBe('DAVID');
+    expect(rows[0][12]).toBe('AZ');
+    expect(rows[0][15]).toBe('maricopa_recorder');
+    expect(rows[0][16]).toBe('20260017884');
+  });
+
   it('parses OCR-style addresses without commas into street city and zip', () => {
     const rows = buildRowValues([
       {
