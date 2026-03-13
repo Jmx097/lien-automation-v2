@@ -37,7 +37,7 @@ create_or_update_job () {
       --max-retry-duration="${MAX_RETRY_DURATION}" \
       --min-backoff="${MIN_BACKOFF}" \
       --max-backoff="${MAX_BACKOFF}" \
-      --update-headers="Content-Type=application/json,Authorization=Bearer ${SCHEDULE_RUN_TOKEN}" \
+      --update-headers="Content-Type=application/json,x-scheduler-token=${SCHEDULE_RUN_TOKEN}" \
       --message-body="${body}"
   else
     gcloud scheduler jobs create http "${name}" \
@@ -51,7 +51,7 @@ create_or_update_job () {
       --max-retry-duration="${MAX_RETRY_DURATION}" \
       --min-backoff="${MIN_BACKOFF}" \
       --max-backoff="${MAX_BACKOFF}" \
-      --headers="Content-Type=application/json,Authorization=Bearer ${SCHEDULE_RUN_TOKEN}" \
+      --headers="Content-Type=application/json,x-scheduler-token=${SCHEDULE_RUN_TOKEN}" \
       --message-body="${body}"
   fi
 }
