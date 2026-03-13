@@ -1,0 +1,967 @@
+{
+  "startedAt": "2026-03-13T18:42:55.359Z",
+  "transportMode": "brightdata-browser-api",
+  "resultPagesVisited": 1,
+  "docIds": [
+    "2026030400357008",
+    "2026030600417011",
+    "2026030600417010",
+    "2026030600417009",
+    "2026030600417008",
+    "2026030600417007",
+    "2026030600417006",
+    "2026030600417005",
+    "2026030600417004",
+    "2026030600417003"
+  ],
+  "documents": [
+    {
+      "docId": "2026030400357008",
+      "detailUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030400357008",
+      "imageViewUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030400357008",
+      "viewerSrc": "/DS/DocumentSearch/DocumentImageVtu?searchCriteriaStringValue=%7B%22hid_last%22%3Anull%2C%22hid_first%22%3Anull%2C%22hid_ml%22%3Anull%2C%22hid_suffix%22%3Anull%2C%22hid_business%22%3Anull%2C%22hid_partype%22%3Anull%2C%22hid_partype_name%22%3Anull%2C%22hid_selectdate%22%3A%227%22%2C%22hid_datefromm%22%3Anull%2C%22hid_datefromd%22%3Anull%2C%22hid_datefromy%22%3Anull%2C%22hid_datetom%22%3Anull%2C%22hid_datetod%22%3Anull%2C%22hid_datetoy%22%3Anull%2C%22hid_borough%22%3A0%2C%22hid_doctype%22%3A%22FL%22%2C%22hid_sort%22%3Anull%2C%22hid_doctype_name%22%3A%22FEDERAL%20LIEN-IRS%22%2C%22hid_borough_name%22%3A%22ALL%20BOROUGHS%22%2C%22hid_block%22%3A0%2C%22hid_block_value%22%3Anull%2C%22hid_lot%22%3A0%2C%22hid_lot_value%22%3Anull%2C%22hid_unit%22%3Anull%2C%22hid_filenbr%22%3Anull%2C%22hid_CRFN%22%3Anull%2C%22hid_DocID%22%3A%222026030400357008%22%2C%22hid_year%22%3A0%2C%22hid_reel%22%3A0%2C%22hid_TransID%22%3Anull%2C%22FormatedToDate%22%3A%223%2F13%2F2026%2023%3A59%3A59%22%2C%22FormatedFromDate%22%3A%223%2F6%2F2026%2000%3A00%3A00%22%2C%22UserType%22%3A%22I%22%2C%22hid_TotalPages%22%3A2%2C%22ListBoroughs%22%3Anull%2C%22ListDocumentTypes%22%3Anull%2C%22ListDocumentClass%22%3Anull%2C%22DisplaySearchResultLink%22%3Atrue%2C%22CoverPageMainOptionURL%22%3A%22https%3A%2F%2Fa836-acris.nyc.gov%2FCP%2FCoverPage%2FMainMenu%22%2C%22AddressParcelLookUpURL%22%3Anull%2C%22PagerViewModel%22%3Anull%2C%22DisplayNYCLink%22%3Atrue%2C%22hid_reel_page%22%3A0%2C%22hid_cur_page%22%3A1%2C%22hid_error%22%3Anull%2C%22hid_DrpTolPage1%22%3A0%2C%22hid_DrpTolPage2%22%3A0%2C%22hid_DrpTolPage3%22%3A0%2C%22hid_DrpTolPage4%22%3A0%2C%22IsInternalSite%22%3Afalse%2C%22EnablePubliciSearch%22%3Afalse%2C%22DisplayProtectedMsg%22%3Afalse%2C%22ProtectedMsg%22%3Anull%2C%22Protected%22%3Afalse%2C%22SearchResults%22%3Anull%2C%22hid_ReqID%22%3Anull%2C%22hid_SearchType%22%3A%22DOCTYPE%22%2C%22hid_ISIntranet%22%3A%22N%22%2C%22hid_ISPATUser%22%3Afalse%2C%22hid_max_rows%22%3A10%2C%22hid_page%22%3A1%7D&doc_id=2026030400357008",
+      "imageUrls": [
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pagePrev.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pageNext.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomOut.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomIn.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/rotate.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/print.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/save.png"
+      ],
+      "title": "New York Web Public Inquiry",
+      "totalPages": 2,
+      "amount": "75585",
+      "amountConfidence": 0.98,
+      "amountReason": "ok",
+      "leadType": "Lien",
+      "taxpayerName": "SUSANA ALTAGRACIA JIMENEZ",
+      "taxpayerAddress": "3018 KINGSBRIDGE AVE APT 1N, BRONX, NY 10463-5104"
+    },
+    {
+      "docId": "2026030600417011",
+      "detailUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030600417011",
+      "imageViewUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030600417011",
+      "viewerSrc": "/DS/DocumentSearch/DocumentImageVtu?searchCriteriaStringValue=%7B%22hid_last%22%3Anull%2C%22hid_first%22%3Anull%2C%22hid_ml%22%3Anull%2C%22hid_suffix%22%3Anull%2C%22hid_business%22%3Anull%2C%22hid_partype%22%3Anull%2C%22hid_partype_name%22%3Anull%2C%22hid_selectdate%22%3A%227%22%2C%22hid_datefromm%22%3Anull%2C%22hid_datefromd%22%3Anull%2C%22hid_datefromy%22%3Anull%2C%22hid_datetom%22%3Anull%2C%22hid_datetod%22%3Anull%2C%22hid_datetoy%22%3Anull%2C%22hid_borough%22%3A0%2C%22hid_doctype%22%3A%22FL%22%2C%22hid_sort%22%3Anull%2C%22hid_doctype_name%22%3A%22FEDERAL%20LIEN-IRS%22%2C%22hid_borough_name%22%3A%22ALL%20BOROUGHS%22%2C%22hid_block%22%3A0%2C%22hid_block_value%22%3Anull%2C%22hid_lot%22%3A0%2C%22hid_lot_value%22%3Anull%2C%22hid_unit%22%3Anull%2C%22hid_filenbr%22%3Anull%2C%22hid_CRFN%22%3Anull%2C%22hid_DocID%22%3A%222026030600417011%22%2C%22hid_year%22%3A0%2C%22hid_reel%22%3A0%2C%22hid_TransID%22%3Anull%2C%22FormatedToDate%22%3A%223%2F13%2F2026%2023%3A59%3A59%22%2C%22FormatedFromDate%22%3A%223%2F6%2F2026%2000%3A00%3A00%22%2C%22UserType%22%3A%22I%22%2C%22hid_TotalPages%22%3A3%2C%22ListBoroughs%22%3Anull%2C%22ListDocumentTypes%22%3Anull%2C%22ListDocumentClass%22%3Anull%2C%22DisplaySearchResultLink%22%3Atrue%2C%22CoverPageMainOptionURL%22%3A%22https%3A%2F%2Fa836-acris.nyc.gov%2FCP%2FCoverPage%2FMainMenu%22%2C%22AddressParcelLookUpURL%22%3Anull%2C%22PagerViewModel%22%3Anull%2C%22DisplayNYCLink%22%3Atrue%2C%22hid_reel_page%22%3A0%2C%22hid_cur_page%22%3A1%2C%22hid_error%22%3Anull%2C%22hid_DrpTolPage1%22%3A0%2C%22hid_DrpTolPage2%22%3A0%2C%22hid_DrpTolPage3%22%3A0%2C%22hid_DrpTolPage4%22%3A0%2C%22IsInternalSite%22%3Afalse%2C%22EnablePubliciSearch%22%3Afalse%2C%22DisplayProtectedMsg%22%3Afalse%2C%22ProtectedMsg%22%3Anull%2C%22Protected%22%3Afalse%2C%22SearchResults%22%3Anull%2C%22hid_ReqID%22%3Anull%2C%22hid_SearchType%22%3A%22DOCTYPE%22%2C%22hid_ISIntranet%22%3A%22N%22%2C%22hid_ISPATUser%22%3Afalse%2C%22hid_max_rows%22%3A10%2C%22hid_page%22%3A1%7D&doc_id=2026030600417011",
+      "imageUrls": [
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pagePrev.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pageNext.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomOut.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomIn.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/rotate.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/print.png",
+        "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/save.png"
+      ],
+      "title": "New York Web Public Inquiry",
+      "totalPages": 3,
+      "amountConfidence": 0.7,
+      "amountReason": "amount_low_confidence"
+    }
+  ],
+  "warnings": [],
+  "failures": [],
+  "network": [
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/Index",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/login.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/jquery-1.5.1.min.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/iSearch.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/divider_rule.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentType.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/divider_rule.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentTypeResult.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/Sort.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030400357008",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030400357008",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentImageView.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageVtu?searchCriteriaStringValue=%7B%22hid_last%22%3Anull%2C%22hid_first%22%3Anull%2C%22hid_ml%22%3Anull%2C%22hid_suffix%22%3Anull%2C%22hid_business%22%3Anull%2C%22hid_partype%22%3Anull%2C%22hid_partype_name%22%3Anull%2C%22hid_selectdate%22%3A%227%22%2C%22hid_datefromm%22%3Anull%2C%22hid_datefromd%22%3Anull%2C%22hid_datefromy%22%3Anull%2C%22hid_datetom%22%3Anull%2C%22hid_datetod%22%3Anull%2C%22hid_datetoy%22%3Anull%2C%22hid_borough%22%3A0%2C%22hid_doctype%22%3A%22FL%22%2C%22hid_sort%22%3Anull%2C%22hid_doctype_name%22%3A%22FEDERAL%20LIEN-IRS%22%2C%22hid_borough_name%22%3A%22ALL%20BOROUGHS%22%2C%22hid_block%22%3A0%2C%22hid_block_value%22%3Anull%2C%22hid_lot%22%3A0%2C%22hid_lot_value%22%3Anull%2C%22hid_unit%22%3Anull%2C%22hid_filenbr%22%3Anull%2C%22hid_CRFN%22%3Anull%2C%22hid_DocID%22%3A%222026030400357008%22%2C%22hid_year%22%3A0%2C%22hid_reel%22%3A0%2C%22hid_TransID%22%3Anull%2C%22FormatedToDate%22%3A%223%2F13%2F2026%2023%3A59%3A59%22%2C%22FormatedFromDate%22%3A%223%2F6%2F2026%2000%3A00%3A00%22%2C%22UserType%22%3A%22I%22%2C%22hid_TotalPages%22%3A2%2C%22ListBoroughs%22%3Anull%2C%22ListDocumentTypes%22%3Anull%2C%22ListDocumentClass%22%3Anull%2C%22DisplaySearchResultLink%22%3Atrue%2C%22CoverPageMainOptionURL%22%3A%22https%3A%2F%2Fa836-acris.nyc.gov%2FCP%2FCoverPage%2FMainMenu%22%2C%22AddressParcelLookUpURL%22%3Anull%2C%22PagerViewModel%22%3Anull%2C%22DisplayNYCLink%22%3Atrue%2C%22hid_reel_page%22%3A0%2C%22hid_cur_page%22%3A1%2C%22hid_error%22%3Anull%2C%22hid_DrpTolPage1%22%3A0%2C%22hid_DrpTolPage2%22%3A0%2C%22hid_DrpTolPage3%22%3A0%2C%22hid_DrpTolPage4%22%3A0%2C%22IsInternalSite%22%3Afalse%2C%22EnablePubliciSearch%22%3Afalse%2C%22DisplayProtectedMsg%22%3Afalse%2C%22ProtectedMsg%22%3Anull%2C%22Protected%22%3Afalse%2C%22SearchResults%22%3Anull%2C%22hid_ReqID%22%3Anull%2C%22hid_SearchType%22%3A%22DOCTYPE%22%2C%22hid_ISIntranet%22%3A%22N%22%2C%22hid_ISPATUser%22%3Afalse%2C%22hid_max_rows%22%3A10%2C%22hid_page%22%3A1%7D&doc_id=2026030400357008",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentImageView.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/vtu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/vtustyle.css?v=11",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pagePrev.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pageNext.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomOut.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomIn.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/rotate.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/print.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/save.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030400357008&page=1",
+      "resourceType": "xhr"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030400357008&page=1",
+      "resourceType": "fetch"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030400357008&page=2",
+      "resourceType": "fetch"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentTypeResult.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/Sort.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030600417011",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/cityseal.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030600417011",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentImageView.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageVtu?searchCriteriaStringValue=%7B%22hid_last%22%3Anull%2C%22hid_first%22%3Anull%2C%22hid_ml%22%3Anull%2C%22hid_suffix%22%3Anull%2C%22hid_business%22%3Anull%2C%22hid_partype%22%3Anull%2C%22hid_partype_name%22%3Anull%2C%22hid_selectdate%22%3A%227%22%2C%22hid_datefromm%22%3Anull%2C%22hid_datefromd%22%3Anull%2C%22hid_datefromy%22%3Anull%2C%22hid_datetom%22%3Anull%2C%22hid_datetod%22%3Anull%2C%22hid_datetoy%22%3Anull%2C%22hid_borough%22%3A0%2C%22hid_doctype%22%3A%22FL%22%2C%22hid_sort%22%3Anull%2C%22hid_doctype_name%22%3A%22FEDERAL%20LIEN-IRS%22%2C%22hid_borough_name%22%3A%22ALL%20BOROUGHS%22%2C%22hid_block%22%3A0%2C%22hid_block_value%22%3Anull%2C%22hid_lot%22%3A0%2C%22hid_lot_value%22%3Anull%2C%22hid_unit%22%3Anull%2C%22hid_filenbr%22%3Anull%2C%22hid_CRFN%22%3Anull%2C%22hid_DocID%22%3A%222026030600417011%22%2C%22hid_year%22%3A0%2C%22hid_reel%22%3A0%2C%22hid_TransID%22%3Anull%2C%22FormatedToDate%22%3A%223%2F13%2F2026%2023%3A59%3A59%22%2C%22FormatedFromDate%22%3A%223%2F6%2F2026%2000%3A00%3A00%22%2C%22UserType%22%3A%22I%22%2C%22hid_TotalPages%22%3A3%2C%22ListBoroughs%22%3Anull%2C%22ListDocumentTypes%22%3Anull%2C%22ListDocumentClass%22%3Anull%2C%22DisplaySearchResultLink%22%3Atrue%2C%22CoverPageMainOptionURL%22%3A%22https%3A%2F%2Fa836-acris.nyc.gov%2FCP%2FCoverPage%2FMainMenu%22%2C%22AddressParcelLookUpURL%22%3Anull%2C%22PagerViewModel%22%3Anull%2C%22DisplayNYCLink%22%3Atrue%2C%22hid_reel_page%22%3A0%2C%22hid_cur_page%22%3A1%2C%22hid_error%22%3Anull%2C%22hid_DrpTolPage1%22%3A0%2C%22hid_DrpTolPage2%22%3A0%2C%22hid_DrpTolPage3%22%3A0%2C%22hid_DrpTolPage4%22%3A0%2C%22IsInternalSite%22%3Afalse%2C%22EnablePubliciSearch%22%3Afalse%2C%22DisplayProtectedMsg%22%3Afalse%2C%22ProtectedMsg%22%3Anull%2C%22Protected%22%3Afalse%2C%22SearchResults%22%3Anull%2C%22hid_ReqID%22%3Anull%2C%22hid_SearchType%22%3A%22DOCTYPE%22%2C%22hid_ISIntranet%22%3A%22N%22%2C%22hid_ISPATUser%22%3Afalse%2C%22hid_max_rows%22%3A10%2C%22hid_page%22%3A1%7D&doc_id=2026030600417011",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentImageView.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/vtu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/vtustyle.css?v=11",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pagePrev.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/pageNext.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomOut.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/zoomIn.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/rotate.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/print.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Acordex/vtu/buttons/save.png",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030600417011&page=1",
+      "resourceType": "xhr"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030600417011&page=1",
+      "resourceType": "fetch"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/GetImage?doc_id=2026030600417011&page=2",
+      "resourceType": "fetch"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentTypeResult.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/Sort.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    },
+    {
+      "method": "POST",
+      "url": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "resourceType": "document"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Global.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/DocumentTypeResult.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/Menu.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/themes/DocSearch/docstyle.css",
+      "resourceType": "stylesheet"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/Images/Sort.jpg",
+      "resourceType": "image"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Scripts/footer.js",
+      "resourceType": "script"
+    },
+    {
+      "method": "GET",
+      "url": "https://a836-acris.nyc.gov/DS/Content/images/10spacer.gif",
+      "resourceType": "image"
+    }
+  ],
+  "navigationDiagnostics": [
+    {
+      "step": "load_index_page",
+      "attempt": 1,
+      "kind": "index",
+      "expectedPath": "/DS/DocumentSearch/Index",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/Index",
+      "title": "",
+      "readyState": "loading",
+      "htmlLength": 244,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": true,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "shell_marker_present"
+    },
+    {
+      "step": "load_document_type_page",
+      "attempt": 1,
+      "kind": "document_type",
+      "expectedPath": "/DS/DocumentSearch/DocumentType",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType",
+      "title": "",
+      "readyState": "interactive",
+      "htmlLength": 16943,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": true,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_token"
+    },
+    {
+      "step": "load_document_type_page",
+      "attempt": 1,
+      "kind": "document_type",
+      "expectedPath": "/DS/DocumentSearch/DocumentType",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType",
+      "title": "ACRIS Search On Document Type",
+      "readyState": "complete",
+      "htmlLength": 47397,
+      "bodyTextLength": 3846,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "token_present"
+    },
+    {
+      "step": "submit_result_page_1",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "title": "Search Results By Document Type",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_result_markers"
+    },
+    {
+      "step": "submit_result_page_1",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "title": "Search Results By Document Type",
+      "readyState": "complete",
+      "htmlLength": 77201,
+      "bodyTextLength": 1595,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "result_markers_present"
+    },
+    {
+      "step": "open_detail_view_2026030400357008",
+      "attempt": 1,
+      "kind": "detail",
+      "expectedPath": "/DS/DocumentSearch/DocumentDetail",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030400357008",
+      "title": "ACRIS Detailed Document Information",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_detail_markers"
+    },
+    {
+      "step": "open_detail_view_2026030400357008",
+      "attempt": 1,
+      "kind": "detail",
+      "expectedPath": "/DS/DocumentSearch/DocumentDetail",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030400357008",
+      "title": "ACRIS Detailed Document Information",
+      "readyState": "complete",
+      "htmlLength": 114036,
+      "bodyTextLength": 2141,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "detail_markers_present"
+    },
+    {
+      "step": "open_image_view_from_detail_2026030400357008",
+      "attempt": 1,
+      "kind": "image_view",
+      "expectedPath": "/DS/DocumentSearch/DocumentImageView",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030400357008",
+      "title": "New York Web Public Inquiry",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_viewer_iframe"
+    },
+    {
+      "step": "open_image_view_from_detail_2026030400357008",
+      "attempt": 1,
+      "kind": "image_view",
+      "expectedPath": "/DS/DocumentSearch/DocumentImageView",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030400357008",
+      "title": "New York Web Public Inquiry",
+      "readyState": "complete",
+      "htmlLength": 13892,
+      "bodyTextLength": 586,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": true,
+      "ok": true,
+      "reason": "viewer_iframe_present"
+    },
+    {
+      "step": "return_to_results_2026030400357008",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "title": "Search Results By Document Type",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_result_markers"
+    },
+    {
+      "step": "return_to_results_2026030400357008",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "title": "Search Results By Document Type",
+      "readyState": "complete",
+      "htmlLength": 77201,
+      "bodyTextLength": 1595,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "result_markers_present"
+    },
+    {
+      "step": "open_detail_view_2026030600417011",
+      "attempt": 1,
+      "kind": "detail",
+      "expectedPath": "/DS/DocumentSearch/DocumentDetail",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030600417011",
+      "title": "ACRIS Detailed Document Information",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_detail_markers"
+    },
+    {
+      "step": "open_detail_view_2026030600417011",
+      "attempt": 1,
+      "kind": "detail",
+      "expectedPath": "/DS/DocumentSearch/DocumentDetail",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentDetail?doc_id=2026030600417011",
+      "title": "ACRIS Detailed Document Information",
+      "readyState": "complete",
+      "htmlLength": 114064,
+      "bodyTextLength": 2174,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "detail_markers_present"
+    },
+    {
+      "step": "open_image_view_from_detail_2026030600417011",
+      "attempt": 1,
+      "kind": "image_view",
+      "expectedPath": "/DS/DocumentSearch/DocumentImageView",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030600417011",
+      "title": "New York Web Public Inquiry",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_viewer_iframe"
+    },
+    {
+      "step": "open_image_view_from_detail_2026030600417011",
+      "attempt": 1,
+      "kind": "image_view",
+      "expectedPath": "/DS/DocumentSearch/DocumentImageView",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentImageView?doc_id=2026030600417011",
+      "title": "New York Web Public Inquiry",
+      "readyState": "complete",
+      "htmlLength": 13915,
+      "bodyTextLength": 586,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": true,
+      "ok": true,
+      "reason": "viewer_iframe_present"
+    },
+    {
+      "step": "return_to_results_2026030600417011",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "title": "Search Results By Document Type",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_result_markers"
+    },
+    {
+      "step": "return_to_results_2026030600417011",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult?page=1",
+      "title": "Search Results By Document Type",
+      "readyState": "complete",
+      "htmlLength": 77201,
+      "bodyTextLength": 1595,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "result_markers_present"
+    },
+    {
+      "step": "submit_result_page_1",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "title": "Search Results By Document Type",
+      "readyState": "loading",
+      "htmlLength": 0,
+      "bodyTextLength": 0,
+      "hasToken": false,
+      "hasShellMarker": false,
+      "hasResultMarker": false,
+      "hasViewerIframe": false,
+      "ok": false,
+      "reason": "missing_result_markers"
+    },
+    {
+      "step": "submit_result_page_1",
+      "attempt": 1,
+      "kind": "results",
+      "expectedPath": "/DS/DocumentSearch/DocumentTypeResult",
+      "finalUrl": "https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentTypeResult",
+      "title": "Search Results By Document Type",
+      "readyState": "complete",
+      "htmlLength": 77201,
+      "bodyTextLength": 1595,
+      "hasToken": true,
+      "hasShellMarker": true,
+      "hasResultMarker": true,
+      "hasViewerIframe": false,
+      "ok": true,
+      "reason": "result_markers_present"
+    }
+  ],
+  "validationSteps": [
+    {
+      "step": "open_document_type",
+      "ok": true
+    },
+    {
+      "step": "load_result_page",
+      "ok": true
+    },
+    {
+      "step": "extract_result_rows",
+      "ok": true,
+      "detail": "rows=10"
+    },
+    {
+      "step": "viewer_roundtrip_2026030400357008",
+      "ok": true
+    },
+    {
+      "step": "viewer_roundtrip_2026030600417011",
+      "ok": true
+    },
+    {
+      "step": "reload_result_page_after_viewer",
+      "ok": true
+    }
+  ],
+  "attemptedDocs": 2,
+  "completedDocs": 2,
+  "connectivityStatusAtStart": "healthy",
+  "finishedAt": "2026-03-13T18:44:01.177Z",
+  "sessionDurationMs": 65818
+}

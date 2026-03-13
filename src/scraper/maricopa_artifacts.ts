@@ -118,6 +118,31 @@ interface PersistedMaricopaSessionPayload {
   storage_state: BrowserContextOptions['storageState'];
 }
 
+const FORBIDDEN_MARICOPA_COOKIE_NAMES = new Set([
+  'csrf',
+  'arraffinity',
+  'arraffinitysamesite',
+  '_ga_kdhkt2nc21',
+  '_ga',
+  'cf_clearance',
+  '__cf_bm',
+]);
+
+function sanitizeMaricopaStorageState(
+  storageState: BrowserContextOptions['storageState'],
+): BrowserContextOptions['storageState'] {
+  if (!storageState || typeof storageState !== 'object') return storageState;
+
+  const cookies = Array.isArray(storageState.cookies)
+    ? storageState.cookies.filter((cookie) => !FORBIDDEN_MARICOPA_COOKIE_NAMES.has(cookie.name.toLowerCase()))
+    : storageState.cookies;
+
+  return {
+    ...storageState,
+    cookies,
+  };
+}
+
 export function isFreshMaricopaSession(capturedAt: string): boolean {
   const maxAgeMinutes = Math.max(1, Number(process.env.MARICOPA_SESSION_MAX_AGE_MINUTES ?? '240'));
   const ageMs = Date.now() - new Date(capturedAt).getTime();
@@ -133,7 +158,11 @@ export async function loadMaricopaSessionState(): Promise<MaricopaSessionState |
   if (dbPayload?.meta?.version === 1 && dbPayload.storage_state) {
     const storageStatePath = getRuntimeStorageStatePath();
     await ensureDir(path.dirname(storageStatePath));
-    await fs.writeFile(storageStatePath, JSON.stringify(dbPayload.storage_state, null, 2), 'utf8');
+    await fs.writeFile(
+      storageStatePath,
+      JSON.stringify(sanitizeMaricopaStorageState(dbPayload.storage_state), null, 2),
+      'utf8',
+    );
     return {
       ...dbPayload.meta,
       storage_state_path: storageStatePath,
@@ -158,10 +187,14 @@ export async function saveMaricopaSessionState(
 ): Promise<MaricopaSessionState> {
   await ensureDir(getMaricopaSessionDir());
   const storageStatePath = getMaricopaStorageStatePath();
-  await fs.writeFile(storageStatePath, JSON.stringify(storageState, null, 2), 'utf8');
+  const sanitizedStorageState = sanitizeMaricopaStorageState(storageState);
+  await fs.writeFile(storageStatePath, JSON.stringify(sanitizedStorageState, null, 2), 'utf8');
 
-  const cookies = (typeof storageState === 'object' && storageState && 'cookies' in storageState && Array.isArray(storageState.cookies))
-    ? storageState.cookies
+  const cookies = (typeof sanitizedStorageState === 'object'
+    && sanitizedStorageState
+    && 'cookies' in sanitizedStorageState
+    && Array.isArray(sanitizedStorageState.cookies))
+    ? sanitizedStorageState.cookies
     : [];
   const meta: MaricopaSessionState = {
     version: 1,
@@ -184,7 +217,7 @@ export async function saveMaricopaSessionState(
       source_url: meta.source_url,
       cookie_summary: meta.cookie_summary,
     },
-    storage_state: storageState,
+    storage_state: sanitizedStorageState,
   } satisfies PersistedMaricopaSessionPayload);
   return meta;
 }

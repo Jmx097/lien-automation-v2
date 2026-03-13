@@ -1,85 +1,12 @@
 {
-  "cookies": [
-    {
-      "name": "csrf",
-      "value": "7VkX-dhrWIkGltMhsR-e-fURqM6QrHCvLaUVe56NwtUSfVnMA4YkZ-71AR1gbyg2WJVj1nxBTXHBcRahv9qBgg:AAABnOgfD-A:njmM5PKbzAnTQSdpHa7e9A",
-      "domain": "recorder.maricopa.gov",
-      "path": "/recording",
-      "expires": -1,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "Strict"
-    },
-    {
-      "name": "ARRAffinity",
-      "value": "203ec32c66e90fb03bd375ab46cfa937981e8c0c357e008cc132b67019c94e96",
-      "domain": ".recorder.maricopa.gov",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "ARRAffinitySameSite",
-      "value": "203ec32c66e90fb03bd375ab46cfa937981e8c0c357e008cc132b67019c94e96",
-      "domain": ".recorder.maricopa.gov",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "_ga_KDHKT2NC21",
-      "value": "GS2.1.s1773420877$o1$g0$t1773420877$j60$l0$h0",
-      "domain": ".maricopa.gov",
-      "path": "/",
-      "expires": 1807980877.058297,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_ga",
-      "value": "GA1.1.1312495730.1773420877",
-      "domain": ".maricopa.gov",
-      "path": "/",
-      "expires": 1807980877.058898,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "cf_clearance",
-      "value": "z.j5nzOB5Mq8_cUh8VGoU7S0vSKppSvnH.cdn_chcHI-1773420877-1.2.1.1-k4HQ80rqHJl8dqISo4QmeoYh3LXZIkthVl.MRYNSZF5rhNioCsQOl42wbxGDdvmCeq6cVNybx67StlYdnwyJRiModY_PWNpbgVQhvHi_grjlmHO0cBUbKVng3Z7OBkDwnj3LyFDs2t3XM8OoY0lwhRmTgLUmmC1.DIkHCQ7gifDCyYKCtK9dAfGpPUtydcF0yTJkulwZhGxF3BE2t72QRFmM7AcZiauoSW_QEwTLJCE",
-      "domain": ".recorder.maricopa.gov",
-      "path": "/",
-      "expires": 1804956877.572099,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None",
-      "partitionKey": "https://maricopa.gov",
-      "_crHasCrossSiteAncestor": false
-    },
-    {
-      "name": "__cf_bm",
-      "value": "7h7IW9mCnUfQdUfNUoCbW.N.pG5pdrBN0n_f5zJ0OUI-1773420877-1.0.1.1-4HWa8t.VGok1YMpS5cvQcUag6LeIrTSm_zOt9SsczfI2klbiGD1nxoCJr3gBsZW8WxBTyGxmwzEoiMTPI4gD85TaWkE7Ze75xw9LZN1Ky4Q",
-      "domain": ".recorder.maricopa.gov",
-      "path": "/",
-      "expires": 1773422677.593227,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    }
-  ],
+  "cookies": [],
   "origins": [
     {
       "origin": "https://recorder.maricopa.gov",
       "localStorage": [
         {
           "name": "rcd-cartId",
-          "value": "0f27d08f-bc7f-4ca8-9843-24506f82262a"
+          "value": "e90af940-d8c1-424f-8744-e164a0eeb70c"
         }
       ]
     }
