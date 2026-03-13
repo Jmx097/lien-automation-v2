@@ -30,7 +30,19 @@ describe('maricopa OCR parsing', () => {
     expect(extractMaricopaFieldsFromText(text)).toEqual({
       leadType: undefined,
       debtorName: undefined,
-      debtorAddress: '3436 E MARLENE DR bs Gneg 4 4, GILBERT, AZ 85296',
+      debtorAddress: '3436 E MARLENE DR, GILBERT, AZ 85296',
     });
+  });
+
+  it('trims OCR junk after a recognized street suffix', () => {
+    expect(normalizeMaricopaOcrAddress('106 S OREGON ST bO ° mA led, CHANDLER, AZ 85225-0000')).toBe(
+      '106 S OREGON ST, CHANDLER, AZ 85225-0000',
+    );
+    expect(normalizeMaricopaOcrAddress('39506 N DAISY MOUNTAIN DR 122 471 agooos 72, ANTHEM, AZ 85086-1665')).toBe(
+      '39506 N DAISY MOUNTAIN DR, ANTHEM, AZ 85086-1665',
+    );
+    expect(normalizeMaricopaOcrAddress('3436 E MARLENE DR bs Gneg 4 4 GILBERT, AZ 85296 O oS OF')).toBe(
+      '3436 E MARLENE DR, GILBERT, AZ 85296',
+    );
   });
 });

@@ -23,6 +23,9 @@ function normalizeText(value: string | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+const STREET_SUFFIX_PATTERN =
+  /\b(?:ALY|AVE|AVENUE|BLVD|BOULEVARD|CIR|CIRCLE|CT|COURT|DR|DRIVE|HWY|LANE|LN|LOOP|PKWY|PARKWAY|PL|PLACE|RD|ROAD|ST|STREET|TER|TERRACE|TRL|TRAIL|WAY)\b/i;
+
 function trimTrailingAddressNoiseAfterZip(value: string): string {
   const zipPattern = /\b\d{5}(?:-\d{4})?\b/g;
   let match: RegExpExecArray | null;
@@ -37,6 +40,28 @@ function trimTrailingAddressNoiseAfterZip(value: string): string {
   }
 
   return trimmed;
+}
+
+function trimStreetLineNoise(value: string): string {
+  const normalized = value
+    .replace(/[|]+/g, ' ')
+    .replace(/[^A-Za-z0-9#&/.,'\-\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const suffixMatches = [...normalized.matchAll(new RegExp(STREET_SUFFIX_PATTERN.source, 'ig'))];
+  const lastSuffix = suffixMatches[suffixMatches.length - 1];
+  if (!lastSuffix || typeof lastSuffix.index !== 'number') {
+    return normalized;
+  }
+
+  const suffixEnd = lastSuffix.index + lastSuffix[0].length;
+  const suffixTail = normalized.slice(suffixEnd).trim();
+  const optionalUnit = suffixTail.match(
+    /^(?:\s+(?:APT|UNIT|STE|SUITE|LOT|BLDG|BUILDING|#)\s*[A-Z0-9-]+|\s+#\s*[A-Z0-9-]+)?/i,
+  )?.[0] ?? '';
+
+  return `${normalized.slice(0, suffixEnd)}${optionalUnit}`.trim();
 }
 
 export function normalizeMaricopaOcrAddress(value: string | undefined): string | undefined {
@@ -58,7 +83,40 @@ export function normalizeMaricopaOcrAddress(value: string | undefined): string |
     .replace(/,\s*,+/g, ',')
     .trim();
 
-  const cleaned = trimTrailingAddressNoiseAfterZip(normalized)
+  const cityStateZipMatch = normalized.match(/(.*?)([A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)(?:\s+.*)?$/i);
+  if (cityStateZipMatch && /\d/.test(cityStateZipMatch[1])) {
+    const rawStreetPart = cityStateZipMatch[1].trim();
+    if (!STREET_SUFFIX_PATTERN.test(rawStreetPart)) {
+      // Avoid splitting single-line addresses where the city token is fused into the same segment.
+      const cleanedFallback = trimTrailingAddressNoiseAfterZip(normalized)
+        .replace(/\s+([,.;:])/g, '$1')
+        .replace(/,\s*,+/g, ',')
+        .replace(/[.;:,]+$/g, '')
+        .trim();
+      if (cleanedFallback && /\d/.test(cleanedFallback) && cleanedFallback.length >= 8) {
+        return cleanedFallback;
+      }
+    }
+
+    const streetPart = trimStreetLineNoise(rawStreetPart);
+    const cityStateZip = trimTrailingAddressNoiseAfterZip(cityStateZipMatch[2].trim());
+    const rebuilt = [streetPart, cityStateZip].filter(Boolean).join(', ').replace(/[.;:,]+$/g, '').trim();
+    if (rebuilt && /\d/.test(rebuilt) && rebuilt.length >= 8) {
+      return rebuilt;
+    }
+  }
+
+  const parts = trimTrailingAddressNoiseAfterZip(normalized)
+    .split(/\s*,\s*/)
+    .filter(Boolean);
+  const hasSeparatedCityStateZip =
+    parts.length >= 3 && /^[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i.test(parts[parts.length - 1]);
+  const cleanedStreet = parts[0]
+    ? hasSeparatedCityStateZip
+      ? trimStreetLineNoise(parts[0])
+      : parts[0]
+    : '';
+  const cleaned = [cleanedStreet, ...parts.slice(1)].filter(Boolean).join(', ')
     .replace(/\s+([,.;:])/g, '$1')
     .replace(/,\s*,+/g, ',')
     .replace(/[.;:,]+$/g, '')
@@ -86,8 +144,8 @@ function extractResidenceBlock(text: string): string | undefined {
     .filter(Boolean);
 
   const stopPattern = /^(important|tax period|kind of tax|serial number|unpaid balance|place of filing|recording and endorsement cover page|document id:|fees and taxes|cross reference data)\b/i;
-  const cityStateZipPattern = /^[A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i;
-  const cityStateZipNoCommaPattern = /^[A-Z][A-Z .'-]+\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?$/i;
+  const cityStateZipPattern = /\b([A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
+  const cityStateZipNoCommaPattern = /\b([A-Z][A-Z .'-]+\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -103,12 +161,15 @@ function extractResidenceBlock(text: string): string | undefined {
     for (let nextIndex = index + 1; nextIndex < lines.length && collected.length < 3; nextIndex += 1) {
       const nextLine = lines[nextIndex];
       if (stopPattern.test(nextLine)) break;
-      if (!/[A-Za-z]/.test(nextLine)) break;
 
-      if (cityStateZipPattern.test(nextLine) || cityStateZipNoCommaPattern.test(nextLine)) {
-        collected.push(nextLine);
+      const cityStateZipMatch = nextLine.match(cityStateZipPattern) ?? nextLine.match(cityStateZipNoCommaPattern);
+      if (cityStateZipMatch?.[1]) {
+        collected.push(cityStateZipMatch[1]);
         break;
       }
+
+      if (!/[A-Za-z]/.test(nextLine) && !/\d/.test(nextLine)) continue;
+      if (/^[A-Za-z=\-_\s]{1,12}$/i.test(nextLine)) continue;
 
       if (/\d/.test(nextLine) || /\b(?:APT|UNIT|FL|FLOOR|SUITE|STE|PO BOX)\b/i.test(nextLine)) {
         collected.push(nextLine);
