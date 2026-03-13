@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { extractMaricopaFieldsFromText, normalizeMaricopaOcrAddress } from '../../src/scraper/maricopa_ocr';
+import {
+  extractMaricopaFieldsFromText,
+  isSuspiciousMaricopaAddress,
+  normalizeMaricopaOcrAddress,
+} from '../../src/scraper/maricopa_ocr';
 
 const fixtureDir = path.join(process.cwd(), 'tests', 'fixtures', 'maricopa');
 
@@ -44,5 +48,30 @@ describe('maricopa OCR parsing', () => {
     expect(normalizeMaricopaOcrAddress('3436 E MARLENE DR bs Gneg 4 4 GILBERT, AZ 85296 O oS OF')).toBe(
       '3436 E MARLENE DR, GILBERT, AZ 85296',
     );
+  });
+  it('preserves explicit unit designators while trimming OCR junk', () => {
+    expect(normalizeMaricopaOcrAddress('123 MAIN ST APT 5 xx xX, PHOENIX, AZ 85003')).toBe(
+      '123 MAIN ST APT 5, PHOENIX, AZ 85003',
+    );
+    expect(normalizeMaricopaOcrAddress('456 W CENTER RD # 12 ae oe, MESA, AZ 85201')).toBe(
+      '456 W CENTER RD # 12, MESA, AZ 85201',
+    );
+  });
+
+  it('skips short OCR garbage lines between residence and city lines', () => {
+    const text = [
+      'Residence 106 S OREGON ST',
+      'ae oS oe',
+      'CHANDLER, AZ 85225-0000',
+      'Total Amount Due 15328.12',
+    ].join('\n');
+
+    expect(extractMaricopaFieldsFromText(text).debtorAddress).toBe('106 S OREGON ST, CHANDLER, AZ 85225-0000');
+  });
+
+  it('flags leftover street-tail junk as suspicious after normalization', () => {
+    expect(isSuspiciousMaricopaAddress('123 MAIN ST bs Gneg 4 4, PHOENIX, AZ 85003')).toBe(true);
+    expect(isSuspiciousMaricopaAddress('123 MAIN ST APT 5, PHOENIX, AZ 85003')).toBe(false);
+    expect(isSuspiciousMaricopaAddress('PO BOX 123, PHOENIX, AZ 85003')).toBe(false);
   });
 });

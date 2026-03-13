@@ -101,6 +101,29 @@ describe('maricopa recorder mapping', () => {
     expect(record.confidence_score).toBeGreaterThan(0.8);
   });
 
+  it('downgrades confidence when the OCR address still looks suspicious', () => {
+    const detail = JSON.parse(fs.readFileSync(path.join(fixtureDir, 'document-detail.json'), 'utf8'));
+    const cleanRecord = mapMaricopaDetailToLienRecord(detail, {
+      artifactUrl: 'https://example.test/20260017884.pdf',
+      artifactPath: 'C:\\temp\\20260017884.pdf',
+      artifactContentType: 'application/pdf',
+      amountReason: 'amount_not_found',
+      leadType: 'Lien',
+      debtorAddress: '123 MAIN ST, PHOENIX, AZ 85003',
+    });
+    const suspiciousRecord = mapMaricopaDetailToLienRecord(detail, {
+      artifactUrl: 'https://example.test/20260017884.pdf',
+      artifactPath: 'C:\\temp\\20260017884.pdf',
+      artifactContentType: 'application/pdf',
+      amountReason: 'amount_not_found',
+      leadType: 'Lien',
+      debtorAddress: '123 MAIN ST bs Gneg 4 4, PHOENIX, AZ 85003',
+    });
+
+    expect(cleanRecord.confidence_score).toBeGreaterThan(suspiciousRecord.confidence_score ?? 0);
+    expect(suspiciousRecord.confidence_score).toBeLessThan(0.8);
+  });
+
   it('fetches and normalizes the latest searchable date', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

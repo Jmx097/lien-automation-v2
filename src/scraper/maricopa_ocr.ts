@@ -25,6 +25,11 @@ function normalizeText(value: string | undefined): string {
 
 const STREET_SUFFIX_PATTERN =
   /\b(?:ALY|AVE|AVENUE|BLVD|BOULEVARD|CIR|CIRCLE|CT|COURT|DR|DRIVE|HWY|LANE|LN|LOOP|PKWY|PARKWAY|PL|PLACE|RD|ROAD|ST|STREET|TER|TERRACE|TRL|TRAIL|WAY)\b/i;
+const CITY_STATE_ZIP_PATTERN = /\b([A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
+const CITY_STATE_ZIP_NO_COMMA_PATTERN = /\b([A-Z][A-Z .'-]+\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
+const EXPLICIT_UNIT_PATTERN =
+  /^\s*(?:APT|UNIT|STE|SUITE|LOT|BLDG|BUILDING|FL|FLOOR|RM|ROOM|TRLR|TRAILER|SPACE|SPC|#)\s*[A-Z0-9-]{1,12}/i;
+const PO_BOX_PATTERN = /\bP\.?\s*O\.?\s+BOX\b/i;
 
 function trimTrailingAddressNoiseAfterZip(value: string): string {
   const zipPattern = /\b\d{5}(?:-\d{4})?\b/g;
@@ -57,11 +62,59 @@ function trimStreetLineNoise(value: string): string {
 
   const suffixEnd = lastSuffix.index + lastSuffix[0].length;
   const suffixTail = normalized.slice(suffixEnd).trim();
-  const optionalUnit = suffixTail.match(
-    /^(?:\s+(?:APT|UNIT|STE|SUITE|LOT|BLDG|BUILDING|#)\s*[A-Z0-9-]+|\s+#\s*[A-Z0-9-]+)?/i,
-  )?.[0] ?? '';
+  const optionalUnit = suffixTail.match(EXPLICIT_UNIT_PATTERN)?.[0] ?? '';
 
-  return `${normalized.slice(0, suffixEnd)}${optionalUnit}`.trim();
+  return `${normalized.slice(0, suffixEnd)} ${optionalUnit}`.trim();
+}
+
+function isSkippableOcrNoiseLine(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+
+  const compact = trimmed.replace(/[^A-Za-z0-9]/g, '');
+  if (!compact) return true;
+  if (compact.length <= 2) return true;
+  if (/\d{5}(?:-\d{4})?$/.test(compact)) return false;
+  if (/\b(?:APT|UNIT|STE|SUITE|LOT|BLDG|BUILDING|FL|FLOOR|RM|ROOM|POBOX)\b/i.test(compact)) return false;
+
+  const alphaCount = (compact.match(/[A-Za-z]/g)?.length ?? 0);
+  const digitCount = (compact.match(/\d/g)?.length ?? 0);
+  if (digitCount === 0 && alphaCount <= 8) return true;
+  if (digitCount > 0 && compact.length <= 6 && alphaCount <= 2) return true;
+
+  return false;
+}
+
+function extractStreetSegment(value: string): string {
+  const normalized = normalizeText(value);
+  const cityStateZipMatch = normalized.match(CITY_STATE_ZIP_PATTERN) ?? normalized.match(CITY_STATE_ZIP_NO_COMMA_PATTERN);
+  if (cityStateZipMatch && typeof cityStateZipMatch.index === 'number') {
+    return normalized.slice(0, cityStateZipMatch.index).replace(/[,\s]+$/g, '').trim();
+  }
+
+  return normalized.split(/\s*,\s*/)[0]?.trim() ?? '';
+}
+
+export function isSuspiciousMaricopaAddress(value: string | undefined): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) return true;
+  if (!/\d/.test(normalized) || !/[A-Za-z]/.test(normalized)) return true;
+  if (!/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/i.test(normalized)) return true;
+
+  const streetSegment = extractStreetSegment(normalized);
+  if (!streetSegment) return true;
+  if (PO_BOX_PATTERN.test(streetSegment)) return false;
+
+  const suffixMatches = [...streetSegment.matchAll(new RegExp(STREET_SUFFIX_PATTERN.source, 'ig'))];
+  const lastSuffix = suffixMatches[suffixMatches.length - 1];
+  if (!lastSuffix || typeof lastSuffix.index !== 'number') {
+    return true;
+  }
+
+  const tail = streetSegment.slice(lastSuffix.index + lastSuffix[0].length).trim();
+  if (!tail) return false;
+
+  return !EXPLICIT_UNIT_PATTERN.test(` ${tail}`);
 }
 
 export function normalizeMaricopaOcrAddress(value: string | undefined): string | undefined {
@@ -144,9 +197,6 @@ function extractResidenceBlock(text: string): string | undefined {
     .filter(Boolean);
 
   const stopPattern = /^(important|tax period|kind of tax|serial number|unpaid balance|place of filing|recording and endorsement cover page|document id:|fees and taxes|cross reference data)\b/i;
-  const cityStateZipPattern = /\b([A-Z][A-Z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
-  const cityStateZipNoCommaPattern = /\b([A-Z][A-Z .'-]+\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?)\b/i;
-
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const residenceMatch = line.match(/\b(?:Residence|Address|Taxpayer Address)\b[:\-\s]*(.*)$/i);
@@ -162,14 +212,13 @@ function extractResidenceBlock(text: string): string | undefined {
       const nextLine = lines[nextIndex];
       if (stopPattern.test(nextLine)) break;
 
-      const cityStateZipMatch = nextLine.match(cityStateZipPattern) ?? nextLine.match(cityStateZipNoCommaPattern);
+      const cityStateZipMatch = nextLine.match(CITY_STATE_ZIP_PATTERN) ?? nextLine.match(CITY_STATE_ZIP_NO_COMMA_PATTERN);
       if (cityStateZipMatch?.[1]) {
         collected.push(cityStateZipMatch[1]);
         break;
       }
 
-      if (!/[A-Za-z]/.test(nextLine) && !/\d/.test(nextLine)) continue;
-      if (/^[A-Za-z=\-_\s]{1,12}$/i.test(nextLine)) continue;
+      if (isSkippableOcrNoiseLine(nextLine)) continue;
 
       if (/\d/.test(nextLine) || /\b(?:APT|UNIT|FL|FLOOR|SUITE|STE|PO BOX)\b/i.test(nextLine)) {
         collected.push(nextLine);
@@ -182,7 +231,7 @@ function extractResidenceBlock(text: string): string | undefined {
     if (collected.length === 0) continue;
 
     const rawAddress =
-      collected.length >= 2 && (cityStateZipPattern.test(collected[1]) || cityStateZipNoCommaPattern.test(collected[1]))
+      collected.length >= 2 && (CITY_STATE_ZIP_PATTERN.test(collected[1]) || CITY_STATE_ZIP_NO_COMMA_PATTERN.test(collected[1]))
         ? `${collected[0]}, ${collected[1]}`
         : collected.join(' ');
 

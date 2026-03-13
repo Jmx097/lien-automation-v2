@@ -13,7 +13,11 @@ import {
   resolveMaricopaArtifactUrl,
   filterValidMaricopaArtifactCandidates,
 } from './maricopa_artifacts';
-import { extractMaricopaFieldsFromArtifact, type MaricopaOcrExtraction } from './maricopa_ocr';
+import {
+  extractMaricopaFieldsFromArtifact,
+  isSuspiciousMaricopaAddress,
+  type MaricopaOcrExtraction,
+} from './maricopa_ocr';
 
 const MARICOPA_API_BASE = 'https://publicapi.recorder.maricopa.gov';
 const MARICOPA_SEARCH_PAGE_SIZE = 20;
@@ -380,7 +384,12 @@ function computeConfidenceScore(detail: MaricopaDocumentDetail, enrichment?: Mar
 
   if (enrichment?.debtorName) candidates.push(0.82);
   if (enrichment?.debtorAddress) {
-    candidates.push(/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/i.test(enrichment.debtorAddress) ? 0.88 : 0.76);
+    const hasStateZip = /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/i.test(enrichment.debtorAddress);
+    if (hasStateZip) {
+      candidates.push(isSuspiciousMaricopaAddress(enrichment.debtorAddress) ? 0.72 : 0.88);
+    } else {
+      candidates.push(isSuspiciousMaricopaAddress(enrichment.debtorAddress) ? 0.58 : 0.76);
+    }
   }
   if (typeof enrichment?.amountConfidence === 'number') {
     candidates.push(enrichment.amountConfidence);
