@@ -297,6 +297,14 @@ export function ensureDatabaseReady(): string {
       last_recovery_alert_at TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS scheduler_site_artifacts (
+      site TEXT NOT NULL,
+      artifact_key TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (site, artifact_key)
+    );
   `);
 
   const scheduledRunColumns = db.prepare("PRAGMA table_info('scheduled_runs')").all() as Array<{ name: string }>;

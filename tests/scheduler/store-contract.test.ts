@@ -11,6 +11,7 @@ const pgState = {
   runs: new Map<string, StoredRunRow>(),
   control: new Map<string, { site: string; effective_max_records: number; updated_at: string }>(),
   connectivity: new Map<string, SiteConnectivityState>(),
+  artifacts: new Map<string, { site: string; artifact_key: string; payload_json: string; updated_at: string }>(),
   alerts: new Map<string, {
     site: string;
     idempotency_key: string;
@@ -38,6 +39,7 @@ function resetPgState(): void {
   pgState.runs.clear();
   pgState.control.clear();
   pgState.connectivity.clear();
+  pgState.artifacts.clear();
   pgState.alerts.clear();
   pgState.failSelect1 = false;
 }
@@ -116,7 +118,7 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('UPDATE scheduled_runs')) {
-        const existing = pgState.runs.get(String(params[20]));
+        const existing = pgState.runs.get(String(params[30]));
         if (existing) {
           pgState.runs.set(existing.id, {
             ...existing,
@@ -222,6 +224,22 @@ vi.mock('pg', () => {
 
       if (normalized.includes('FROM scheduler_site_connectivity_state ORDER BY site')) {
         return { rows: Array.from(pgState.connectivity.values()).sort((a, b) => a.site.localeCompare(b.site)) };
+      }
+
+      if (normalized.startsWith('INSERT INTO scheduler_site_artifacts')) {
+        const row = {
+          site: String(params[0]),
+          artifact_key: String(params[1]),
+          payload_json: String(params[2]),
+          updated_at: nowIso(),
+        };
+        pgState.artifacts.set(`${row.site}:${row.artifact_key}`, row);
+        return { rows: [] };
+      }
+
+      if (normalized.includes('FROM scheduler_site_artifacts') && normalized.includes('artifact_key = $2')) {
+        const row = pgState.artifacts.get(`${String(params[0])}:${String(params[1])}`);
+        return { rows: row ? [row] : [] };
       }
 
       if (normalized.startsWith('INSERT INTO scheduler_alerts')) {
@@ -335,6 +353,15 @@ async function exerciseStore(store: ScheduledRunStore): Promise<void> {
   await store.upsertConnectivityState(connectivity);
   expect((await store.getConnectivityState('nyc_acris'))?.status).toBe('blocked');
   expect((await store.listConnectivityStates()).map((state) => state.site)).toEqual(['nyc_acris']);
+
+  await store.upsertSiteStateArtifact({
+    site: 'maricopa_recorder',
+    artifact_key: 'session_state',
+    payload_json: '{"captured_at":"2026-03-11T12:00:00.000Z"}',
+    updated_at: '2026-03-11T12:00:00.000Z',
+  });
+  expect((await store.getSiteStateArtifact('maricopa_recorder', 'session_state'))?.payload_json)
+    .toContain('captured_at');
 
   await store.insertMissedAlert({
     site: 'nyc_acris',

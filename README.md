@@ -295,6 +295,21 @@ npm run canary:maricopa
 - `discover:maricopa-live` should be rerun whenever the site changes its preview/image/document request shape.
 - `validate:maricopa-live` confirms both API reachability and whether the current artifact setup is producing complete OCR-backed records.
 - `canary:maricopa` uploads both complete and review-bound rows through the standard sheet pipeline, letting `Review_Queue` absorb incomplete records.
+- When `DATABASE_URL` is set, Maricopa session state and discovered artifact candidates are persisted in the scheduler database so Cloud Run can reuse them across instances. Run `refresh:maricopa-session` and `discover:maricopa-live` against the production `DATABASE_URL` before turning on `MARICOPA_ENABLE_ARTIFACT_RETRIEVAL`.
+- `GET /schedule/health` now includes a top-level `maricopa` section showing session presence/freshness, artifact candidate availability, `refresh_required`, and the latest Maricopa connectivity timestamps.
+- When Maricopa artifact retrieval is enabled, stale/missing Maricopa state now blocks scheduled Maricopa runs and moves the site into the same blocked/probing recovery flow used for NYC ACRIS.
+
+## Maricopa Droplet Refresh
+
+Use the DigitalOcean droplet as the canonical operator refresh environment for Maricopa:
+
+```bash
+scripts/ops/refresh-maricopa-state.sh
+```
+
+- The script runs `refresh:maricopa-session`, `discover:maricopa-live`, and `validate:maricopa-live` in order.
+- It exits nonzero if the results table never appears, if discovery captures no artifact candidates, or if validation still shows a stale session.
+- Cloud Run daily runs do not need your laptop once the droplet refresh has written fresh Maricopa state into the shared scheduler database.
 
 ## Setup Troubleshooting (stale clone symptom)
 

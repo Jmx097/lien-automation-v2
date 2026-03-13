@@ -1,7 +1,9 @@
 import fs from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import type { BrowserContextOptions } from 'playwright';
 import { createIsolatedBrowserContext, type BrowserTransportMode } from '../browser/transport';
+import { ScheduledRunStore } from '../scheduler/store';
 
 export interface MaricopaSessionState {
   version: 1;
@@ -31,8 +33,23 @@ export interface MaricopaArtifactFetchResult {
   url: string;
 }
 
+export interface MaricopaPersistedStateReadiness {
+  artifactRetrievalEnabled: boolean;
+  sessionPresent: boolean;
+  sessionFresh: boolean;
+  sessionCapturedAt?: string;
+  artifactCandidatesPresent: boolean;
+  artifactCandidateCount: number;
+  refreshRequired: boolean;
+  refreshReason?: 'session_missing_or_stale' | 'artifact_candidates_missing' | 'artifact_retrieval_disabled';
+  detail: string;
+}
+
 const RESULTS_URL =
   'https://recorder.maricopa.gov/recording/document-search-results.html?lastNames=&firstNames=&middleNameIs=&documentTypeSelector=code&documentCode=FL&beginDate=2026-01-01&endDate=2026-02-13';
+const MARICOPA_SITE = 'maricopa_recorder';
+const SESSION_ARTIFACT_KEY = 'session_state';
+const DISCOVERY_ARTIFACT_KEY = 'artifact_candidates';
 
 function maricopaRootDir(): string {
   return process.env.MARICOPA_OUT_DIR?.trim() || path.resolve(process.cwd(), 'out', 'maricopa');
@@ -62,13 +79,67 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
+function getRuntimeStorageStatePath(): string {
+  const configured = process.env.MARICOPA_OUT_DIR?.trim();
+  if (configured) return path.join(configured, 'session', 'storage-state.json');
+  return path.join(os.tmpdir(), 'maricopa', 'session', 'storage-state.json');
+}
+
+async function withStore<T>(fn: (store: ScheduledRunStore) => Promise<T>): Promise<T> {
+  const store = new ScheduledRunStore();
+  try {
+    return await fn(store);
+  } finally {
+    await store.close().catch(() => null);
+  }
+}
+
+async function saveArtifactPayload(key: string, payload: unknown): Promise<void> {
+  await withStore((store) => store.upsertSiteStateArtifact({
+    site: MARICOPA_SITE,
+    artifact_key: key,
+    payload_json: JSON.stringify(payload),
+    updated_at: new Date().toISOString(),
+  }));
+}
+
+async function loadArtifactPayload<T>(key: string): Promise<T | null> {
+  try {
+    const record = await withStore((store) => store.getSiteStateArtifact(MARICOPA_SITE, key));
+    if (!record?.payload_json) return null;
+    return JSON.parse(record.payload_json) as T;
+  } catch {
+    return null;
+  }
+}
+
+interface PersistedMaricopaSessionPayload {
+  meta: Omit<MaricopaSessionState, 'storage_state_path'>;
+  storage_state: BrowserContextOptions['storageState'];
+}
+
 export function isFreshMaricopaSession(capturedAt: string): boolean {
   const maxAgeMinutes = Math.max(1, Number(process.env.MARICOPA_SESSION_MAX_AGE_MINUTES ?? '240'));
   const ageMs = Date.now() - new Date(capturedAt).getTime();
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMinutes * 60 * 1000;
 }
 
+export function isMaricopaArtifactRetrievalEnabled(): boolean {
+  return process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL !== '0';
+}
+
 export async function loadMaricopaSessionState(): Promise<MaricopaSessionState | null> {
+  const dbPayload = await loadArtifactPayload<PersistedMaricopaSessionPayload>(SESSION_ARTIFACT_KEY);
+  if (dbPayload?.meta?.version === 1 && dbPayload.storage_state) {
+    const storageStatePath = getRuntimeStorageStatePath();
+    await ensureDir(path.dirname(storageStatePath));
+    await fs.writeFile(storageStatePath, JSON.stringify(dbPayload.storage_state, null, 2), 'utf8');
+    return {
+      ...dbPayload.meta,
+      storage_state_path: storageStatePath,
+    };
+  }
+
   try {
     const raw = await fs.readFile(getMaricopaSessionMetaPath(), 'utf8');
     const parsed = JSON.parse(raw) as MaricopaSessionState;
@@ -105,6 +176,16 @@ export async function saveMaricopaSessionState(
   };
 
   await fs.writeFile(getMaricopaSessionMetaPath(), JSON.stringify(meta, null, 2), 'utf8');
+  await saveArtifactPayload(SESSION_ARTIFACT_KEY, {
+    meta: {
+      version: meta.version,
+      captured_at: meta.captured_at,
+      transport_mode: meta.transport_mode,
+      source_url: meta.source_url,
+      cookie_summary: meta.cookie_summary,
+    },
+    storage_state: storageState,
+  } satisfies PersistedMaricopaSessionPayload);
   return meta;
 }
 
@@ -152,9 +233,13 @@ export function discoverMaricopaArtifactCandidates(
 export async function saveMaricopaArtifactCandidates(candidates: MaricopaArtifactCandidate[]): Promise<void> {
   await ensureDir(maricopaRootDir());
   await fs.writeFile(getMaricopaDiscoveryPath(), JSON.stringify(candidates, null, 2), 'utf8');
+  await saveArtifactPayload(DISCOVERY_ARTIFACT_KEY, candidates);
 }
 
 export async function loadMaricopaArtifactCandidates(): Promise<MaricopaArtifactCandidate[]> {
+  const dbPayload = await loadArtifactPayload<MaricopaArtifactCandidate[]>(DISCOVERY_ARTIFACT_KEY);
+  if (Array.isArray(dbPayload)) return dbPayload;
+
   try {
     const raw = await fs.readFile(getMaricopaDiscoveryPath(), 'utf8');
     const parsed = JSON.parse(raw) as MaricopaArtifactCandidate[];
@@ -162,6 +247,68 @@ export async function loadMaricopaArtifactCandidates(): Promise<MaricopaArtifact
   } catch {
     return [];
   }
+}
+
+export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPersistedStateReadiness> {
+  const artifactRetrievalEnabled = isMaricopaArtifactRetrievalEnabled();
+  const session = await loadMaricopaSessionState();
+  const candidates = await loadMaricopaArtifactCandidates();
+  const sessionFresh = Boolean(session?.captured_at && isFreshMaricopaSession(session.captured_at));
+
+  if (!artifactRetrievalEnabled) {
+    return {
+      artifactRetrievalEnabled,
+      sessionPresent: Boolean(session),
+      sessionFresh,
+      sessionCapturedAt: session?.captured_at,
+      artifactCandidatesPresent: candidates.length > 0,
+      artifactCandidateCount: candidates.length,
+      refreshRequired: false,
+      refreshReason: 'artifact_retrieval_disabled',
+      detail: 'Maricopa artifact retrieval is disabled by configuration.',
+    };
+  }
+
+  if (!session || !sessionFresh) {
+    return {
+      artifactRetrievalEnabled,
+      sessionPresent: Boolean(session),
+      sessionFresh,
+      sessionCapturedAt: session?.captured_at,
+      artifactCandidatesPresent: candidates.length > 0,
+      artifactCandidateCount: candidates.length,
+      refreshRequired: true,
+      refreshReason: 'session_missing_or_stale',
+      detail: session
+        ? `Maricopa session is stale (captured_at=${session.captured_at}). Run refresh:maricopa-session on the droplet.`
+        : 'Maricopa session is missing. Run refresh:maricopa-session on the droplet.',
+    };
+  }
+
+  if (candidates.length === 0) {
+    return {
+      artifactRetrievalEnabled,
+      sessionPresent: true,
+      sessionFresh: true,
+      sessionCapturedAt: session.captured_at,
+      artifactCandidatesPresent: false,
+      artifactCandidateCount: 0,
+      refreshRequired: true,
+      refreshReason: 'artifact_candidates_missing',
+      detail: 'Maricopa artifact candidates are missing. Run discover:maricopa-live on the droplet.',
+    };
+  }
+
+  return {
+    artifactRetrievalEnabled,
+    sessionPresent: true,
+    sessionFresh: true,
+    sessionCapturedAt: session.captured_at,
+    artifactCandidatesPresent: true,
+    artifactCandidateCount: candidates.length,
+    refreshRequired: false,
+    detail: 'Maricopa persisted session and artifact candidates are available.',
+  };
 }
 
 export async function resolveMaricopaArtifactUrl(recordingNumber: string): Promise<string | null> {

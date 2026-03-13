@@ -16,6 +16,7 @@ const BASE = 'https://a836-acris.nyc.gov';
 const PATHS = {
   index: '/DS/DocumentSearch/Index',
   documentType: '/DS/DocumentSearch/DocumentType',
+  detail: '/DS/DocumentSearch/DocumentDetail',
   result: '/DS/DocumentSearch/DocumentTypeResult',
   imageView: '/DS/DocumentSearch/DocumentImageView',
 };
@@ -82,11 +83,18 @@ interface ResultRowCandidate {
 
 interface ViewerArtifact {
   docId: string;
+  detailUrl?: string;
   imageViewUrl: string;
   viewerSrc: string | null;
   imageUrls: string[];
   title: string;
   totalPages?: number;
+  filingDate?: string;
+  recordedFiledAt?: string;
+  detailDebtorName?: string;
+  detailDebtorAddress?: string;
+  detailSecuredPartyName?: string;
+  detailSecuredPartyAddress?: string;
   amount?: string;
   amountConfidence?: number;
   amountReason?: AmountReason;
@@ -107,7 +115,7 @@ interface ValidationStep {
   detail?: string;
 }
 
-type NYCAcrisPageKind = 'index' | 'document_type' | 'results' | 'image_view';
+type NYCAcrisPageKind = 'index' | 'document_type' | 'detail' | 'results' | 'image_view';
 
 interface PageReadyDiagnostic {
   step: string;
@@ -170,6 +178,16 @@ interface OcrExtraction {
   leadType?: string;
   taxpayerName?: string;
   taxpayerAddress?: string;
+}
+
+interface DetailExtraction {
+  filingDate?: string;
+  recordedFiledAt?: string;
+  debtorName?: string;
+  debtorAddress?: string;
+  securedPartyName?: string;
+  securedPartyAddress?: string;
+  amount?: string;
 }
 
 function unique<T>(items: T[]): T[] {
@@ -247,6 +265,23 @@ export function inspectNYCAcrisPageReadiness(
       hasViewerIframe,
       ok,
       reason: ok ? 'result_markers_present' : 'missing_result_markers',
+    };
+  }
+
+  if (kind === 'detail') {
+    const ok =
+      /detailed\s+document\s+information/i.test(html) &&
+      /party\s*1/i.test(html) &&
+      /doc\.\s*date/i.test(html);
+    return {
+      htmlLength,
+      bodyTextLength,
+      hasToken,
+      hasShellMarker,
+      hasResultMarker,
+      hasViewerIframe,
+      ok,
+      reason: ok ? 'detail_markers_present' : 'missing_detail_markers',
     };
   }
 
@@ -768,6 +803,77 @@ export function chooseBetterDebtorName(currentName: string, candidateName: strin
   return current;
 }
 
+function joinAddressParts(parts: Array<string | undefined>): string | undefined {
+  const cleaned = parts.map((part) => normalizeText(part ?? '')).filter(Boolean);
+  if (cleaned.length === 0) return undefined;
+  return normalizeOcrAddress(cleaned.join(', ')) ?? normalizeOcrAddress(cleaned.join(' '));
+}
+
+function normalizeCurrencyToWholeDollars(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const numeric = Number.parseFloat(raw.replace(/[$,\s]/g, ''));
+  if (!Number.isFinite(numeric)) return undefined;
+  return String(Math.trunc(numeric));
+}
+
+function normalizePartyNameFromDetail(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const normalized = sanitizeDebtorName(value.replace(/\s+/g, ' ').trim());
+  return normalized || undefined;
+}
+
+export function extractNYCAcrisDetailFromHtml(html: string): DetailExtraction {
+  const readLabel = (labelPattern: RegExp): string | undefined => {
+    const match = html.match(labelPattern);
+    const raw = match?.[1]
+      ?.replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return raw || undefined;
+  };
+
+  const readParty = (label: string) => {
+    const blockMatch = html.match(new RegExp(`${label}[\\s\\S]*?<table[^>]*>([\\s\\S]*?)<\\/table>`, 'i'));
+    const block = blockMatch?.[1] ?? '';
+    const rowMatch = block.match(/<tr[^>]*>([\s\S]*?)<\/tr>/i);
+    const row = rowMatch?.[1] ?? '';
+    const cells = [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+      .map((match) =>
+        normalizeText(
+          match[1]
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+        )
+      )
+      .filter(Boolean);
+
+    if (cells.length < 6) {
+      return { name: undefined, address: undefined };
+    }
+
+    return {
+      name: normalizePartyNameFromDetail(cells[0]),
+      address: joinAddressParts([cells[1], cells[2], cells[3], cells[4], cells[5]]),
+    };
+  };
+
+  const party1 = readParty('PARTY\\s*1');
+  const party2 = readParty('PARTY\\s*2');
+
+  return {
+    filingDate: readLabel(/DOC\.\s*DATE:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/i),
+    recordedFiledAt: readLabel(/RECORDED\s*\/\s*FILED:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/i),
+    debtorName: party1.name,
+    debtorAddress: party1.address,
+    securedPartyName: party2.name,
+    securedPartyAddress: party2.address,
+    amount: normalizeCurrencyToWholeDollars(
+      readLabel(/DOC\.\s*AMOUNT:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/i)
+    ),
+  };
+}
+
 async function extractOcrFromViewer(page: Page, artifact: ViewerArtifact, manifest?: RunManifest): Promise<OcrExtraction> {
   const runtime = checkOCRRuntime();
   if (!runtime.ok) {
@@ -858,6 +964,22 @@ async function submitHiddenPostToResults(
     expectedPath: PATHS.result,
     step,
     kind: 'results',
+  });
+}
+
+async function submitHiddenPostToDetail(
+  page: Page,
+  manifest: RunManifest | undefined,
+  actionUrl: string,
+  fields: Record<string, string>,
+  step: string,
+): Promise<PageReadyDiagnostic> {
+  return submitHiddenPostUntilReady(page, manifest, {
+    actionUrl,
+    fields,
+    expectedPath: PATHS.detail,
+    step,
+    kind: 'detail',
   });
 }
 
@@ -1131,6 +1253,43 @@ async function openImageViewFromResults(page: Page, state: SearchState, docId: s
   throw lastError instanceof Error ? lastError : new Error(`viewer_open_transient ${docId}`);
 }
 
+async function openDetailViewFromResults(page: Page, state: SearchState, docId: string, manifest?: RunManifest): Promise<void> {
+  await waitForActionDelay();
+  const token = await getToken(page);
+  const currentFields = await collectHiddenFields(page);
+  const detailFields = {
+    ...currentFields,
+    ...buildSearchPayload(state.pageNum, state.profile),
+    __RequestVerificationToken: token,
+  };
+
+  await submitHiddenPostToDetail(
+    page,
+    manifest,
+    `${BASE}${PATHS.detail}?doc_id=${docId}`,
+    detailFields,
+    `open_detail_view_${docId}`
+  );
+}
+
+async function openImageViewFromDetail(page: Page, docId: string, manifest?: RunManifest): Promise<void> {
+  await waitForActionDelay();
+  const token = await getToken(page);
+  const hiddenFields = await collectHiddenFields(page);
+  const imageViewFields: Record<string, string> = {
+    ...hiddenFields,
+    __RequestVerificationToken: token,
+  };
+
+  await submitHiddenPostToImageView(
+    page,
+    manifest,
+    `${BASE}${PATHS.imageView}?doc_id=${docId}`,
+    imageViewFields,
+    `open_image_view_from_detail_${docId}`
+  );
+}
+
 async function returnToResultsFromViewer(page: Page, docId: string, manifest?: RunManifest): Promise<void> {
   await waitForActionDelay();
   const token = await getToken(page);
@@ -1162,7 +1321,11 @@ async function returnToResultsFromViewer(page: Page, docId: string, manifest?: R
 }
 
 async function extractViewerArtifactInSession(page: Page, state: SearchState, docId: string, manifest?: RunManifest): Promise<ViewerArtifact> {
-  await openImageViewFromResults(page, state, docId, manifest);
+  await openDetailViewFromResults(page, state, docId, manifest);
+  const detailHtml = await page.content();
+  const detail = extractNYCAcrisDetailFromHtml(detailHtml);
+  const detailUrl = page.url();
+  await openImageViewFromDetail(page, docId, manifest);
 
   const viewerSrc = (await page.locator('iframe[name="mainframe"]').getAttribute('src').catch(() => null)) ?? null;
   const title = await page.title();
@@ -1181,15 +1344,23 @@ async function extractViewerArtifactInSession(page: Page, state: SearchState, do
 
   const artifact: ViewerArtifact = {
     docId,
+    detailUrl,
     imageViewUrl: page.url(),
     viewerSrc,
     imageUrls,
     title,
     totalPages: parseViewerTotalPages(viewerSrc),
+    filingDate: detail.filingDate,
+    recordedFiledAt: detail.recordedFiledAt,
+    detailDebtorName: detail.debtorName,
+    detailDebtorAddress: detail.debtorAddress,
+    detailSecuredPartyName: detail.securedPartyName,
+    detailSecuredPartyAddress: detail.securedPartyAddress,
+    amount: detail.amount,
   };
 
   const ocr = await extractOcrFromViewer(page, artifact, manifest);
-  artifact.amount = ocr.amount;
+  artifact.amount = artifact.amount ?? ocr.amount;
   artifact.amountConfidence = ocr.amountConfidence;
   artifact.amountReason = ocr.amountReason;
   artifact.leadType = ocr.leadType;
@@ -1234,8 +1405,14 @@ async function hardenContext(context: BrowserContext, manifest: RunManifest): Pr
 }
 
 function toLienRecord(row: ResultRowCandidate, artifact?: ViewerArtifact): LienRecord {
-  const debtorName = chooseBetterDebtorName(row.debtorName, artifact?.taxpayerName);
-  const debtorAddress = normalizeOcrAddress(artifact?.taxpayerAddress) ?? '';
+  const debtorName = chooseBetterDebtorName(
+    chooseBetterDebtorName(row.debtorName, artifact?.detailDebtorName),
+    artifact?.taxpayerName
+  );
+  const debtorAddress =
+    normalizeOcrAddress(artifact?.detailDebtorAddress) ??
+    normalizeOcrAddress(artifact?.taxpayerAddress) ??
+    '';
   return {
     state: 'NY',
     source: 'nyc_acris',
@@ -1244,10 +1421,10 @@ function toLienRecord(row: ResultRowCandidate, artifact?: ViewerArtifact): LienR
     debtor_name: debtorName,
     debtor_address: debtorAddress,
     file_number: row.docId,
-    secured_party_name: row.securedPartyName,
-    secured_party_address: '',
+    secured_party_name: artifact?.detailSecuredPartyName ?? row.securedPartyName,
+    secured_party_address: normalizeOcrAddress(artifact?.detailSecuredPartyAddress) ?? '',
     status: 'Active',
-    filing_date: row.filingDate || formatDocIdDate(row.docId),
+    filing_date: artifact?.filingDate || row.filingDate || formatDocIdDate(row.docId),
     lapse_date: '12/31/9999',
     document_type: row.documentType,
     pdf_filename: '',

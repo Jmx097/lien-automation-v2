@@ -6,6 +6,7 @@ import { scrapers } from './scraper/index';
 import { probeCASOSResultCount } from './scraper/ca_sos_enhanced';
 import { ScheduledRunStore, ScheduledRunRecord, type QualityAnomalyAlertRecord } from './scheduler/store';
 import {
+  classifyMaricopaFailure,
   classifyNYCAcrisFailure,
   createDefaultConnectivityState,
   getNextAllowedRunAt,
@@ -16,9 +17,12 @@ import {
   shouldRunConnectivityProbe,
   shouldSendProlongedBlockedAlert,
   type NYCAcrisFailureClass,
+  type SiteConnectivityFailureClass,
   type SiteConnectivityState,
 } from './scheduler/connectivity';
 import { probeNYCAcrisConnectivity } from './scraper/nyc_acris';
+import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
+import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import { sendNewLeadsNotification } from './notifications/email';
 import type { LienRecord } from './types';
@@ -469,7 +473,15 @@ async function evaluateQualityAnomaly(site: SupportedSite, currentRun: Scheduled
   };
 }
 
-function isRetryableScheduledFailure(site: SupportedSite, failureClass: NYCAcrisFailureClass, errorMessage: string): boolean {
+function isConnectivityManagedSite(site: SupportedSite): boolean {
+  return site === 'nyc_acris' || site === 'maricopa_recorder';
+}
+
+function isRetryableScheduledFailure(site: SupportedSite, failureClass: SiteConnectivityFailureClass, errorMessage: string): boolean {
+  if (site === 'maricopa_recorder') {
+    return failureClass === 'challenge_or_interstitial' || failureClass === 'artifact_fetch_failed';
+  }
+
   if (failureClass === 'policy_block' || failureClass === 'selector_or_empty_results') {
     return false;
   }
@@ -694,9 +706,8 @@ async function sendQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promis
   }
 }
 
-async function applyNYCAcrisFailure(site: SupportedSite, failureClass: NYCAcrisFailureClass, reason: string): Promise<void> {
-  if (site !== 'nyc_acris') return;
-
+async function applyConnectivityFailure(site: SupportedSite, failureClass: SiteConnectivityFailureClass, reason: string): Promise<void> {
+  if (!isConnectivityManagedSite(site)) return;
   const outcome = recordConnectivityFailure(await getConnectivityState(site), reason, failureClass);
   let state = outcome.state;
   if (outcome.becameBlocked) {
@@ -707,9 +718,8 @@ async function applyNYCAcrisFailure(site: SupportedSite, failureClass: NYCAcrisF
   await getStore().upsertConnectivityState(state);
 }
 
-async function applyNYCAcrisSuccess(site: SupportedSite, mode: 'probe' | 'run'): Promise<void> {
-  if (site !== 'nyc_acris') return;
-
+async function applyConnectivitySuccess(site: SupportedSite, mode: 'probe' | 'run'): Promise<void> {
+  if (!isConnectivityManagedSite(site)) return;
   const outcome = recordConnectivitySuccess(await getConnectivityState(site), mode);
   let state = outcome.state;
   if (outcome.recovered) {
@@ -720,8 +730,11 @@ async function applyNYCAcrisSuccess(site: SupportedSite, mode: 'probe' | 'run'):
   await getStore().upsertConnectivityState(state);
 }
 
-function deriveFailureClass(err: unknown): NYCAcrisFailureClass {
-  return classifyNYCAcrisFailure(String((err as any)?.message ?? err ?? ''));
+function deriveFailureClass(site: SupportedSite, err: unknown): SiteConnectivityFailureClass {
+  const message = String((err as any)?.message ?? err ?? '');
+  return site === 'maricopa_recorder'
+    ? classifyMaricopaFailure(message)
+    : classifyNYCAcrisFailure(message);
 }
 
 function shouldUseCachedNYCRows(site: SupportedSite, previousFailureClass?: string): boolean {
@@ -758,26 +771,53 @@ async function getRecordsForScheduledRun(
 }
 
 export async function checkSiteConnectivity(): Promise<void> {
-  const site: SupportedSite = 'nyc_acris';
-  let state = await getConnectivityState(site);
+  const sites: SupportedSite[] = ['nyc_acris', 'maricopa_recorder'];
 
-  if (shouldRunConnectivityProbe(state)) {
-    const probe = await probeNYCAcrisConnectivity();
-    if (probe.ok) {
-      await applyNYCAcrisSuccess(site, 'probe');
-      state = await getConnectivityState(site);
-      log({ stage: 'site_connectivity_probe_success', site, transport_mode: probe.transportMode, detail: probe.detail });
-    } else {
-      const failureClass = classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
-      await applyNYCAcrisFailure(site, failureClass, probe.detail ?? 'probe_failed');
-      state = await getConnectivityState(site);
-      log({ stage: 'site_connectivity_probe_failure', site, transport_mode: probe.transportMode, detail: probe.detail });
+  for (const site of sites) {
+    let state = await getConnectivityState(site);
+
+    if (site === 'maricopa_recorder') {
+      const readiness = await getMaricopaPersistedStateReadiness();
+      if (readiness.refreshRequired) {
+        const failureClass = readiness.refreshReason === 'artifact_candidates_missing'
+          ? 'artifact_candidates_missing'
+          : 'session_missing_or_stale';
+        await applyConnectivityFailure(site, failureClass, readiness.detail);
+        state = await getConnectivityState(site);
+      }
     }
-  }
 
-  if (shouldSendProlongedBlockedAlert(state)) {
-    await sendConnectivityAlert(site, state, 'blocked_4h');
-    await getStore().upsertConnectivityState(markConnectivityAlerted(state));
+    if (shouldRunConnectivityProbe(state)) {
+      if (site === 'nyc_acris') {
+        const probe = await probeNYCAcrisConnectivity();
+        if (probe.ok) {
+          await applyConnectivitySuccess(site, 'probe');
+          state = await getConnectivityState(site);
+          log({ stage: 'site_connectivity_probe_success', site, transport_mode: probe.transportMode, detail: probe.detail });
+        } else {
+          const failureClass = classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
+          await applyConnectivityFailure(site, failureClass, probe.detail ?? 'probe_failed');
+          state = await getConnectivityState(site);
+          log({ stage: 'site_connectivity_probe_failure', site, transport_mode: probe.transportMode, detail: probe.detail });
+        }
+      } else {
+        const probe = await probeMaricopaRecorderConnectivity();
+        if (probe.ok) {
+          await applyConnectivitySuccess(site, 'probe');
+          state = await getConnectivityState(site);
+          log({ stage: 'site_connectivity_probe_success', site, detail: probe.detail, latest_searchable_date: probe.latestSearchableDate });
+        } else {
+          await applyConnectivityFailure(site, probe.failureClass ?? 'artifact_fetch_failed', probe.detail);
+          state = await getConnectivityState(site);
+          log({ stage: 'site_connectivity_probe_failure', site, detail: probe.detail, failure_class: probe.failureClass });
+        }
+      }
+    }
+
+    if (shouldSendProlongedBlockedAlert(state)) {
+      await sendConnectivityAlert(site, state, 'blocked_4h');
+      await getStore().upsertConnectivityState(markConnectivityAlerted(state));
+    }
   }
 }
 
@@ -790,7 +830,18 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
   const triggerSource = options.triggerSource ?? 'external';
   const testFailureClass = options.testFailureClass;
-  const connectivityAtStart = await getConnectivityState(site);
+  let connectivityAtStart = await getConnectivityState(site);
+
+  if (site === 'maricopa_recorder' && triggerSource === 'external') {
+    const readiness = await getMaricopaPersistedStateReadiness();
+    if (readiness.refreshRequired) {
+      const failureClass = readiness.refreshReason === 'artifact_candidates_missing'
+        ? 'artifact_candidates_missing'
+        : 'session_missing_or_stale';
+      await applyConnectivityFailure(site, failureClass, readiness.detail);
+      connectivityAtStart = await getConnectivityState(site);
+    }
+  }
 
   const existing = await getStore().getByIdempotencyKey(idempotencyKey);
   if (ENABLE_SCHEDULE_IDEMPOTENCY && existing && existing.status !== 'error') {
@@ -887,15 +938,15 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   };
 
   if (
-    site === 'nyc_acris' &&
+    isConnectivityManagedSite(site) &&
     triggerSource === 'external' &&
     (connectivityAtStart.status === 'blocked' || connectivityAtStart.status === 'probing')
   ) {
     run.status = 'deferred';
-    run.error = `nyc_acris_connectivity_${connectivityAtStart.status}`;
+    run.error = `${site}_connectivity_${connectivityAtStart.status}`;
     run.failure_class = connectivityAtStart.last_failure_reason
-      ? classifyNYCAcrisFailure(connectivityAtStart.last_failure_reason)
-      : 'timeout_or_navigation';
+      ? deriveFailureClass(site, connectivityAtStart.last_failure_reason)
+      : (site === 'maricopa_recorder' ? 'session_missing_or_stale' : 'timeout_or_navigation');
     run.finished_at = new Date().toISOString();
 
     if (existing?.status === 'error') {
@@ -1070,7 +1121,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.anomaly_detected = anomaly ? 1 : 0;
         await getStore().updateRun(run);
         await clearNYCCachedRecords(idempotencyKey).catch(() => null);
-        await applyNYCAcrisSuccess(site, 'run');
+        await applyConnectivitySuccess(site, 'run');
 
         if (anomaly) {
           const anomalyAlert: QualityAnomalyAlertRecord = {
@@ -1163,16 +1214,16 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
         return run;
       } catch (err: any) {
-        const failureClass = deriveFailureClass(err);
+        const failureClass = deriveFailureClass(site, err);
         const errorMessage = String(err?.stack ?? err?.message ?? err);
 
         run.error = errorMessage;
         run.failure_class = failureClass;
         previousFailureClass = failureClass;
 
-        await applyNYCAcrisFailure(site, failureClass, errorMessage);
+        await applyConnectivityFailure(site, failureClass, errorMessage);
 
-        const connectivityAfterFailure = site === 'nyc_acris'
+        const connectivityAfterFailure = isConnectivityManagedSite(site)
           ? await getConnectivityState(site)
           : null;
         const retryBlockedByCircuit = Boolean(
@@ -1220,14 +1271,14 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       }
     }
   } catch (err: any) {
-    const failureClass = deriveFailureClass(err);
+    const failureClass = deriveFailureClass(site, err);
     run.status = 'error';
     run.error = String(err?.stack ?? err?.message ?? err);
     run.failure_class = failureClass;
     run.finished_at = new Date().toISOString();
     run.retry_exhausted = 1;
     await getStore().updateRun(run);
-    await applyNYCAcrisFailure(site, failureClass, run.error);
+    await applyConnectivityFailure(site, failureClass, run.error);
     log({ stage: 'scheduled_run_error', site, run_id: runId, idempotency_key: idempotencyKey, error: run.error });
   }
 

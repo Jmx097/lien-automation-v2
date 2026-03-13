@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  classifyMaricopaFailure,
   createDefaultConnectivityState,
   recordConnectivityFailure,
   recordConnectivitySuccess,
@@ -68,5 +69,39 @@ describe('scheduler connectivity state', () => {
 
     expect(second.state.status).toBe('degraded');
     expect(second.becameBlocked).toBe(false);
+  });
+
+  it('classifies stale Maricopa session failures explicitly', () => {
+    expect(classifyMaricopaFailure('Maricopa session is stale (captured_at=2026-03-10). Run refresh:maricopa-session on the droplet.'))
+      .toBe('session_missing_or_stale');
+  });
+
+  it('blocks Maricopa immediately when persisted session state is missing', () => {
+    const result = recordConnectivityFailure(
+      createDefaultConnectivityState('maricopa_recorder'),
+      'Maricopa session is missing. Run refresh:maricopa-session on the droplet.',
+      'session_missing_or_stale',
+      new Date('2026-03-09T10:00:00.000Z'),
+    );
+
+    expect(result.state.status).toBe('blocked');
+    expect(result.becameBlocked).toBe(true);
+  });
+
+  it('recovers Maricopa after probe success from a blocked state', () => {
+    vi.stubEnv('MARICOPA_RECORDER_PROBE_SUCCESSES_REQUIRED', '1');
+    const blocked = {
+      ...createDefaultConnectivityState('maricopa_recorder'),
+      status: 'blocked' as const,
+      opened_at: '2026-03-09T10:00:00.000Z',
+      next_probe_at: '2026-03-09T10:15:00.000Z',
+      policy_block_count: 2,
+    };
+
+    const outcome = recordConnectivitySuccess(blocked, 'probe', new Date('2026-03-09T10:15:00.000Z'));
+
+    expect(outcome.state.status).toBe('healthy');
+    expect(outcome.recovered).toBe(true);
+    vi.unstubAllEnvs();
   });
 });

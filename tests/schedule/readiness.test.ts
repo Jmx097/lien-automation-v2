@@ -9,6 +9,18 @@ const sheetsBehavior = {
   targetReachable: true,
 };
 
+const maricopaBehavior = {
+  artifactRetrievalEnabled: false,
+  sessionPresent: false,
+  sessionFresh: false,
+  sessionCapturedAt: undefined as string | undefined,
+  artifactCandidatesPresent: false,
+  artifactCandidateCount: 0,
+  refreshRequired: false,
+  refreshReason: 'artifact_retrieval_disabled' as string | undefined,
+  detail: 'Maricopa artifact retrieval is disabled by configuration.',
+};
+
 vi.mock('pg', () => {
   class Pool {
     async connect() {
@@ -69,6 +81,10 @@ vi.mock('../../src/sheets/push', () => ({
   },
 }));
 
+vi.mock('../../src/scraper/maricopa_artifacts', () => ({
+  getMaricopaPersistedStateReadiness: async () => ({ ...maricopaBehavior }),
+}));
+
 function setReadyEnv(): void {
   process.env.SHEET_ID = 'sheet-id';
   process.env.SHEETS_KEY = JSON.stringify({
@@ -99,6 +115,15 @@ describe('schedule readiness with scheduler store backends', () => {
     delete process.env.SQLITE_DB_PATH;
     process.env.DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:5432/lien';
     setReadyEnv();
+    maricopaBehavior.artifactRetrievalEnabled = false;
+    maricopaBehavior.sessionPresent = false;
+    maricopaBehavior.sessionFresh = false;
+    maricopaBehavior.sessionCapturedAt = undefined;
+    maricopaBehavior.artifactCandidatesPresent = false;
+    maricopaBehavior.artifactCandidateCount = 0;
+    maricopaBehavior.refreshRequired = false;
+    maricopaBehavior.refreshReason = 'artifact_retrieval_disabled';
+    maricopaBehavior.detail = 'Maricopa artifact retrieval is disabled by configuration.';
   });
 
   it('reports postgres scheduler store readiness when DATABASE_URL is available', async () => {
@@ -115,6 +140,10 @@ describe('schedule readiness with scheduler store backends', () => {
     expect(report.merged_output).toEqual(expect.objectContaining({
       target_reachable: true,
       fallback_active: false,
+    }));
+    expect(report.maricopa).toEqual(expect.objectContaining({
+      artifact_retrieval_enabled: false,
+      refresh_required: false,
     }));
   });
 
@@ -142,6 +171,29 @@ describe('schedule readiness with scheduler store backends', () => {
       target_reachable: false,
       fallback_active: true,
       detail: expect.stringContaining('target spreadsheet access denied'),
+    }));
+  });
+
+  it('reports not_ready when Maricopa artifact retrieval is enabled but persisted state is stale', async () => {
+    maricopaBehavior.artifactRetrievalEnabled = true;
+    maricopaBehavior.sessionPresent = true;
+    maricopaBehavior.sessionFresh = false;
+    maricopaBehavior.sessionCapturedAt = '2026-03-10T12:00:00.000Z';
+    maricopaBehavior.refreshRequired = true;
+    maricopaBehavior.refreshReason = 'session_missing_or_stale';
+    maricopaBehavior.detail = 'Maricopa session is stale (captured_at=2026-03-10T12:00:00.000Z). Run refresh:maricopa-session on the droplet.';
+
+    const { getScheduleReadinessReport } = await import('../../src/schedule/readiness');
+    const report = await getScheduleReadinessReport();
+
+    expect(report.status).toBe('not_ready');
+    expect(report.checks.find((check) => check.name === 'maricopa_persisted_state_ready')).toEqual(
+      expect.objectContaining({ ok: false, detail: expect.stringContaining('refresh:maricopa-session') })
+    );
+    expect(report.maricopa).toEqual(expect.objectContaining({
+      artifact_retrieval_enabled: true,
+      refresh_required: true,
+      refresh_reason: 'session_missing_or_stale',
     }));
   });
 });

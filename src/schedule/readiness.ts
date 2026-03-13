@@ -1,4 +1,5 @@
 import { checkOCRRuntime } from '../scraper/ocr-runtime';
+import { getMaricopaPersistedStateReadiness } from '../scraper/maricopa_artifacts';
 import { supportedSites, type SupportedSite } from '../sites';
 import { ScheduledRunStore, getSchedulerStoreReadiness } from '../scheduler/store';
 import { createDefaultConnectivityState, getNextAllowedRunAt, type SiteConnectivityStatus } from '../scheduler/connectivity';
@@ -27,6 +28,20 @@ export interface ScheduleReadinessReport {
     last_failure_reason?: string;
     last_success_at?: string;
   }>;
+  maricopa: {
+    artifact_retrieval_enabled: boolean;
+    session_present: boolean;
+    session_fresh: boolean;
+    session_captured_at?: string;
+    artifact_candidates_present: boolean;
+    artifact_candidate_count: number;
+    refresh_required: boolean;
+    refresh_reason?: string;
+    detail: string;
+    last_success_at?: string;
+    next_allowed_run_at?: string;
+    last_failure_reason?: string;
+  };
 }
 
 function checkRequiredEnv(): ReadinessCheck {
@@ -208,6 +223,21 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       }] as const;
     });
   const site_connectivity = Object.fromEntries(siteConnectivityEntries) as ScheduleReadinessReport['site_connectivity'];
+  const maricopaPersistedState = await getMaricopaPersistedStateReadiness();
+  const maricopaConnectivity = site_connectivity.maricopa_recorder;
+  if (maricopaPersistedState.artifactRetrievalEnabled && maricopaPersistedState.refreshRequired) {
+    checks.push({
+      name: 'maricopa_persisted_state_ready',
+      ok: false,
+      detail: maricopaPersistedState.detail,
+    });
+  } else {
+    checks.push({
+      name: 'maricopa_persisted_state_ready',
+      ok: true,
+      detail: maricopaPersistedState.detail,
+    });
+  }
 
   return {
     status: checks.every((check) => check.ok) ? 'ready' : 'not_ready',
@@ -220,5 +250,19 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       detail: targetAccess.detail,
     },
     site_connectivity,
+    maricopa: {
+      artifact_retrieval_enabled: maricopaPersistedState.artifactRetrievalEnabled,
+      session_present: maricopaPersistedState.sessionPresent,
+      session_fresh: maricopaPersistedState.sessionFresh,
+      session_captured_at: maricopaPersistedState.sessionCapturedAt,
+      artifact_candidates_present: maricopaPersistedState.artifactCandidatesPresent,
+      artifact_candidate_count: maricopaPersistedState.artifactCandidateCount,
+      refresh_required: maricopaPersistedState.refreshRequired,
+      refresh_reason: maricopaPersistedState.refreshReason,
+      detail: maricopaPersistedState.detail,
+      last_success_at: maricopaConnectivity.last_success_at,
+      next_allowed_run_at: maricopaConnectivity.next_allowed_run_at,
+      last_failure_reason: maricopaConnectivity.last_failure_reason,
+    },
   };
 }

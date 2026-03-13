@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { createIsolatedBrowserContext } from '../src/browser/transport';
 import { saveMaricopaSessionState } from '../src/scraper/maricopa_artifacts';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const RESULTS_URL =
   'https://recorder.maricopa.gov/recording/document-search-results.html?lastNames=&firstNames=&middleNameIs=&documentTypeSelector=code&documentCode=FL&beginDate=2026-01-01&endDate=2026-02-13';

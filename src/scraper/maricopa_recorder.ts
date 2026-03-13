@@ -2,10 +2,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import type { LienRecord } from '../types';
 import { log } from '../utils/logger';
+import { checkOCRRuntime } from './ocr-runtime';
 import {
   buildMaricopaArtifactPath,
   fetchMaricopaArtifactWithSession,
   getMaricopaArtifactDir,
+  getMaricopaPersistedStateReadiness,
+  isMaricopaArtifactRetrievalEnabled,
   resolveMaricopaArtifactUrl,
 } from './maricopa_artifacts';
 import { extractMaricopaFieldsFromArtifact, type MaricopaOcrExtraction } from './maricopa_ocr';
@@ -18,7 +21,7 @@ const MARICOPA_DOC_CODE = process.env.MARICOPA_DOCUMENT_CODE ?? 'FL';
 const MARICOPA_RETRY_ATTEMPTS = Math.max(1, Number(process.env.MARICOPA_RETRY_ATTEMPTS ?? '3'));
 const MARICOPA_RETRY_BASE_DELAY_MS = Math.max(0, Number(process.env.MARICOPA_RETRY_BASE_DELAY_MS ?? '1000'));
 const MARICOPA_RETRY_MAX_DELAY_MS = Math.max(MARICOPA_RETRY_BASE_DELAY_MS, Number(process.env.MARICOPA_RETRY_MAX_DELAY_MS ?? '10000'));
-const MARICOPA_ARTIFACT_RETRIEVAL_ENABLED = process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL !== '0';
+const MARICOPA_ARTIFACT_RETRIEVAL_ENABLED = isMaricopaArtifactRetrievalEnabled();
 
 export interface ScrapeOptions {
   date_start: string;
@@ -67,6 +70,21 @@ export type MaricopaFailureKind =
   | 'blocked_html'
   | 'http_error'
   | 'invalid_json';
+
+export type MaricopaConnectivityFailureClass =
+  | 'session_missing_or_stale'
+  | 'artifact_candidates_missing'
+  | 'artifact_fetch_failed'
+  | 'challenge_or_interstitial'
+  | 'ocr_runtime_unavailable';
+
+export interface MaricopaProbeResult {
+  ok: boolean;
+  detail: string;
+  failureClass?: MaricopaConnectivityFailureClass;
+  latestSearchableDate?: string;
+  recordingNumber?: string;
+}
 
 export class MaricopaScrapeError extends Error {
   readonly kind: MaricopaFailureKind;
@@ -124,6 +142,17 @@ function calculateRetryDelay(attempt: number): number {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toMaricopaRequestDateFromIso(input: string): string {
+  const [year, month, day] = input.split('-');
+  return `${month}/${day}/${year}`;
+}
+
+function subtractDaysFromIsoDate(input: string, days: number): string {
+  const date = new Date(`${input}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
 }
 
 async function withMaricopaRetry<T>(
@@ -433,6 +462,109 @@ export async function fetchLatestMaricopaSearchableDate(): Promise<string> {
     () => fetchText(`${MARICOPA_API_BASE}/documents/index`),
   );
   return parseMaricopaIndexDate(raw);
+}
+
+async function findMaricopaProbeRecordingNumber(latestSearchableIso: string): Promise<string | null> {
+  const startIso = subtractDaysFromIsoDate(latestSearchableIso, Number(process.env.MARICOPA_PROBE_LOOKBACK_DAYS ?? '14'));
+  const response = await fetchSearchPage(startIso, latestSearchableIso, 1);
+  const recordingNumber = response.searchResults[0]?.recordingNumber;
+  return recordingNumber ? String(recordingNumber) : null;
+}
+
+function classifyMaricopaProbeError(error: unknown): { failureClass: MaricopaConnectivityFailureClass; detail: string } {
+  if (error instanceof MaricopaScrapeError) {
+    if (error.kind === 'challenge_blocked' || error.kind === 'blocked_html') {
+      return {
+        failureClass: 'challenge_or_interstitial',
+        detail: error.message,
+      };
+    }
+  }
+
+  return {
+    failureClass: 'artifact_fetch_failed',
+    detail: error instanceof Error ? error.message : String(error),
+  };
+}
+
+export async function probeMaricopaRecorderConnectivity(): Promise<MaricopaProbeResult> {
+  const readiness = await getMaricopaPersistedStateReadiness();
+  if (!readiness.artifactRetrievalEnabled) {
+    const latestSearchableDate = await fetchLatestMaricopaSearchableDate();
+    return {
+      ok: true,
+      detail: `artifact retrieval disabled; latest_searchable_date=${latestSearchableDate}`,
+      latestSearchableDate,
+    };
+  }
+
+  if (readiness.refreshRequired) {
+    return {
+      ok: false,
+      failureClass: readiness.refreshReason === 'artifact_candidates_missing'
+        ? 'artifact_candidates_missing'
+        : 'session_missing_or_stale',
+      detail: readiness.detail,
+    };
+  }
+
+  const ocrRuntime = checkOCRRuntime();
+  if (!ocrRuntime.ok) {
+    return {
+      ok: false,
+      failureClass: 'ocr_runtime_unavailable',
+      detail: ocrRuntime.detail ?? 'Maricopa OCR runtime is unavailable.',
+    };
+  }
+
+  try {
+    const latestSearchableDate = await fetchLatestMaricopaSearchableDate();
+    const recordingNumber = await findMaricopaProbeRecordingNumber(latestSearchableDate);
+
+    if (!recordingNumber) {
+      return {
+        ok: true,
+        detail: `latest_searchable_date=${latestSearchableDate}; no probe recording found in ${toMaricopaRequestDateFromIso(subtractDaysFromIsoDate(latestSearchableDate, Number(process.env.MARICOPA_PROBE_LOOKBACK_DAYS ?? '14')))}-${toMaricopaRequestDateFromIso(latestSearchableDate)}`,
+        latestSearchableDate,
+      };
+    }
+
+    const artifactUrl = await resolveMaricopaArtifactUrl(recordingNumber);
+    if (!artifactUrl) {
+      return {
+        ok: false,
+        failureClass: 'artifact_candidates_missing',
+        detail: `No artifact candidate URL could be resolved for recording ${recordingNumber}.`,
+        latestSearchableDate,
+        recordingNumber,
+      };
+    }
+
+    const artifact = await fetchMaricopaArtifactWithSession(artifactUrl);
+    if (!artifact) {
+      return {
+        ok: false,
+        failureClass: 'artifact_fetch_failed',
+        detail: `Artifact fetch failed for recording ${recordingNumber}. Refresh Maricopa state on the droplet.`,
+        latestSearchableDate,
+        recordingNumber,
+      };
+    }
+
+    return {
+      ok: true,
+      detail: `latest_searchable_date=${latestSearchableDate}; artifact_ok recording_number=${recordingNumber} content_type=${artifact.contentType ?? 'unknown'}`,
+      latestSearchableDate,
+      recordingNumber,
+    };
+  } catch (error) {
+    const classified = classifyMaricopaProbeError(error);
+    return {
+      ok: false,
+      failureClass: classified.failureClass,
+      detail: classified.detail,
+    };
+  }
 }
 
 async function saveArtifact(recordingNumber: string, result: NonNullable<Awaited<ReturnType<typeof fetchMaricopaArtifactWithSession>>>): Promise<string> {

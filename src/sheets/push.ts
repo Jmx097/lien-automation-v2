@@ -125,6 +125,27 @@ function splitPersonalName(name: string): { firstName: string; lastName: string 
   const andSplit = name.split(/\band\b|&/i);
   const segment = andSplit[andSplit.length - 1].trim();
 
+  const commaMatch = segment.match(/^([^,]+),\s*(.+)$/);
+  if (commaMatch) {
+    const lastName = commaMatch[1]
+      .trim()
+      .replace(/\b(JR|SR|II|III|IV|V)\b\.?/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const firstName = commaMatch[2]
+      .trim()
+      .replace(/\b(JR|SR|II|III|IV|V)\b\.?/gi, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(' ');
+
+    return {
+      firstName,
+      lastName,
+    };
+  }
+
   const cleaned = segment
     .replace(/[,]/g, '')
     .replace(/\b(JR|SR|II|III|IV|V)\b\.?/gi, '')

@@ -75,6 +75,13 @@ export interface ScheduleControlState {
   updated_at: string;
 }
 
+export interface SiteStateArtifactRecord {
+  site: SupportedSite;
+  artifact_key: string;
+  payload_json: string;
+  updated_at: string;
+}
+
 type SchedulerStoreBackendKind = 'sqlite' | 'postgres';
 
 export interface SchedulerStoreReadiness {
@@ -98,6 +105,8 @@ interface SchedulerStoreBackend {
   upsertConnectivityState(state: SiteConnectivityState): Promise<void>;
   getConnectivityState(site: SupportedSite): Promise<SiteConnectivityState | null>;
   listConnectivityStates(): Promise<SiteConnectivityState[]>;
+  upsertSiteStateArtifact(record: SiteStateArtifactRecord): Promise<void>;
+  getSiteStateArtifact(site: SupportedSite, artifactKey: string): Promise<SiteStateArtifactRecord | null>;
   insertMissedAlert(alert: MissedAlertRecord): Promise<void>;
   getMissedAlertByKey(idempotencyKey: string): Promise<MissedAlertRecord | null>;
   insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void>;
@@ -193,6 +202,16 @@ function normalizeMissedAlertRecord(row: Record<string, unknown> | undefined): M
     idempotency_key: String(row.idempotency_key),
     slot: String(row.slot) as MissedAlertRecord['slot'],
     expected_by: toIso(row.expected_by) ?? '',
+  };
+}
+
+function normalizeSiteStateArtifactRecord(row: Record<string, unknown> | undefined): SiteStateArtifactRecord | null {
+  if (!row) return null;
+  return {
+    site: String(row.site) as SupportedSite,
+    artifact_key: String(row.artifact_key),
+    payload_json: String(row.payload_json ?? ''),
+    updated_at: toIso(row.updated_at) ?? '',
   };
 }
 
@@ -329,6 +348,15 @@ function createCommonSchemaSql(): string[] {
         last_alerted_at TEXT,
         last_recovery_alert_at TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `,
+    `
+      CREATE TABLE IF NOT EXISTS scheduler_site_artifacts (
+        site TEXT NOT NULL,
+        artifact_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (site, artifact_key)
       )
     `,
   ];
@@ -738,6 +766,25 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     return rows.map((row) => normalizeConnectivityState(row)).filter(Boolean) as SiteConnectivityState[];
   }
 
+  async upsertSiteStateArtifact(record: SiteStateArtifactRecord): Promise<void> {
+    this.getDb().prepare(
+      `INSERT INTO scheduler_site_artifacts (site, artifact_key, payload_json, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(site, artifact_key) DO UPDATE SET
+         payload_json = excluded.payload_json,
+         updated_at = CURRENT_TIMESTAMP`
+    ).run(record.site, record.artifact_key, record.payload_json);
+  }
+
+  async getSiteStateArtifact(site: SupportedSite, artifactKey: string): Promise<SiteStateArtifactRecord | null> {
+    const row = this.getDb().prepare(
+      `SELECT site, artifact_key, payload_json, updated_at
+       FROM scheduler_site_artifacts
+       WHERE site = ? AND artifact_key = ?`
+    ).get(site, artifactKey) as Record<string, unknown> | undefined;
+    return normalizeSiteStateArtifactRecord(row);
+  }
+
   async insertMissedAlert(alert: MissedAlertRecord): Promise<void> {
     this.getDb().prepare(
       `INSERT OR IGNORE INTO scheduler_alerts (site, idempotency_key, slot, expected_by, alert_type)
@@ -937,6 +984,15 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           last_alerted_at TIMESTAMPTZ,
           last_recovery_alert_at TIMESTAMPTZ,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS scheduler_site_artifacts (
+          site TEXT NOT NULL,
+          artifact_key TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (site, artifact_key)
         )
       `);
       await client.query('COMMIT');
@@ -1216,6 +1272,28 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
     return result.rows.map((row) => normalizeConnectivityState(row)).filter(Boolean) as SiteConnectivityState[];
   }
 
+  async upsertSiteStateArtifact(record: SiteStateArtifactRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO scheduler_site_artifacts (site, artifact_key, payload_json, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT(site, artifact_key) DO UPDATE SET
+         payload_json = EXCLUDED.payload_json,
+         updated_at = NOW()`,
+      [record.site, record.artifact_key, record.payload_json]
+    );
+  }
+
+  async getSiteStateArtifact(site: SupportedSite, artifactKey: string): Promise<SiteStateArtifactRecord | null> {
+    return normalizeSiteStateArtifactRecord(
+      await this.queryRow<Record<string, unknown>>(
+        `SELECT site, artifact_key, payload_json, updated_at
+         FROM scheduler_site_artifacts
+         WHERE site = $1 AND artifact_key = $2`,
+        [site, artifactKey]
+      )
+    );
+  }
+
   async insertMissedAlert(alert: MissedAlertRecord): Promise<void> {
     await this.pool.query(
       `INSERT INTO scheduler_alerts (site, idempotency_key, slot, expected_by, alert_type)
@@ -1361,6 +1439,16 @@ export class ScheduledRunStore {
   async listConnectivityStates(): Promise<SiteConnectivityState[]> {
     await this.ensureReady();
     return this.backend.listConnectivityStates();
+  }
+
+  async upsertSiteStateArtifact(record: SiteStateArtifactRecord): Promise<void> {
+    await this.ensureReady();
+    await this.backend.upsertSiteStateArtifact(record);
+  }
+
+  async getSiteStateArtifact(site: SupportedSite, artifactKey: string): Promise<SiteStateArtifactRecord | null> {
+    await this.ensureReady();
+    return this.backend.getSiteStateArtifact(site, artifactKey);
   }
 
   async insertMissedAlert(alert: MissedAlertRecord): Promise<void> {

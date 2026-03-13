@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "captured_at": "2026-03-13T16:54:39.710Z",
+  "transport_mode": "brightdata-browser-api",
+  "source_url": "https://recorder.maricopa.gov/recording/document-search-results.html?lastNames=&firstNames=&middleNameIs=&documentTypeSelector=code&documentCode=FL&beginDate=2026-01-01&endDate=2026-02-13",
+  "cookie_summary": [
+    "recorder.maricopa.gov:csrf",
+    ".recorder.maricopa.gov:ARRAffinity",
+    ".recorder.maricopa.gov:ARRAffinitySameSite",
+    ".maricopa.gov:_ga_KDHKT2NC21",
+    ".maricopa.gov:_ga",
+    ".recorder.maricopa.gov:cf_clearance",
+    ".recorder.maricopa.gov:__cf_bm"
+  ],
+  "storage_state_path": "C:\\Users\\jonmc\\lien_automation_v2\\out\\maricopa\\session\\storage-state.json"
+}

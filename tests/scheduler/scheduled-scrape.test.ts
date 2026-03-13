@@ -8,6 +8,8 @@ const mockPushToSheetsForTab = vi.fn();
 const mockSyncMasterSheetTab = vi.fn();
 const mockLog = vi.fn();
 const mockFetch = vi.fn();
+const mockProbeMaricopaRecorderConnectivity = vi.fn();
+const mockGetMaricopaPersistedStateReadiness = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
@@ -24,6 +26,14 @@ vi.mock('../../src/scraper/index', () => ({
 
 vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
   probeCASOSResultCount: mockProbeCASOSResultCount,
+}));
+
+vi.mock('../../src/scraper/maricopa_recorder', () => ({
+  probeMaricopaRecorderConnectivity: mockProbeMaricopaRecorderConnectivity,
+}));
+
+vi.mock('../../src/scraper/maricopa_artifacts', () => ({
+  getMaricopaPersistedStateReadiness: mockGetMaricopaPersistedStateReadiness,
 }));
 
 vi.mock('../../src/sheets/push', () => ({
@@ -118,6 +128,18 @@ describe('runScheduledScrape', () => {
     anomalyAlerts.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
+    mockProbeMaricopaRecorderConnectivity.mockReset();
+    mockGetMaricopaPersistedStateReadiness.mockReset();
+    mockGetMaricopaPersistedStateReadiness.mockResolvedValue({
+      artifactRetrievalEnabled: false,
+      sessionPresent: false,
+      sessionFresh: false,
+      artifactCandidatesPresent: false,
+      artifactCandidateCount: 0,
+      refreshRequired: false,
+      refreshReason: 'artifact_retrieval_disabled',
+      detail: 'Maricopa artifact retrieval is disabled by configuration.',
+    });
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
     fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
@@ -381,6 +403,32 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('deferred');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(result.failure_class).toBe('policy_block');
+  });
+
+  it('defers blocked Maricopa scheduled runs before scraping', async () => {
+    connectivityState.set('maricopa_recorder', {
+      site: 'maricopa_recorder',
+      status: 'blocked',
+      policy_block_count: 2,
+      timeout_count: 0,
+      empty_result_count: 0,
+      consecutive_probe_successes: 0,
+      next_probe_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      last_failure_reason: 'Maricopa session is stale (captured_at=2026-03-10). Run refresh:maricopa-session on the droplet.',
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'maricopa_recorder',
+      idempotencyKey: 'maricopa_recorder:2026-03-03:afternoon',
+      slot: 'afternoon',
+      triggerSource: 'external',
+    });
+
+    expect(result.status).toBe('deferred');
+    expect(mockScraper).not.toHaveBeenCalled();
+    expect(result.failure_class).toBe('session_missing_or_stale');
   });
 
   it('reuses cached nyc rows when the previous failure was sheet export', async () => {

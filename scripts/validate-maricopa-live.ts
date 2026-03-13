@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { fetchLatestMaricopaSearchableDate, scrapeMaricopaRecorder } from '../src/scraper/maricopa_recorder';
 import { isFreshMaricopaSession, loadMaricopaArtifactCandidates, loadMaricopaSessionState } from '../src/scraper/maricopa_artifacts';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 async function main(): Promise<void> {
   const positiveDateStart = process.env.MARICOPA_POSITIVE_DATE_START ?? '01/01/2026';

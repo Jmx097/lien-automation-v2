@@ -1,4 +1,5 @@
 import type { SupportedSite } from '../sites';
+import type { MaricopaConnectivityFailureClass } from '../scraper/maricopa_recorder';
 
 export type SiteConnectivityStatus = 'healthy' | 'degraded' | 'blocked' | 'probing';
 
@@ -9,6 +10,8 @@ export type NYCAcrisFailureClass =
   | 'selector_or_empty_results'
   | 'viewer_roundtrip'
   | 'sheet_export';
+
+export type SiteConnectivityFailureClass = NYCAcrisFailureClass | MaricopaConnectivityFailureClass;
 
 export interface SiteConnectivityState {
   site: SupportedSite;
@@ -45,14 +48,29 @@ const DEFAULT_CONFIG: ConnectivityConfig = {
   probeSuccessesRequired: 2,
 };
 
-export function getConnectivityConfig(): ConnectivityConfig {
+function siteEnvPrefix(site: SupportedSite): string {
+  return site.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+function getConnectivityEnv(site: SupportedSite, suffix: string): string | undefined {
+  const primary = process.env[`${siteEnvPrefix(site)}_${suffix}`];
+  if (primary) return primary;
+
+  if (site === 'nyc_acris') {
+    return process.env[`NYC_ACRIS_${suffix}`];
+  }
+
+  return undefined;
+}
+
+export function getConnectivityConfig(site: SupportedSite): ConnectivityConfig {
   return {
-    policyFailureThreshold: Number(process.env.NYC_ACRIS_POLICY_FAILURE_THRESHOLD ?? DEFAULT_CONFIG.policyFailureThreshold),
-    transientFailureThreshold: Number(process.env.NYC_ACRIS_TRANSIENT_FAILURE_THRESHOLD ?? DEFAULT_CONFIG.transientFailureThreshold),
-    failureWindowMinutes: Number(process.env.NYC_ACRIS_FAILURE_WINDOW_MINUTES ?? DEFAULT_CONFIG.failureWindowMinutes),
-    circuitCooldownMinutes: Number(process.env.NYC_ACRIS_CIRCUIT_COOLDOWN_MINUTES ?? DEFAULT_CONFIG.circuitCooldownMinutes),
-    probeIntervalMinutes: Number(process.env.NYC_ACRIS_PROBE_INTERVAL_MINUTES ?? DEFAULT_CONFIG.probeIntervalMinutes),
-    probeSuccessesRequired: Number(process.env.NYC_ACRIS_PROBE_SUCCESSES_REQUIRED ?? DEFAULT_CONFIG.probeSuccessesRequired),
+    policyFailureThreshold: Number(getConnectivityEnv(site, 'POLICY_FAILURE_THRESHOLD') ?? DEFAULT_CONFIG.policyFailureThreshold),
+    transientFailureThreshold: Number(getConnectivityEnv(site, 'TRANSIENT_FAILURE_THRESHOLD') ?? DEFAULT_CONFIG.transientFailureThreshold),
+    failureWindowMinutes: Number(getConnectivityEnv(site, 'FAILURE_WINDOW_MINUTES') ?? DEFAULT_CONFIG.failureWindowMinutes),
+    circuitCooldownMinutes: Number(getConnectivityEnv(site, 'CIRCUIT_COOLDOWN_MINUTES') ?? DEFAULT_CONFIG.circuitCooldownMinutes),
+    probeIntervalMinutes: Number(getConnectivityEnv(site, 'PROBE_INTERVAL_MINUTES') ?? DEFAULT_CONFIG.probeIntervalMinutes),
+    probeSuccessesRequired: Number(getConnectivityEnv(site, 'PROBE_SUCCESSES_REQUIRED') ?? DEFAULT_CONFIG.probeSuccessesRequired),
   };
 }
 
@@ -119,14 +137,46 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
   return 'timeout_or_navigation';
 }
 
+export function classifyMaricopaFailure(message: string): MaricopaConnectivityFailureClass {
+  const normalized = message.toLowerCase();
+
+  if (/session is stale|session is missing|refresh:maricopa-session|session_missing_or_stale/.test(normalized)) {
+    return 'session_missing_or_stale';
+  }
+
+  if (/artifact candidates are missing|discover:maricopa-live|artifact_candidates_missing/.test(normalized)) {
+    return 'artifact_candidates_missing';
+  }
+
+  if (/missing ocr binaries|ocr runtime|ocr_runtime_unavailable/.test(normalized)) {
+    return 'ocr_runtime_unavailable';
+  }
+
+  if (/challenge|interstitial|cloudflare|blocked html|security check|captcha/.test(normalized)) {
+    return 'challenge_or_interstitial';
+  }
+
+  return 'artifact_fetch_failed';
+}
+
+function isImmediateBlockFailure(site: SupportedSite, failureClass: SiteConnectivityFailureClass): boolean {
+  if (site !== 'maricopa_recorder') return false;
+  return (
+    failureClass === 'session_missing_or_stale' ||
+    failureClass === 'artifact_candidates_missing' ||
+    failureClass === 'challenge_or_interstitial' ||
+    failureClass === 'ocr_runtime_unavailable'
+  );
+}
+
 export function recordConnectivityFailure(
   currentState: SiteConnectivityState | null | undefined,
   reason: string,
-  failureClass: NYCAcrisFailureClass,
+  failureClass: SiteConnectivityFailureClass,
   now = new Date(),
 ): { state: SiteConnectivityState; becameBlocked: boolean; becameDegraded: boolean } {
-  const config = getConnectivityConfig();
   let state = currentState ?? createDefaultConnectivityState('nyc_acris');
+  const config = getConnectivityConfig(state.site);
 
   if (isExpired(state.window_started_at, now, config.failureWindowMinutes)) {
     state = resetRollingCounters(state, now);
@@ -139,12 +189,15 @@ export function recordConnectivityFailure(
     consecutive_probe_successes: 0,
   };
 
-  if (failureClass === 'policy_block') {
+  if (isImmediateBlockFailure(state.site, failureClass)) {
+    state.policy_block_count = Math.max(state.policy_block_count, config.policyFailureThreshold);
+  } else if (failureClass === 'policy_block') {
     state.policy_block_count += 1;
   } else if (
     failureClass === 'timeout_or_navigation' ||
     failureClass === 'viewer_roundtrip' ||
-    failureClass === 'token_or_session_state'
+    failureClass === 'token_or_session_state' ||
+    failureClass === 'artifact_fetch_failed'
   ) {
     state.timeout_count += 1;
   } else if (failureClass === 'selector_or_empty_results') {
@@ -175,8 +228,8 @@ export function recordConnectivitySuccess(
   mode: 'probe' | 'run',
   now = new Date(),
 ): { state: SiteConnectivityState; recovered: boolean } {
-  const config = getConnectivityConfig();
   let state = currentState ?? createDefaultConnectivityState('nyc_acris');
+  const config = getConnectivityConfig(state.site);
   const wasBlockedOrProbing = state.status === 'blocked' || state.status === 'probing';
 
   if (mode === 'probe' && wasBlockedOrProbing) {
@@ -232,7 +285,6 @@ export function markConnectivityRecoveryAlerted(state: SiteConnectivityState, no
 
 export function shouldRunConnectivityProbe(state: SiteConnectivityState | null | undefined, now = new Date()): boolean {
   if (!state) return false;
-  if (state.site !== 'nyc_acris') return false;
   if (state.status !== 'blocked' && state.status !== 'probing' && state.status !== 'degraded') return false;
   if (!state.next_probe_at) return false;
   return new Date(state.next_probe_at).getTime() <= now.getTime();
