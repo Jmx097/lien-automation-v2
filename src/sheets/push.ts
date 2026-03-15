@@ -288,6 +288,9 @@ export interface MasterSheetSyncResult {
   target_spreadsheet_id: string;
   fallback_used: boolean;
   quarantined_row_count: number;
+  current_run_quarantined_row_count: number;
+  current_run_conflict_row_count: number;
+  retained_prior_review_row_count: number;
   review_tab_title: string;
   new_master_row_count: number;
   purged_review_row_count: number;
@@ -318,6 +321,9 @@ export interface ReviewClassificationSummary {
   quarantined_row_count: number;
   purged_review_row_count: number;
   review_reason_counts: ReviewReasonCounts;
+  current_run_quarantined_row_count: number;
+  current_run_conflict_row_count: number;
+  retained_prior_review_row_count: number;
 }
 
 type DirectorCandidate = {
@@ -330,6 +336,7 @@ type DirectorCandidate = {
   hardReasons: ReviewReason[];
   softReasons: ReviewReason[];
   disposition: DirectorCandidateDisposition;
+  sourceTab: string;
   sourceTabCapturedAt?: Date;
 };
 
@@ -833,6 +840,7 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
     hardReasons,
     softReasons,
     disposition: resolveCandidateDisposition(hardReasons, softReasons, confidenceScore),
+    sourceTab: sourceRow.sourceTab,
     sourceTabCapturedAt: sourceRow.sourceTabCapturedAt,
   };
 }
@@ -907,7 +915,7 @@ function quarantineCandidate(
 
 export function classifyMergedRows(
   rows: CollectedSourceRow[],
-  options: { reviewRetentionCutoff?: Date } = {}
+  options: { reviewRetentionCutoff?: Date; currentSourceTab?: string } = {}
 ): {
   acceptedRows: any[][];
   quarantinedRows: any[][];
@@ -919,7 +927,22 @@ export function classifyMergedRows(
   const quarantinedRows: any[][] = [];
   let purgedReviewRowCount = 0;
   const reviewReasonCounts: ReviewReasonCounts = {};
+  let currentRunQuarantinedRowCount = 0;
+  let currentRunConflictRowCount = 0;
+  const conflictReasons = new Set(['conflict_lower_confidence', 'conflict_ambiguous']);
   const grouped = new Map<string, DirectorCandidate[]>();
+
+  const trackCurrentRunQuarantine = (
+    candidate: DirectorCandidate,
+    fallbackReason: 'conflict_lower_confidence' | 'conflict_ambiguous' | 'missing_identity' | 'quarantined'
+  ) => {
+    if (!options.currentSourceTab || candidate.sourceTab !== options.currentSourceTab) return;
+    if (conflictReasons.has(fallbackReason)) {
+      currentRunConflictRowCount += 1;
+      return;
+    }
+    currentRunQuarantinedRowCount += 1;
+  };
 
   for (const candidate of candidates) {
     const key = candidate.recordSource && candidate.fileNumber
@@ -936,6 +959,8 @@ export function classifyMergedRows(
       );
       if (!retained) {
         purgedReviewRowCount += 1;
+      } else {
+        trackCurrentRunQuarantine(candidate, 'missing_identity');
       }
       continue;
     }
@@ -958,6 +983,7 @@ export function classifyMergedRows(
           'quarantined'
         );
         if (!retained) purgedReviewRowCount += 1;
+        else trackCurrentRunQuarantine(candidate, 'quarantined');
       }
       continue;
     }
@@ -976,6 +1002,7 @@ export function classifyMergedRows(
           'conflict_ambiguous'
         );
         if (!retained) purgedReviewRowCount += 1;
+        else trackCurrentRunQuarantine(candidate, 'conflict_ambiguous');
       }
       continue;
     }
@@ -990,8 +1017,11 @@ export function classifyMergedRows(
         'conflict_lower_confidence'
       );
       if (!retained) purgedReviewRowCount += 1;
+      else trackCurrentRunQuarantine(candidate, 'conflict_lower_confidence');
     }
   }
+
+  const retainedPriorReviewRowCount = quarantinedRows.length - currentRunQuarantinedRowCount - currentRunConflictRowCount;
 
   return {
     acceptedRows,
@@ -1002,6 +1032,9 @@ export function classifyMergedRows(
       quarantined_row_count: quarantinedRows.length,
       purged_review_row_count: purgedReviewRowCount,
       review_reason_counts: reviewReasonCounts,
+      current_run_quarantined_row_count: currentRunQuarantinedRowCount,
+      current_run_conflict_row_count: currentRunConflictRowCount,
+      retained_prior_review_row_count: retainedPriorReviewRowCount,
     },
   };
 }
@@ -1087,6 +1120,7 @@ export async function syncMasterSheetTab(options: {
   includePrefixes?: string[];
   sourceSpreadsheetId?: string;
   targetSpreadsheetId?: string;
+  currentSourceTab?: string;
 } = {}): Promise<MasterSheetSyncResult> {
   const sourceSpreadsheetId = options.sourceSpreadsheetId ?? getSourceSpreadsheetId();
   const configuredTargetSpreadsheetId = options.targetSpreadsheetId ?? getMergedSpreadsheetId();
@@ -1097,6 +1131,7 @@ export async function syncMasterSheetTab(options: {
   const { rows, sourceTabs } = await collectRowsFromSourceTabs(sheets, sourceSpreadsheetId, includePrefixes, tabTitle, reviewTabTitle);
   const { acceptedRows, quarantinedRows, purgedReviewRowCount, reviewSummary } = classifyMergedRows(rows, {
     reviewRetentionCutoff: getReviewQueueRetentionCutoff(),
+    currentSourceTab: options.currentSourceTab,
   });
 
   const finalize = async (targetSpreadsheetId: string, fallbackUsed: boolean) => {
@@ -1121,6 +1156,9 @@ export async function syncMasterSheetTab(options: {
       source_tabs: sourceTabs.length,
       row_count: acceptedRows.length,
       quarantined_row_count: quarantinedRows.length,
+      current_run_quarantined_row_count: reviewSummary.current_run_quarantined_row_count,
+      current_run_conflict_row_count: reviewSummary.current_run_conflict_row_count,
+      retained_prior_review_row_count: reviewSummary.retained_prior_review_row_count,
       accepted_row_count: reviewSummary.accepted_row_count,
       review_reason_counts: reviewSummary.review_reason_counts,
       new_master_row_count: newMasterRowCount,
@@ -1135,6 +1173,9 @@ export async function syncMasterSheetTab(options: {
       target_spreadsheet_id: targetSpreadsheetId,
       fallback_used: fallbackUsed,
       quarantined_row_count: quarantinedRows.length,
+      current_run_quarantined_row_count: reviewSummary.current_run_quarantined_row_count,
+      current_run_conflict_row_count: reviewSummary.current_run_conflict_row_count,
+      retained_prior_review_row_count: reviewSummary.retained_prior_review_row_count,
       review_tab_title: ensuredReviewTabTitle,
       new_master_row_count: newMasterRowCount,
       purged_review_row_count: purgedReviewRowCount,

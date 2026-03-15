@@ -15,6 +15,7 @@ const runs = new Map<string, any>();
 let controlState: any = null;
 const connectivityState = new Map<string, any>();
 const anomalyAlerts = new Map<string, any>();
+const scheduledCacheDir = path.join(process.cwd(), 'out', 'acris', 'scheduled-cache');
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -142,7 +143,7 @@ describe('runScheduledScrape', () => {
     });
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
-    fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
+    fs.rmSync(scheduledCacheDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '3';
     process.env.SCHEDULE_RUN_BASE_DELAY_MS = '0';
     process.env.SCHEDULE_RUN_MAX_DELAY_MS = '0';
@@ -326,6 +327,49 @@ describe('runScheduledScrape', () => {
       'row_upload_mismatch',
       'master_publish_fallback_active',
     ]));
+  });
+
+  it('does not downgrade confidence for retained prior review rows alone', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 1,
+      source_tabs: 12,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 200,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 200,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 1,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 1,
+        quarantined_row_count: 200,
+        purged_review_row_count: 0,
+        review_reason_counts: { low_confidence: 200 },
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 200,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-12:evening:retained-review-only',
+      slot: 'evening',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].quarantined_row_count).toBe(0);
+    expect(history[0].current_run_quarantined_row_count).toBe(0);
+    expect(history[0].retained_prior_review_row_count).toBe(200);
+    expect(history[0].confidence?.reasons).not.toContain('quarantine_exceeds_scraped_rows');
   });
 
   it('fails the run when sheet upload count mismatches', async () => {
@@ -542,6 +586,43 @@ describe('runScheduledScrape', () => {
     expect(result.failure_class).toBe('selector_or_empty_results');
     expect(result.retry_exhausted).toBe(0);
     expect(mockScraper).toHaveBeenCalledTimes(1);
+  });
+
+  it('records NYC range-integrity failures with date diagnostics', async () => {
+    const err = Object.assign(
+      new Error('ACRIS returned 10 rows outside requested range 03/08/2026-03/15/2026 upstream_range=03/04/2026-03/06/2026'),
+      {
+        requestedStart: '03/08/2026',
+        requestedEnd: '03/15/2026',
+        upstreamMin: '03/04/2026',
+        upstreamMax: '03/06/2026',
+        returnedRowCount: 10,
+      }
+    );
+    mockScraper.mockRejectedValueOnce(err);
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:range-integrity',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failure_class).toBe('range_result_integrity');
+    expect(result.filtered_out_count).toBe(10);
+    expect(result.upstream_min_filing_date).toBe('03/04/2026');
+    expect(result.upstream_max_filing_date).toBe('03/06/2026');
+
+    const history = await getRunHistory(1);
+    expect(history[0].failure_class).toBe('range_result_integrity');
+    expect(history[0].filtered_out_count).toBe(10);
+    expect(history[0].requested_date_start).toBe('03/08/2026');
+    expect(history[0].requested_date_end).toBe('03/15/2026');
+    expect(history[0].upstream_min_filing_date).toBe('03/04/2026');
+    expect(history[0].upstream_max_filing_date).toBe('03/06/2026');
   });
 
   it('marks retry exhaustion after repeated transient failures', async () => {
@@ -767,6 +848,63 @@ describe('runScheduledScrape', () => {
     });
 
     expect(anomalyAlerts.size).toBe(0);
+  });
+
+  it('persists Maricopa enrichment telemetry even when artifact retrieval is disabled', async () => {
+    const records = [{ filing_number: '1', amount: null, amount_reason: 'ok' }];
+    Object.assign(records, {
+      quality_summary: {
+        requested_date_start: '03/06/2026',
+        requested_date_end: '03/13/2026',
+        discovered_count: 1,
+        returned_count: 1,
+        quarantined_count: 0,
+        partial_run: true,
+        partial_reason: 'artifact_or_ocr_incomplete',
+        enriched_records: 0,
+        partial_records: 1,
+        artifact_retrieval_enabled: false,
+      },
+    });
+    mockScraper.mockResolvedValueOnce(records);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 0,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 1,
+      current_run_quarantined_row_count: 1,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 0,
+        quarantined_row_count: 1,
+        purged_review_row_count: 0,
+        review_reason_counts: { partial_run: 1, low_confidence: 1 },
+        current_run_quarantined_row_count: 1,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'maricopa_recorder',
+      idempotencyKey: 'maricopa_recorder:2026-03-11:telemetry',
+      slot: 'evening',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].artifact_retrieval_enabled).toBe(0);
+    expect(history[0].enriched_record_count).toBe(0);
+    expect(history[0].partial_record_count).toBe(1);
+    expect(history[0].confidence?.reasons).toContain('artifact_retrieval_disabled');
   });
 
   it('continues successfully when anomaly webhook delivery fails', async () => {

@@ -34,11 +34,23 @@ export interface ScheduledRunRecord {
   master_tab_title?: string;
   review_tab_title?: string;
   quarantined_row_count?: number;
+  current_run_quarantined_row_count?: number;
+  current_run_conflict_row_count?: number;
+  retained_prior_review_row_count?: number;
+  review_reason_counts_json?: string;
   requested_date_start?: string;
   requested_date_end?: string;
   discovered_count?: number;
   returned_count?: number;
+  filtered_out_count?: number;
+  returned_min_filing_date?: string;
+  returned_max_filing_date?: string;
+  upstream_min_filing_date?: string;
+  upstream_max_filing_date?: string;
   partial_reason?: string;
+  artifact_retrieval_enabled?: number;
+  enriched_record_count?: number;
+  partial_record_count?: number;
   new_master_row_count?: number;
   purged_review_row_count?: number;
   lead_alert_attempted?: number;
@@ -162,11 +174,23 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     master_tab_title: row.master_tab_title == null ? undefined : String(row.master_tab_title),
     review_tab_title: row.review_tab_title == null ? undefined : String(row.review_tab_title),
     quarantined_row_count: toNumber(row.quarantined_row_count || 0),
+    current_run_quarantined_row_count: toNumber(row.current_run_quarantined_row_count || 0),
+    current_run_conflict_row_count: toNumber(row.current_run_conflict_row_count || 0),
+    retained_prior_review_row_count: toNumber(row.retained_prior_review_row_count || 0),
+    review_reason_counts_json: row.review_reason_counts_json == null ? undefined : String(row.review_reason_counts_json),
     requested_date_start: row.requested_date_start == null ? undefined : String(row.requested_date_start),
     requested_date_end: row.requested_date_end == null ? undefined : String(row.requested_date_end),
     discovered_count: toNumber(row.discovered_count || 0),
     returned_count: toNumber(row.returned_count || 0),
+    filtered_out_count: toNumber(row.filtered_out_count || 0),
+    returned_min_filing_date: row.returned_min_filing_date == null ? undefined : String(row.returned_min_filing_date),
+    returned_max_filing_date: row.returned_max_filing_date == null ? undefined : String(row.returned_max_filing_date),
+    upstream_min_filing_date: row.upstream_min_filing_date == null ? undefined : String(row.upstream_min_filing_date),
+    upstream_max_filing_date: row.upstream_max_filing_date == null ? undefined : String(row.upstream_max_filing_date),
     partial_reason: row.partial_reason == null ? undefined : String(row.partial_reason),
+    artifact_retrieval_enabled: toNumber(row.artifact_retrieval_enabled || 0),
+    enriched_record_count: toNumber(row.enriched_record_count || 0),
+    partial_record_count: toNumber(row.partial_record_count || 0),
     new_master_row_count: toNumber(row.new_master_row_count || 0),
     purged_review_row_count: toNumber(row.purged_review_row_count || 0),
     lead_alert_attempted: toNumber(row.lead_alert_attempted || 0),
@@ -297,11 +321,23 @@ function createCommonSchemaSql(): string[] {
         master_tab_title TEXT,
         review_tab_title TEXT,
         quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+        current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+        current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0,
+        retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0,
+        review_reason_counts_json TEXT,
         requested_date_start TEXT,
         requested_date_end TEXT,
         discovered_count INTEGER NOT NULL DEFAULT 0,
         returned_count INTEGER NOT NULL DEFAULT 0,
+        filtered_out_count INTEGER NOT NULL DEFAULT 0,
+        returned_min_filing_date TEXT,
+        returned_max_filing_date TEXT,
+        upstream_min_filing_date TEXT,
+        upstream_max_filing_date TEXT,
         partial_reason TEXT,
+        artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+        enriched_record_count INTEGER NOT NULL DEFAULT 0,
+        partial_record_count INTEGER NOT NULL DEFAULT 0,
         new_master_row_count INTEGER NOT NULL DEFAULT 0,
         purged_review_row_count INTEGER NOT NULL DEFAULT 0,
         lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
@@ -552,6 +588,18 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'quarantined_row_count')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN quarantined_row_count INTEGER NOT NULL DEFAULT 0").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'current_run_quarantined_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'current_run_conflict_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'retained_prior_review_row_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'review_reason_counts_json')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN review_reason_counts_json TEXT").run();
+    }
     if (!scheduledRunColumns.some((column) => column.name === 'requested_date_start')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN requested_date_start TEXT").run();
     }
@@ -564,8 +612,32 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'returned_count')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN returned_count INTEGER NOT NULL DEFAULT 0").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'filtered_out_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN filtered_out_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'returned_min_filing_date')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN returned_min_filing_date TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'returned_max_filing_date')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN returned_max_filing_date TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'upstream_min_filing_date')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN upstream_min_filing_date TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'upstream_max_filing_date')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN upstream_max_filing_date TEXT").run();
+    }
     if (!scheduledRunColumns.some((column) => column.name === 'partial_reason')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN partial_reason TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'artifact_retrieval_enabled')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'enriched_record_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN enriched_record_count INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'partial_record_count')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN partial_record_count INTEGER NOT NULL DEFAULT 0").run();
     }
     if (!scheduledRunColumns.some((column) => column.name === 'new_master_row_count')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN new_master_row_count INTEGER NOT NULL DEFAULT 0").run();
@@ -588,112 +660,122 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
   }
 
   async insertRun(run: ScheduledRunRecord): Promise<void> {
-    this.getDb().prepare(
-      `INSERT INTO scheduled_runs (
-        id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
-        records_scraped, records_skipped, rows_uploaded,
-        amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
-        deadline_hit, effective_max_records, partial, error, failure_class,
-        attempt_count, max_attempts, retried, retry_exhausted,
-        source_tab_title, master_tab_title, review_tab_title, quarantined_row_count,
-        requested_date_start, requested_date_end, discovered_count, returned_count, partial_reason,
-        new_master_row_count, purged_review_row_count, lead_alert_attempted, lead_alert_delivered,
-        master_fallback_used, anomaly_detected
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      run.id,
-      run.site,
-      run.idempotency_key,
-      run.slot_time,
-      run.trigger_source,
-      run.started_at,
-      run.finished_at ?? null,
-      run.status,
-      run.records_scraped,
-      run.records_skipped,
-      run.rows_uploaded,
-      run.amount_found_count,
-      run.amount_missing_count,
-      run.amount_coverage_pct,
-      run.ocr_success_pct,
-      run.row_fail_pct,
-      run.deadline_hit,
-      run.effective_max_records,
-      run.partial,
-      run.error ?? null,
-      run.failure_class ?? null,
-      run.attempt_count ?? 1,
-      run.max_attempts ?? 1,
-      run.retried ?? 0,
-      run.retry_exhausted ?? 0,
-      run.source_tab_title ?? null,
-      run.master_tab_title ?? null,
-      run.review_tab_title ?? null,
-      run.quarantined_row_count ?? 0,
-      run.requested_date_start ?? null,
-      run.requested_date_end ?? null,
-      run.discovered_count ?? 0,
-      run.returned_count ?? 0,
-      run.partial_reason ?? null,
-      run.new_master_row_count ?? 0,
-      run.purged_review_row_count ?? 0,
-      run.lead_alert_attempted ?? 0,
-      run.lead_alert_delivered ?? 0,
-      run.master_fallback_used ?? 0,
-      run.anomaly_detected ?? 0
-    );
+    const entries: Array<[string, unknown]> = [
+      ['id', run.id],
+      ['site', run.site],
+      ['idempotency_key', run.idempotency_key],
+      ['slot_time', run.slot_time],
+      ['trigger_source', run.trigger_source],
+      ['started_at', run.started_at],
+      ['finished_at', run.finished_at ?? null],
+      ['status', run.status],
+      ['records_scraped', run.records_scraped],
+      ['records_skipped', run.records_skipped],
+      ['rows_uploaded', run.rows_uploaded],
+      ['amount_found_count', run.amount_found_count],
+      ['amount_missing_count', run.amount_missing_count],
+      ['amount_coverage_pct', run.amount_coverage_pct],
+      ['ocr_success_pct', run.ocr_success_pct],
+      ['row_fail_pct', run.row_fail_pct],
+      ['deadline_hit', run.deadline_hit],
+      ['effective_max_records', run.effective_max_records],
+      ['partial', run.partial],
+      ['error', run.error ?? null],
+      ['failure_class', run.failure_class ?? null],
+      ['attempt_count', run.attempt_count ?? 1],
+      ['max_attempts', run.max_attempts ?? 1],
+      ['retried', run.retried ?? 0],
+      ['retry_exhausted', run.retry_exhausted ?? 0],
+      ['source_tab_title', run.source_tab_title ?? null],
+      ['master_tab_title', run.master_tab_title ?? null],
+      ['review_tab_title', run.review_tab_title ?? null],
+      ['quarantined_row_count', run.quarantined_row_count ?? 0],
+      ['current_run_quarantined_row_count', run.current_run_quarantined_row_count ?? 0],
+      ['current_run_conflict_row_count', run.current_run_conflict_row_count ?? 0],
+      ['retained_prior_review_row_count', run.retained_prior_review_row_count ?? 0],
+      ['review_reason_counts_json', run.review_reason_counts_json ?? null],
+      ['requested_date_start', run.requested_date_start ?? null],
+      ['requested_date_end', run.requested_date_end ?? null],
+      ['discovered_count', run.discovered_count ?? 0],
+      ['returned_count', run.returned_count ?? 0],
+      ['filtered_out_count', run.filtered_out_count ?? 0],
+      ['returned_min_filing_date', run.returned_min_filing_date ?? null],
+      ['returned_max_filing_date', run.returned_max_filing_date ?? null],
+      ['upstream_min_filing_date', run.upstream_min_filing_date ?? null],
+      ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
+      ['partial_reason', run.partial_reason ?? null],
+      ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['enriched_record_count', run.enriched_record_count ?? 0],
+      ['partial_record_count', run.partial_record_count ?? 0],
+      ['new_master_row_count', run.new_master_row_count ?? 0],
+      ['purged_review_row_count', run.purged_review_row_count ?? 0],
+      ['lead_alert_attempted', run.lead_alert_attempted ?? 0],
+      ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
+      ['master_fallback_used', run.master_fallback_used ?? 0],
+      ['anomaly_detected', run.anomaly_detected ?? 0],
+    ];
+    const columns = entries.map(([column]) => column);
+    const values = entries.map(([, value]) => value);
+    this.getDb()
+      .prepare(`INSERT INTO scheduled_runs (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+      .run(...values);
   }
 
   async updateRun(run: ScheduledRunRecord): Promise<void> {
-    this.getDb().prepare(
-      `UPDATE scheduled_runs
-       SET site = ?, finished_at = ?, status = ?, records_scraped = ?, records_skipped = ?, rows_uploaded = ?,
-           amount_found_count = ?, amount_missing_count = ?, amount_coverage_pct = ?, ocr_success_pct = ?, row_fail_pct = ?,
-           deadline_hit = ?, effective_max_records = ?, partial = ?, error = ?, failure_class = ?,
-           attempt_count = ?, max_attempts = ?, retried = ?, retry_exhausted = ?,
-           source_tab_title = ?, master_tab_title = ?, review_tab_title = ?, quarantined_row_count = ?,
-           requested_date_start = ?, requested_date_end = ?, discovered_count = ?, returned_count = ?, partial_reason = ?,
-           new_master_row_count = ?, purged_review_row_count = ?, lead_alert_attempted = ?, lead_alert_delivered = ?,
-           master_fallback_used = ?, anomaly_detected = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
-    ).run(
-      run.site,
-      run.finished_at ?? null,
-      run.status,
-      run.records_scraped,
-      run.records_skipped,
-      run.rows_uploaded,
-      run.amount_found_count,
-      run.amount_missing_count,
-      run.amount_coverage_pct,
-      run.ocr_success_pct,
-      run.row_fail_pct,
-      run.deadline_hit,
-      run.effective_max_records,
-      run.partial,
-      run.error ?? null,
-      run.failure_class ?? null,
-      run.attempt_count ?? 1,
-      run.max_attempts ?? 1,
-      run.retried ?? 0,
-      run.retry_exhausted ?? 0,
-      run.source_tab_title ?? null,
-      run.master_tab_title ?? null,
-      run.review_tab_title ?? null,
-      run.quarantined_row_count ?? 0,
-      run.requested_date_start ?? null,
-      run.requested_date_end ?? null,
-      run.discovered_count ?? 0,
-      run.returned_count ?? 0,
-      run.partial_reason ?? null,
-      run.new_master_row_count ?? 0,
-      run.purged_review_row_count ?? 0,
-      run.lead_alert_attempted ?? 0,
-      run.lead_alert_delivered ?? 0,
-      run.master_fallback_used ?? 0,
-      run.anomaly_detected ?? 0,
-      run.id
-    );
+    const entries: Array<[string, unknown]> = [
+      ['site', run.site],
+      ['finished_at', run.finished_at ?? null],
+      ['status', run.status],
+      ['records_scraped', run.records_scraped],
+      ['records_skipped', run.records_skipped],
+      ['rows_uploaded', run.rows_uploaded],
+      ['amount_found_count', run.amount_found_count],
+      ['amount_missing_count', run.amount_missing_count],
+      ['amount_coverage_pct', run.amount_coverage_pct],
+      ['ocr_success_pct', run.ocr_success_pct],
+      ['row_fail_pct', run.row_fail_pct],
+      ['deadline_hit', run.deadline_hit],
+      ['effective_max_records', run.effective_max_records],
+      ['partial', run.partial],
+      ['error', run.error ?? null],
+      ['failure_class', run.failure_class ?? null],
+      ['attempt_count', run.attempt_count ?? 1],
+      ['max_attempts', run.max_attempts ?? 1],
+      ['retried', run.retried ?? 0],
+      ['retry_exhausted', run.retry_exhausted ?? 0],
+      ['source_tab_title', run.source_tab_title ?? null],
+      ['master_tab_title', run.master_tab_title ?? null],
+      ['review_tab_title', run.review_tab_title ?? null],
+      ['quarantined_row_count', run.quarantined_row_count ?? 0],
+      ['current_run_quarantined_row_count', run.current_run_quarantined_row_count ?? 0],
+      ['current_run_conflict_row_count', run.current_run_conflict_row_count ?? 0],
+      ['retained_prior_review_row_count', run.retained_prior_review_row_count ?? 0],
+      ['review_reason_counts_json', run.review_reason_counts_json ?? null],
+      ['requested_date_start', run.requested_date_start ?? null],
+      ['requested_date_end', run.requested_date_end ?? null],
+      ['discovered_count', run.discovered_count ?? 0],
+      ['returned_count', run.returned_count ?? 0],
+      ['filtered_out_count', run.filtered_out_count ?? 0],
+      ['returned_min_filing_date', run.returned_min_filing_date ?? null],
+      ['returned_max_filing_date', run.returned_max_filing_date ?? null],
+      ['upstream_min_filing_date', run.upstream_min_filing_date ?? null],
+      ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
+      ['partial_reason', run.partial_reason ?? null],
+      ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['enriched_record_count', run.enriched_record_count ?? 0],
+      ['partial_record_count', run.partial_record_count ?? 0],
+      ['new_master_row_count', run.new_master_row_count ?? 0],
+      ['purged_review_row_count', run.purged_review_row_count ?? 0],
+      ['lead_alert_attempted', run.lead_alert_attempted ?? 0],
+      ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
+      ['master_fallback_used', run.master_fallback_used ?? 0],
+      ['anomaly_detected', run.anomaly_detected ?? 0],
+    ];
+    const assignments = entries.map(([column]) => `${column} = ?`).join(', ');
+    const values = entries.map(([, value]) => value);
+    this.getDb()
+      .prepare(`UPDATE scheduled_runs SET ${assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(...values, run.id);
   }
 
   async getByIdempotencyKey(idempotencyKey: string): Promise<ScheduledRunRecord | null> {
@@ -933,11 +1015,23 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
             master_tab_title TEXT,
             review_tab_title TEXT,
             quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+            current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+            current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0,
+            retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0,
+            review_reason_counts_json TEXT,
             requested_date_start TEXT,
             requested_date_end TEXT,
             discovered_count INTEGER NOT NULL DEFAULT 0,
             returned_count INTEGER NOT NULL DEFAULT 0,
+            filtered_out_count INTEGER NOT NULL DEFAULT 0,
+            returned_min_filing_date TEXT,
+            returned_max_filing_date TEXT,
+            upstream_min_filing_date TEXT,
+            upstream_max_filing_date TEXT,
             partial_reason TEXT,
+            artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+            enriched_record_count INTEGER NOT NULL DEFAULT 0,
+            partial_record_count INTEGER NOT NULL DEFAULT 0,
             new_master_row_count INTEGER NOT NULL DEFAULT 0,
             purged_review_row_count INTEGER NOT NULL DEFAULT 0,
             lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
@@ -956,11 +1050,23 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS master_tab_title TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS review_tab_title TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS quarantined_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS review_reason_counts_json TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS requested_date_start TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS requested_date_end TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS discovered_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS returned_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS filtered_out_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS returned_min_filing_date TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS returned_max_filing_date TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS upstream_min_filing_date TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS upstream_max_filing_date TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS partial_reason TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS enriched_record_count INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS partial_record_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS new_master_row_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS purged_review_row_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS lead_alert_attempted INTEGER NOT NULL DEFAULT 0');
@@ -1067,145 +1173,125 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
   }
 
   async insertRun(run: ScheduledRunRecord): Promise<void> {
+    const entries: Array<[string, unknown]> = [
+      ['id', run.id],
+      ['site', run.site],
+      ['idempotency_key', run.idempotency_key],
+      ['slot_time', run.slot_time],
+      ['trigger_source', run.trigger_source],
+      ['started_at', run.started_at],
+      ['finished_at', run.finished_at ?? null],
+      ['status', run.status],
+      ['records_scraped', run.records_scraped],
+      ['records_skipped', run.records_skipped],
+      ['rows_uploaded', run.rows_uploaded],
+      ['amount_found_count', run.amount_found_count],
+      ['amount_missing_count', run.amount_missing_count],
+      ['amount_coverage_pct', run.amount_coverage_pct],
+      ['ocr_success_pct', run.ocr_success_pct],
+      ['row_fail_pct', run.row_fail_pct],
+      ['deadline_hit', run.deadline_hit],
+      ['effective_max_records', run.effective_max_records],
+      ['partial', run.partial],
+      ['error', run.error ?? null],
+      ['failure_class', run.failure_class ?? null],
+      ['attempt_count', run.attempt_count ?? 1],
+      ['max_attempts', run.max_attempts ?? 1],
+      ['retried', run.retried ?? 0],
+      ['retry_exhausted', run.retry_exhausted ?? 0],
+      ['source_tab_title', run.source_tab_title ?? null],
+      ['master_tab_title', run.master_tab_title ?? null],
+      ['review_tab_title', run.review_tab_title ?? null],
+      ['quarantined_row_count', run.quarantined_row_count ?? 0],
+      ['current_run_quarantined_row_count', run.current_run_quarantined_row_count ?? 0],
+      ['current_run_conflict_row_count', run.current_run_conflict_row_count ?? 0],
+      ['retained_prior_review_row_count', run.retained_prior_review_row_count ?? 0],
+      ['review_reason_counts_json', run.review_reason_counts_json ?? null],
+      ['requested_date_start', run.requested_date_start ?? null],
+      ['requested_date_end', run.requested_date_end ?? null],
+      ['discovered_count', run.discovered_count ?? 0],
+      ['returned_count', run.returned_count ?? 0],
+      ['filtered_out_count', run.filtered_out_count ?? 0],
+      ['returned_min_filing_date', run.returned_min_filing_date ?? null],
+      ['returned_max_filing_date', run.returned_max_filing_date ?? null],
+      ['upstream_min_filing_date', run.upstream_min_filing_date ?? null],
+      ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
+      ['partial_reason', run.partial_reason ?? null],
+      ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['enriched_record_count', run.enriched_record_count ?? 0],
+      ['partial_record_count', run.partial_record_count ?? 0],
+      ['new_master_row_count', run.new_master_row_count ?? 0],
+      ['purged_review_row_count', run.purged_review_row_count ?? 0],
+      ['lead_alert_attempted', run.lead_alert_attempted ?? 0],
+      ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
+      ['master_fallback_used', run.master_fallback_used ?? 0],
+      ['anomaly_detected', run.anomaly_detected ?? 0],
+    ];
+    const columns = entries.map(([column]) => column);
+    const values = entries.map(([, value]) => value);
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(', ');
     await this.pool.query(
-      `INSERT INTO scheduled_runs (
-        id, site, idempotency_key, slot_time, trigger_source, started_at, finished_at, status,
-        records_scraped, records_skipped, rows_uploaded,
-        amount_found_count, amount_missing_count, amount_coverage_pct, ocr_success_pct, row_fail_pct,
-        deadline_hit, effective_max_records, partial, error, failure_class,
-        attempt_count, max_attempts, retried, retry_exhausted,
-        source_tab_title, master_tab_title, review_tab_title, quarantined_row_count,
-        requested_date_start, requested_date_end, discovered_count, returned_count, partial_reason,
-        new_master_row_count, purged_review_row_count, lead_alert_attempted, lead_alert_delivered,
-        master_fallback_used, anomaly_detected
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6::timestamptz, $7::timestamptz, $8,
-        $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-        $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
-      )`,
-      [
-        run.id,
-        run.site,
-        run.idempotency_key,
-        run.slot_time,
-        run.trigger_source,
-        run.started_at,
-        run.finished_at ?? null,
-        run.status,
-        run.records_scraped,
-        run.records_skipped,
-        run.rows_uploaded,
-        run.amount_found_count,
-        run.amount_missing_count,
-        run.amount_coverage_pct,
-        run.ocr_success_pct,
-        run.row_fail_pct,
-        run.deadline_hit,
-        run.effective_max_records,
-        run.partial,
-        run.error ?? null,
-        run.failure_class ?? null,
-        run.attempt_count ?? 1,
-        run.max_attempts ?? 1,
-        run.retried ?? 0,
-        run.retry_exhausted ?? 0,
-        run.source_tab_title ?? null,
-        run.master_tab_title ?? null,
-        run.review_tab_title ?? null,
-        run.quarantined_row_count ?? 0,
-        run.requested_date_start ?? null,
-        run.requested_date_end ?? null,
-        run.discovered_count ?? 0,
-        run.returned_count ?? 0,
-        run.partial_reason ?? null,
-        run.new_master_row_count ?? 0,
-        run.purged_review_row_count ?? 0,
-        run.lead_alert_attempted ?? 0,
-        run.lead_alert_delivered ?? 0,
-        run.master_fallback_used ?? 0,
-        run.anomaly_detected ?? 0,
-      ]
+      `INSERT INTO scheduled_runs (${columns.join(', ')}) VALUES (${placeholders})`,
+      values,
     );
   }
 
   async updateRun(run: ScheduledRunRecord): Promise<void> {
+    const entries: Array<[string, unknown]> = [
+      ['site', run.site],
+      ['finished_at', run.finished_at ?? null],
+      ['status', run.status],
+      ['records_scraped', run.records_scraped],
+      ['records_skipped', run.records_skipped],
+      ['rows_uploaded', run.rows_uploaded],
+      ['amount_found_count', run.amount_found_count],
+      ['amount_missing_count', run.amount_missing_count],
+      ['amount_coverage_pct', run.amount_coverage_pct],
+      ['ocr_success_pct', run.ocr_success_pct],
+      ['row_fail_pct', run.row_fail_pct],
+      ['deadline_hit', run.deadline_hit],
+      ['effective_max_records', run.effective_max_records],
+      ['partial', run.partial],
+      ['error', run.error ?? null],
+      ['failure_class', run.failure_class ?? null],
+      ['attempt_count', run.attempt_count ?? 1],
+      ['max_attempts', run.max_attempts ?? 1],
+      ['retried', run.retried ?? 0],
+      ['retry_exhausted', run.retry_exhausted ?? 0],
+      ['source_tab_title', run.source_tab_title ?? null],
+      ['master_tab_title', run.master_tab_title ?? null],
+      ['review_tab_title', run.review_tab_title ?? null],
+      ['quarantined_row_count', run.quarantined_row_count ?? 0],
+      ['current_run_quarantined_row_count', run.current_run_quarantined_row_count ?? 0],
+      ['current_run_conflict_row_count', run.current_run_conflict_row_count ?? 0],
+      ['retained_prior_review_row_count', run.retained_prior_review_row_count ?? 0],
+      ['review_reason_counts_json', run.review_reason_counts_json ?? null],
+      ['requested_date_start', run.requested_date_start ?? null],
+      ['requested_date_end', run.requested_date_end ?? null],
+      ['discovered_count', run.discovered_count ?? 0],
+      ['returned_count', run.returned_count ?? 0],
+      ['filtered_out_count', run.filtered_out_count ?? 0],
+      ['returned_min_filing_date', run.returned_min_filing_date ?? null],
+      ['returned_max_filing_date', run.returned_max_filing_date ?? null],
+      ['upstream_min_filing_date', run.upstream_min_filing_date ?? null],
+      ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
+      ['partial_reason', run.partial_reason ?? null],
+      ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['enriched_record_count', run.enriched_record_count ?? 0],
+      ['partial_record_count', run.partial_record_count ?? 0],
+      ['new_master_row_count', run.new_master_row_count ?? 0],
+      ['purged_review_row_count', run.purged_review_row_count ?? 0],
+      ['lead_alert_attempted', run.lead_alert_attempted ?? 0],
+      ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
+      ['master_fallback_used', run.master_fallback_used ?? 0],
+      ['anomaly_detected', run.anomaly_detected ?? 0],
+    ];
+    const assignments = entries.map(([column], index) => `${column} = $${index + 1}`).join(', ');
+    const values = entries.map(([, value]) => value);
+    values.push(run.id);
     await this.pool.query(
-      `UPDATE scheduled_runs
-       SET site = $1,
-           finished_at = $2::timestamptz,
-           status = $3,
-           records_scraped = $4,
-           records_skipped = $5,
-           rows_uploaded = $6,
-           amount_found_count = $7,
-           amount_missing_count = $8,
-           amount_coverage_pct = $9,
-           ocr_success_pct = $10,
-           row_fail_pct = $11,
-           deadline_hit = $12,
-           effective_max_records = $13,
-           partial = $14,
-           error = $15,
-           failure_class = $16,
-           attempt_count = $17,
-           max_attempts = $18,
-           retried = $19,
-           retry_exhausted = $20,
-           source_tab_title = $21,
-           master_tab_title = $22,
-           review_tab_title = $23,
-           quarantined_row_count = $24,
-           requested_date_start = $25,
-           requested_date_end = $26,
-           discovered_count = $27,
-           returned_count = $28,
-           partial_reason = $29,
-           new_master_row_count = $30,
-           purged_review_row_count = $31,
-           lead_alert_attempted = $32,
-           lead_alert_delivered = $33,
-           master_fallback_used = $34,
-           anomaly_detected = $35,
-            updated_at = NOW()
-       WHERE id = $36`,
-      [
-        run.site,
-        run.finished_at ?? null,
-        run.status,
-        run.records_scraped,
-        run.records_skipped,
-        run.rows_uploaded,
-        run.amount_found_count,
-        run.amount_missing_count,
-        run.amount_coverage_pct,
-        run.ocr_success_pct,
-        run.row_fail_pct,
-        run.deadline_hit,
-        run.effective_max_records,
-        run.partial,
-        run.error ?? null,
-        run.failure_class ?? null,
-        run.attempt_count ?? 1,
-        run.max_attempts ?? 1,
-        run.retried ?? 0,
-        run.retry_exhausted ?? 0,
-        run.source_tab_title ?? null,
-        run.master_tab_title ?? null,
-        run.review_tab_title ?? null,
-        run.quarantined_row_count ?? 0,
-        run.requested_date_start ?? null,
-        run.requested_date_end ?? null,
-        run.discovered_count ?? 0,
-        run.returned_count ?? 0,
-        run.partial_reason ?? null,
-        run.new_master_row_count ?? 0,
-        run.purged_review_row_count ?? 0,
-        run.lead_alert_attempted ?? 0,
-        run.lead_alert_delivered ?? 0,
-        run.master_fallback_used ?? 0,
-        run.anomaly_detected ?? 0,
-        run.id,
-      ]
+      `UPDATE scheduled_runs SET ${assignments}, updated_at = NOW() WHERE id = $${values.length}`,
+      values,
     );
   }
 

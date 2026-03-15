@@ -174,6 +174,35 @@ interface RunManifest {
   filteredOutCount?: number;
   returnedMinFilingDate?: string;
   returnedMaxFilingDate?: string;
+  upstreamMinFilingDate?: string;
+  upstreamMaxFilingDate?: string;
+}
+
+class NYCAcrisRangeIntegrityError extends Error {
+  readonly requestedStart: string;
+  readonly requestedEnd: string;
+  readonly upstreamMin?: string;
+  readonly upstreamMax?: string;
+  readonly returnedRowCount: number;
+
+  constructor(options: {
+    requestedStart: string;
+    requestedEnd: string;
+    upstreamMin?: string;
+    upstreamMax?: string;
+    returnedRowCount: number;
+  }) {
+    super(
+      `ACRIS returned ${options.returnedRowCount} rows outside requested range ${options.requestedStart}-${options.requestedEnd}` +
+      ` upstream_range=${options.upstreamMin ?? 'unknown'}-${options.upstreamMax ?? 'unknown'}`
+    );
+    this.name = 'NYCAcrisRangeIntegrityError';
+    this.requestedStart = options.requestedStart;
+    this.requestedEnd = options.requestedEnd;
+    this.upstreamMin = options.upstreamMin;
+    this.upstreamMax = options.upstreamMax;
+    this.returnedRowCount = options.returnedRowCount;
+  }
 }
 
 interface ProbeResult {
@@ -1752,6 +1781,8 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
 
       manifest.discoveredCount = collectedRows.length;
       const rangeBeforeFilter = summarizeDateRange(collectedRows);
+      manifest.upstreamMinFilingDate = rangeBeforeFilter.min;
+      manifest.upstreamMaxFilingDate = rangeBeforeFilter.max;
       const filtered = filterRowsByAcrisDateRange(collectedRows, options);
       manifest.filteredOutCount = filtered.filteredOutCount;
       const filteredRange = summarizeDateRange(filtered.rows);
@@ -1761,10 +1792,13 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       if (filtered.rows.length === 0 && collectedRows.length > 0 && filtered.hadOutOfRangeRows) {
         const requestedStart = state.requestDateRange?.start ?? options.date_start;
         const requestedEnd = state.requestDateRange?.end ?? options.date_end;
-        throw new Error(
-          `ACRIS returned ${collectedRows.length} rows outside requested range ${requestedStart}-${requestedEnd}` +
-          ` upstream_range=${rangeBeforeFilter.min ?? 'unknown'}-${rangeBeforeFilter.max ?? 'unknown'}`
-        );
+        throw new NYCAcrisRangeIntegrityError({
+          requestedStart,
+          requestedEnd,
+          upstreamMin: rangeBeforeFilter.min,
+          upstreamMax: rangeBeforeFilter.max,
+          returnedRowCount: collectedRows.length,
+        });
       }
 
       const selectedRows = filtered.rows.slice(0, limits.maxRecords);
@@ -1826,6 +1860,8 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         discovered_count: manifest.discoveredCount ?? collectedRows.length,
         returned_count: manifest.returnedCount ?? selectedRows.length,
         filtered_out_count: manifest.filteredOutCount ?? 0,
+        upstream_min_filing_date: manifest.upstreamMinFilingDate,
+        upstream_max_filing_date: manifest.upstreamMaxFilingDate,
         returned_min_filing_date: manifest.returnedMinFilingDate,
         returned_max_filing_date: manifest.returnedMaxFilingDate,
         failure_count: manifest.failures.length,
@@ -1847,6 +1883,8 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
           filtered_out_count: manifest.filteredOutCount ?? 0,
           returned_min_filing_date: manifest.returnedMinFilingDate,
           returned_max_filing_date: manifest.returnedMaxFilingDate,
+          upstream_min_filing_date: manifest.upstreamMinFilingDate,
+          upstream_max_filing_date: manifest.upstreamMaxFilingDate,
         }
       );
     } catch (err: unknown) {

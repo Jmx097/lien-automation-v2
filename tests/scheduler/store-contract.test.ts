@@ -52,6 +52,90 @@ function sortRuns(rows: StoredRunRow[]): StoredRunRow[] {
   return [...rows].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
 }
 
+function parseColumnList(sql: string, prefix: string, suffix: string): string[] {
+  const start = sql.indexOf(prefix);
+  const end = sql.indexOf(suffix, start + prefix.length);
+  if (start === -1 || end === -1) return [];
+  return sql
+    .slice(start + prefix.length, end)
+    .split(',')
+    .map((column) => column.trim())
+    .filter(Boolean);
+}
+
+function parseAssignmentColumns(sql: string): string[] {
+  const start = sql.indexOf('SET ');
+  const end = sql.indexOf(', updated_at = NOW()');
+  if (start === -1 || end === -1) return [];
+  return sql
+    .slice(start + 4, end)
+    .split(',')
+    .map((assignment) => assignment.trim())
+    .filter(Boolean)
+    .map((assignment) => assignment.split('=')[0]?.trim() ?? '')
+    .filter(Boolean);
+}
+
+function buildRunFromColumns(columns: string[], params: unknown[]): StoredRunRow {
+  const row = Object.fromEntries(columns.map((column, index) => [column, params[index]])) as Record<string, unknown>;
+  return {
+    id: String(row.id),
+    site: String(row.site) as ScheduledRunRecord['site'],
+    idempotency_key: String(row.idempotency_key),
+    slot_time: String(row.slot_time),
+    trigger_source: String(row.trigger_source) as ScheduledRunRecord['trigger_source'],
+    started_at: String(row.started_at),
+    finished_at: row.finished_at == null ? undefined : String(row.finished_at),
+    status: String(row.status) as ScheduledRunRecord['status'],
+    records_scraped: Number(row.records_scraped ?? 0),
+    records_skipped: Number(row.records_skipped ?? 0),
+    rows_uploaded: Number(row.rows_uploaded ?? 0),
+    amount_found_count: Number(row.amount_found_count ?? 0),
+    amount_missing_count: Number(row.amount_missing_count ?? 0),
+    amount_coverage_pct: Number(row.amount_coverage_pct ?? 0),
+    ocr_success_pct: Number(row.ocr_success_pct ?? 0),
+    row_fail_pct: Number(row.row_fail_pct ?? 0),
+    deadline_hit: Number(row.deadline_hit ?? 0),
+    effective_max_records: Number(row.effective_max_records ?? 0),
+    partial: Number(row.partial ?? 0),
+    error: row.error == null ? undefined : String(row.error),
+    failure_class: row.failure_class == null ? undefined : String(row.failure_class),
+    attempt_count: Number(row.attempt_count ?? 1),
+    max_attempts: Number(row.max_attempts ?? 1),
+    retried: Number(row.retried ?? 0),
+    retry_exhausted: Number(row.retry_exhausted ?? 0),
+    source_tab_title: row.source_tab_title == null ? undefined : String(row.source_tab_title),
+    master_tab_title: row.master_tab_title == null ? undefined : String(row.master_tab_title),
+    review_tab_title: row.review_tab_title == null ? undefined : String(row.review_tab_title),
+    quarantined_row_count: Number(row.quarantined_row_count ?? 0),
+    current_run_quarantined_row_count: Number(row.current_run_quarantined_row_count ?? 0),
+    current_run_conflict_row_count: Number(row.current_run_conflict_row_count ?? 0),
+    retained_prior_review_row_count: Number(row.retained_prior_review_row_count ?? 0),
+    review_reason_counts_json: row.review_reason_counts_json == null ? undefined : String(row.review_reason_counts_json),
+    requested_date_start: row.requested_date_start == null ? undefined : String(row.requested_date_start),
+    requested_date_end: row.requested_date_end == null ? undefined : String(row.requested_date_end),
+    discovered_count: Number(row.discovered_count ?? 0),
+    returned_count: Number(row.returned_count ?? 0),
+    filtered_out_count: Number(row.filtered_out_count ?? 0),
+    returned_min_filing_date: row.returned_min_filing_date == null ? undefined : String(row.returned_min_filing_date),
+    returned_max_filing_date: row.returned_max_filing_date == null ? undefined : String(row.returned_max_filing_date),
+    upstream_min_filing_date: row.upstream_min_filing_date == null ? undefined : String(row.upstream_min_filing_date),
+    upstream_max_filing_date: row.upstream_max_filing_date == null ? undefined : String(row.upstream_max_filing_date),
+    partial_reason: row.partial_reason == null ? undefined : String(row.partial_reason),
+    artifact_retrieval_enabled: Number(row.artifact_retrieval_enabled ?? 0),
+    enriched_record_count: Number(row.enriched_record_count ?? 0),
+    partial_record_count: Number(row.partial_record_count ?? 0),
+    new_master_row_count: Number(row.new_master_row_count ?? 0),
+    purged_review_row_count: Number(row.purged_review_row_count ?? 0),
+    lead_alert_attempted: Number(row.lead_alert_attempted ?? 0),
+    lead_alert_delivered: Number(row.lead_alert_delivered ?? 0),
+    master_fallback_used: Number(row.master_fallback_used ?? 0),
+    anomaly_detected: Number(row.anomaly_detected ?? 0),
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  };
+}
+
 vi.mock('pg', () => {
   class Pool {
     async connect() {
@@ -84,74 +168,46 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('INSERT INTO scheduled_runs')) {
-        const row: StoredRunRow = {
-          id: String(params[0]),
-          site: String(params[1]) as ScheduledRunRecord['site'],
-          idempotency_key: String(params[2]),
-          slot_time: String(params[3]),
-          trigger_source: String(params[4]) as ScheduledRunRecord['trigger_source'],
-          started_at: String(params[5]),
-          finished_at: params[6] == null ? undefined : String(params[6]),
-          status: String(params[7]) as ScheduledRunRecord['status'],
-          records_scraped: Number(params[8]),
-          records_skipped: Number(params[9]),
-          rows_uploaded: Number(params[10]),
-          amount_found_count: Number(params[11]),
-          amount_missing_count: Number(params[12]),
-          amount_coverage_pct: Number(params[13]),
-          ocr_success_pct: Number(params[14]),
-          row_fail_pct: Number(params[15]),
-          deadline_hit: Number(params[16]),
-          effective_max_records: Number(params[17]),
-          partial: Number(params[18]),
-          error: params[19] == null ? undefined : String(params[19]),
-          failure_class: params[20] == null ? undefined : String(params[20]),
-          attempt_count: Number(params[21]),
-          max_attempts: Number(params[22]),
-          retried: Number(params[23]),
-          retry_exhausted: Number(params[24]),
-          requested_date_start: params[29] == null ? undefined : String(params[29]),
-          requested_date_end: params[30] == null ? undefined : String(params[30]),
-          discovered_count: Number(params[31] ?? 0),
-          returned_count: Number(params[32] ?? 0),
-          partial_reason: params[33] == null ? undefined : String(params[33]),
-          created_at: nowIso(),
-          updated_at: nowIso(),
-        };
+        const columns = parseColumnList(normalized, 'INSERT INTO scheduled_runs (', ') VALUES');
+        const row = buildRunFromColumns(columns, params);
         pgState.runs.set(row.id, row);
         return { rows: [] };
       }
 
       if (normalized.startsWith('UPDATE scheduled_runs')) {
-        const existing = pgState.runs.get(String(params[35]));
+        const columns = parseAssignmentColumns(normalized);
+        const existing = pgState.runs.get(String(params[params.length - 1]));
         if (existing) {
+          const updates = Object.fromEntries(columns.map((column, index) => [column, params[index]]));
           pgState.runs.set(existing.id, {
             ...existing,
-            site: String(params[0]) as ScheduledRunRecord['site'],
-            finished_at: params[1] == null ? undefined : String(params[1]),
-            status: String(params[2]) as ScheduledRunRecord['status'],
-            records_scraped: Number(params[3]),
-            records_skipped: Number(params[4]),
-            rows_uploaded: Number(params[5]),
-            amount_found_count: Number(params[6]),
-            amount_missing_count: Number(params[7]),
-            amount_coverage_pct: Number(params[8]),
-            ocr_success_pct: Number(params[9]),
-            row_fail_pct: Number(params[10]),
-            deadline_hit: Number(params[11]),
-            effective_max_records: Number(params[12]),
-            partial: Number(params[13]),
-            error: params[14] == null ? undefined : String(params[14]),
-            failure_class: params[15] == null ? undefined : String(params[15]),
-            attempt_count: Number(params[16]),
-            max_attempts: Number(params[17]),
-            retried: Number(params[18]),
-            retry_exhausted: Number(params[19]),
-            requested_date_start: params[24] == null ? undefined : String(params[24]),
-            requested_date_end: params[25] == null ? undefined : String(params[25]),
-            discovered_count: Number(params[26] ?? 0),
-            returned_count: Number(params[27] ?? 0),
-            partial_reason: params[28] == null ? undefined : String(params[28]),
+            ...updates,
+            site: String(updates.site ?? existing.site) as ScheduledRunRecord['site'],
+            finished_at: updates.finished_at == null ? undefined : String(updates.finished_at),
+            status: String(updates.status ?? existing.status) as ScheduledRunRecord['status'],
+            records_scraped: Number(updates.records_scraped ?? existing.records_scraped),
+            records_skipped: Number(updates.records_skipped ?? existing.records_skipped),
+            rows_uploaded: Number(updates.rows_uploaded ?? existing.rows_uploaded),
+            amount_found_count: Number(updates.amount_found_count ?? existing.amount_found_count),
+            amount_missing_count: Number(updates.amount_missing_count ?? existing.amount_missing_count),
+            amount_coverage_pct: Number(updates.amount_coverage_pct ?? existing.amount_coverage_pct),
+            ocr_success_pct: Number(updates.ocr_success_pct ?? existing.ocr_success_pct),
+            row_fail_pct: Number(updates.row_fail_pct ?? existing.row_fail_pct),
+            deadline_hit: Number(updates.deadline_hit ?? existing.deadline_hit),
+            effective_max_records: Number(updates.effective_max_records ?? existing.effective_max_records),
+            partial: Number(updates.partial ?? existing.partial),
+            error: updates.error == null ? undefined : String(updates.error),
+            failure_class: updates.failure_class == null ? undefined : String(updates.failure_class),
+            attempt_count: Number(updates.attempt_count ?? existing.attempt_count ?? 1),
+            max_attempts: Number(updates.max_attempts ?? existing.max_attempts ?? 1),
+            retried: Number(updates.retried ?? existing.retried ?? 0),
+            retry_exhausted: Number(updates.retry_exhausted ?? existing.retry_exhausted ?? 0),
+            requested_date_start: updates.requested_date_start == null ? undefined : String(updates.requested_date_start),
+            requested_date_end: updates.requested_date_end == null ? undefined : String(updates.requested_date_end),
+            discovered_count: Number(updates.discovered_count ?? existing.discovered_count ?? 0),
+            returned_count: Number(updates.returned_count ?? existing.returned_count ?? 0),
+            filtered_out_count: Number(updates.filtered_out_count ?? existing.filtered_out_count ?? 0),
+            partial_reason: updates.partial_reason == null ? undefined : String(updates.partial_reason),
             updated_at: nowIso(),
           });
         }

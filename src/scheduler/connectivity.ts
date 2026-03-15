@@ -9,6 +9,7 @@ export type NYCAcrisFailureClass =
   | 'token_or_session_state'
   | 'selector_or_empty_results'
   | 'viewer_roundtrip'
+  | 'range_result_integrity'
   | 'sheet_export';
 
 export type SiteConnectivityFailureClass = NYCAcrisFailureClass | MaricopaConnectivityFailureClass;
@@ -122,6 +123,10 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
     return 'sheet_export';
   }
 
+  if (/outside requested range|upstream_range=|range integrity/i.test(normalized)) {
+    return 'range_result_integrity';
+  }
+
   if (/missing anti-forgery token|requestverificationtoken|session_budget_exceeded|live session state/.test(normalized)) {
     return 'token_or_session_state';
   }
@@ -197,6 +202,7 @@ export function recordConnectivityFailure(
     failureClass === 'timeout_or_navigation' ||
     failureClass === 'viewer_roundtrip' ||
     failureClass === 'token_or_session_state' ||
+    failureClass === 'range_result_integrity' ||
     failureClass === 'artifact_fetch_failed'
   ) {
     state.timeout_count += 1;

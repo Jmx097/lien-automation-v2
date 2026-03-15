@@ -429,6 +429,39 @@ describe('syncMasterSheetTab', () => {
     ]);
   });
 
+  it('reports current-run quarantine, conflict, and retained prior review counts separately', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_old: [
+        sourceRow({ 14: 0.72, 16: 'old-review-file' }),
+        sourceRow({ 2: '200', 14: 0.98, 16: 'shared-duplicate-file' }),
+      ],
+      Scheduled_current: [
+        sourceRow({ 14: 0.72, 16: 'current-review-file' }),
+        sourceRow({ 2: '100', 14: 0.91, 16: 'shared-duplicate-file' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({ currentSourceTab: 'Scheduled_current' });
+
+    expect(result).toEqual(expect.objectContaining({
+      quarantined_row_count: 3,
+      current_run_quarantined_row_count: 1,
+      current_run_conflict_row_count: 1,
+      retained_prior_review_row_count: 1,
+      review_summary: expect.objectContaining({
+        current_run_quarantined_row_count: 1,
+        current_run_conflict_row_count: 1,
+        retained_prior_review_row_count: 1,
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[17]).sort()).toEqual([
+      'conflict_lower_confidence',
+      'low_confidence',
+      'low_confidence',
+    ]);
+  });
+
   it('purges quarantined rows older than the review retention window while keeping recent ones', async () => {
     seedWorkbook('source-sheet', {
       'Scheduled_old_01-01-2000_to_01-01-2000_20000101': [

@@ -137,6 +137,12 @@ export interface RunConfidenceSummary {
     partial: number;
     retry_exhausted: number;
     quarantined_row_count: number;
+    current_run_quarantined_row_count: number;
+    current_run_conflict_row_count: number;
+    retained_prior_review_row_count: number;
+    filtered_out_count: number;
+    enriched_record_count: number;
+    partial_record_count: number;
     new_master_row_count: number;
     purged_review_row_count: number;
   };
@@ -383,6 +389,14 @@ function computeQualityMetrics(
     requestedDateEnd: qualitySummary?.requested_date_end,
     quarantinedCount: qualitySummary?.quarantined_count ?? 0,
     recordsSkipped: qualitySummary?.skipped_existing_count ?? 0,
+    filteredOutCount: qualitySummary?.filtered_out_count ?? 0,
+    returnedMinFilingDate: qualitySummary?.returned_min_filing_date,
+    returnedMaxFilingDate: qualitySummary?.returned_max_filing_date,
+    upstreamMinFilingDate: qualitySummary?.upstream_min_filing_date,
+    upstreamMaxFilingDate: qualitySummary?.upstream_max_filing_date,
+    artifactRetrievalEnabled: qualitySummary?.artifact_retrieval_enabled === true ? 1 : 0,
+    enrichedRecordCount: qualitySummary?.enriched_records ?? 0,
+    partialRecordCount: qualitySummary?.partial_records ?? 0,
   };
 }
 
@@ -408,7 +422,11 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   if (run.records_scraped > 0 && !run.master_tab_title) reasons.push('master_tab_missing');
   if (run.records_scraped > 0 && run.amount_coverage_pct < getAmountMinCoveragePct()) reasons.push('amount_coverage_below_target');
   if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
-  if ((run.quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
+  if ((run.current_run_quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
+  if ((run.current_run_conflict_row_count ?? 0) > 0) reasons.push('review_conflicts_present');
+  if (run.site === 'maricopa_recorder' && (run.artifact_retrieval_enabled ?? 0) === 0 && run.records_scraped > 0) {
+    reasons.push('artifact_retrieval_disabled');
+  }
 
   let status: RunConfidenceSummary['status'] = 'high';
   if (
@@ -438,6 +456,12 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
       partial: run.partial,
       retry_exhausted: run.retry_exhausted ?? 0,
       quarantined_row_count: run.quarantined_row_count ?? 0,
+      current_run_quarantined_row_count: run.current_run_quarantined_row_count ?? 0,
+      current_run_conflict_row_count: run.current_run_conflict_row_count ?? 0,
+      retained_prior_review_row_count: run.retained_prior_review_row_count ?? 0,
+      filtered_out_count: run.filtered_out_count ?? 0,
+      enriched_record_count: run.enriched_record_count ?? 0,
+      partial_record_count: run.partial_record_count ?? 0,
       new_master_row_count: run.new_master_row_count ?? 0,
       purged_review_row_count: run.purged_review_row_count ?? 0,
     },
@@ -506,7 +530,11 @@ function isRetryableScheduledFailure(site: SupportedSite, failureClass: SiteConn
     return failureClass === 'challenge_or_interstitial' || failureClass === 'artifact_fetch_failed';
   }
 
-  if (failureClass === 'policy_block' || failureClass === 'selector_or_empty_results') {
+  if (
+    failureClass === 'policy_block' ||
+    failureClass === 'selector_or_empty_results' ||
+    failureClass === 'range_result_integrity'
+  ) {
     return false;
   }
 
@@ -760,6 +788,28 @@ function deriveFailureClass(site: SupportedSite, err: unknown): SiteConnectivity
     : classifyNYCAcrisFailure(message);
 }
 
+function applyFailureDiagnostics(run: ScheduledRunRecord, err: unknown): void {
+  if (run.site !== 'nyc_acris' || run.failure_class !== 'range_result_integrity') return;
+
+  const errorWithContext = err as {
+    requestedStart?: string;
+    requestedEnd?: string;
+    upstreamMin?: string;
+    upstreamMax?: string;
+    returnedRowCount?: number;
+  };
+
+  if (errorWithContext.requestedStart) run.requested_date_start = errorWithContext.requestedStart;
+  if (errorWithContext.requestedEnd) run.requested_date_end = errorWithContext.requestedEnd;
+  if (errorWithContext.upstreamMin) run.upstream_min_filing_date = errorWithContext.upstreamMin;
+  if (errorWithContext.upstreamMax) run.upstream_max_filing_date = errorWithContext.upstreamMax;
+  if (typeof errorWithContext.returnedRowCount === 'number') {
+    run.filtered_out_count = errorWithContext.returnedRowCount;
+    run.discovered_count = errorWithContext.returnedRowCount;
+    run.returned_count = 0;
+  }
+}
+
 function shouldUseCachedNYCRows(site: SupportedSite, previousFailureClass?: string): boolean {
   return site === 'nyc_acris' && previousFailureClass === 'sheet_export';
 }
@@ -951,11 +1001,23 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     master_tab_title: undefined,
     review_tab_title: undefined,
     quarantined_row_count: 0,
+    current_run_quarantined_row_count: 0,
+    current_run_conflict_row_count: 0,
+    retained_prior_review_row_count: 0,
+    review_reason_counts_json: undefined,
     requested_date_start: date_start,
     requested_date_end: date_end,
     discovered_count: 0,
     returned_count: 0,
+    filtered_out_count: 0,
+    returned_min_filing_date: undefined,
+    returned_max_filing_date: undefined,
+    upstream_min_filing_date: undefined,
+    upstream_max_filing_date: undefined,
     partial_reason: undefined,
+    artifact_retrieval_enabled: 0,
+    enriched_record_count: 0,
+    partial_record_count: 0,
     new_master_row_count: 0,
     purged_review_row_count: 0,
     lead_alert_attempted: 0,
@@ -1107,7 +1169,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }
 
-        const masterSync = await syncMasterSheetTab();
+        const masterSync = await syncMasterSheetTab({ currentSourceTab: uploadResult.tab_title });
         let leadAlertResult = { attempted: false, delivered: false };
         if ((masterSync?.new_master_row_count ?? 0) > 0) {
           leadAlertResult = await sendNewLeadsNotification({
@@ -1135,6 +1197,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.requested_date_end = quality.requestedDateEnd ?? date_end;
         run.discovered_count = quality.discoveredCount;
         run.returned_count = quality.returnedCount;
+        run.filtered_out_count = quality.filteredOutCount;
+        run.returned_min_filing_date = quality.returnedMinFilingDate;
+        run.returned_max_filing_date = quality.returnedMaxFilingDate;
+        run.upstream_min_filing_date = quality.upstreamMinFilingDate;
+        run.upstream_max_filing_date = quality.upstreamMaxFilingDate;
         run.status = 'success';
         run.error = undefined;
         run.failure_class = undefined;
@@ -1143,7 +1210,17 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.source_tab_title = uploadResult.tab_title;
         run.master_tab_title = masterSync?.tab_title;
         run.review_tab_title = masterSync?.review_tab_title;
-        run.quarantined_row_count = quality.quarantinedCount + (masterSync?.quarantined_row_count ?? 0);
+        run.quarantined_row_count =
+          quality.quarantinedCount +
+          (masterSync?.current_run_quarantined_row_count ?? 0) +
+          (masterSync?.current_run_conflict_row_count ?? 0);
+        run.current_run_quarantined_row_count = quality.quarantinedCount + (masterSync?.current_run_quarantined_row_count ?? 0);
+        run.current_run_conflict_row_count = masterSync?.current_run_conflict_row_count ?? 0;
+        run.retained_prior_review_row_count = masterSync?.retained_prior_review_row_count ?? 0;
+        run.review_reason_counts_json = JSON.stringify(masterSync?.review_summary?.review_reason_counts ?? {});
+        run.artifact_retrieval_enabled = quality.artifactRetrievalEnabled;
+        run.enriched_record_count = quality.enrichedRecordCount;
+        run.partial_record_count = quality.partialRecordCount;
         run.new_master_row_count = masterSync?.new_master_row_count ?? 0;
         run.purged_review_row_count = masterSync?.purged_review_row_count ?? 0;
         run.lead_alert_attempted = leadAlertResult.attempted ? 1 : 0;
@@ -1240,6 +1317,17 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           requested_date_end: run.requested_date_end,
           discovered_count: run.discovered_count,
           returned_count: run.returned_count,
+          filtered_out_count: run.filtered_out_count,
+          returned_min_filing_date: run.returned_min_filing_date,
+          returned_max_filing_date: run.returned_max_filing_date,
+          upstream_min_filing_date: run.upstream_min_filing_date,
+          upstream_max_filing_date: run.upstream_max_filing_date,
+          current_run_quarantined_row_count: run.current_run_quarantined_row_count,
+          current_run_conflict_row_count: run.current_run_conflict_row_count,
+          retained_prior_review_row_count: run.retained_prior_review_row_count,
+          artifact_retrieval_enabled: run.artifact_retrieval_enabled,
+          enriched_record_count: run.enriched_record_count,
+          partial_record_count: run.partial_record_count,
           retried: run.retried,
           tab_title: uploadResult.tab_title,
           master_tab_title: masterSync?.tab_title,
@@ -1258,6 +1346,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
         run.error = errorMessage;
         run.failure_class = failureClass;
+        applyFailureDiagnostics(run, err);
         previousFailureClass = failureClass;
 
         await applyConnectivityFailure(site, failureClass, errorMessage);

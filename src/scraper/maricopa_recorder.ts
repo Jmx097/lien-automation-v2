@@ -861,5 +861,6 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Sc
     details_fetched: detailsFetched,
     enriched_records: enrichedRecords,
     partial_records: incompleteRecords,
+    artifact_retrieval_enabled: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED,
   });
 }

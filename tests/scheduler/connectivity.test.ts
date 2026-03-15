@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  classifyNYCAcrisFailure,
   classifyMaricopaFailure,
   createDefaultConnectivityState,
   recordConnectivityFailure,
@@ -74,6 +75,12 @@ describe('scheduler connectivity state', () => {
   it('classifies stale Maricopa session failures explicitly', () => {
     expect(classifyMaricopaFailure('Maricopa session is stale (captured_at=2026-03-10). Run refresh:maricopa-session on the droplet.'))
       .toBe('session_missing_or_stale');
+  });
+
+  it('classifies NYC out-of-range result windows explicitly', () => {
+    expect(
+      classifyNYCAcrisFailure('ACRIS returned 10 rows outside requested range 03/08/2026-03/15/2026 upstream_range=03/04/2026-03/06/2026')
+    ).toBe('range_result_integrity');
   });
 
   it('blocks Maricopa immediately when persisted session state is missing', () => {

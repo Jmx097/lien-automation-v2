@@ -38,6 +38,9 @@ export interface ScrapeRunQualitySummary {
   partial_records?: number;
   returned_min_filing_date?: string;
   returned_max_filing_date?: string;
+  upstream_min_filing_date?: string;
+  upstream_max_filing_date?: string;
+  artifact_retrieval_enabled?: boolean;
 }
 
 export type ScrapeResult = LienRecord[] & {
