@@ -177,7 +177,7 @@ For CA SOS scheduled runs specifically:
 - `SCHEDULE_CA_SOS_*_RUN_HOUR` / `SCHEDULE_CA_SOS_*_RUN_MINUTE` are the target finish-by times for the `morning`, `afternoon`, and `evening` slots.
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
-- Cloud Run deploy defaults schedule all three sites for all 7 days with finish-by targets of `10:00`, `14:00`, and `22:00`. CA SOS and NYC ACRIS use `America/Denver`; Maricopa Recorder uses `America/Phoenix`.
+- Cloud Run deploy defaults schedule CA SOS, Maricopa Recorder, and NYC ACRIS on weekdays only in `America/Denver`, with finish-by targets of `10:00`, `14:00`, and `22:00`.
 
 ## OCR Runtime Notes
 
@@ -445,9 +445,9 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 
 - **Execution target:** `POST /schedule/run` only
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
-- **Timezone:** site-specific. Cloud Run workflow defaults are `America/Denver` for CA SOS and NYC ACRIS, and `America/Phoenix` for Maricopa Recorder.
+- **Timezone:** `America/Denver` for all three sites in the default Cloud Run workflow configuration.
 - **CA SOS semantics:** `SCHEDULE_CA_SOS_*_RUN_HOUR` / `SCHEDULE_CA_SOS_*_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
-- **Trigger times:** CA SOS defaults to `07:00`, `11:00`, and `19:00` in `America/Denver` for `10:00`, `14:00`, and `22:00` finish-by targets. Maricopa defaults to `10:00`, `14:00`, and `22:00` in `America/Phoenix`. NYC ACRIS defaults to `10:00`, `14:00`, and `22:00` in `America/Denver`. All three default to `MO,TU,WE,TH,FR,SA,SU` in the Cloud Run workflow.
+- **Trigger times:** CA SOS defaults to `07:00`, `11:00`, and `19:00` in `America/Denver` for `10:00`, `14:00`, and `22:00` finish-by targets. Maricopa and NYC ACRIS default to `10:00`, `14:00`, and `22:00` in `America/Denver`. All three default to `MO,TU,WE,TH,FR` in the Cloud Run workflow.
 - **Idempotency:** optional; set `ENABLE_SCHEDULE_IDEMPOTENCY=1` to key runs by `YYYY-MM-DD:slot` (`morning`/`afternoon`/`evening`) and skip duplicates. Default is off so each scheduled trigger creates a fresh run/tab
 
 ### External scheduler configuration (per-site triggers)
@@ -455,20 +455,20 @@ Production scheduling now uses **an external scheduler** targeting one authentic
 Linux cron example:
 
 ```cron
-# CA SOS daily 07:00 America/Denver (default 3-hour lead for a 10:00 finish-by time)
-0 7 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# CA SOS weekdays 07:00 America/Denver (default 3-hour lead for a 10:00 finish-by time)
+0 7 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"ca_sos","slot":"morning"}'
 
-# Maricopa daily 14:00 America/Phoenix
-0 14 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# Maricopa weekdays 14:00 America/Denver
+0 14 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"maricopa_recorder","slot":"afternoon"}'
 
-# NYC ACRIS daily 22:00 America/Denver
-0 22 * * * curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
+# NYC ACRIS weekdays 22:00 America/Denver
+0 22 * * 1-5 curl -fsS -X POST http://127.0.0.1:8080/schedule/run \
   -H "Authorization: Bearer ${SCHEDULE_RUN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"site":"nyc_acris","slot":"evening"}'
