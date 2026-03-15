@@ -31,22 +31,69 @@ import { supportedSites, type SupportedSite } from './sites';
 const LOOKBACK_DAYS = 7;
 const MISSED_RUN_GRACE_MINUTES = 45;
 const SCHEDULE_COOLDOWN_MINUTES = 10;
-const ENABLE_SCHEDULE_IDEMPOTENCY = process.env.ENABLE_SCHEDULE_IDEMPOTENCY === '1';
-const AMOUNT_MIN_COVERAGE_PCT = Number(process.env.AMOUNT_MIN_COVERAGE_PCT ?? '95');
-const SCHEDULE_AUTO_THROTTLE = process.env.SCHEDULE_AUTO_THROTTLE !== '0';
-const SCHEDULE_MAX_RECORDS = Number(process.env.SCHEDULE_MAX_RECORDS ?? '75');
-const SCHEDULE_MAX_RECORDS_FLOOR = Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '75');
-const SCHEDULE_MAX_RECORDS_CEILING = Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '75');
-const SCHEDULE_RUN_MAX_ATTEMPTS = Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
-const SCHEDULE_RUN_BASE_DELAY_MS = Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
-const SCHEDULE_RUN_MAX_DELAY_MS = Math.max(SCHEDULE_RUN_BASE_DELAY_MS, Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
-const SCHEDULE_ANOMALY_BASELINE_RUNS = Math.max(3, Number(process.env.SCHEDULE_ANOMALY_BASELINE_RUNS ?? '5'));
-const SCHEDULE_ANOMALY_MIN_BASELINE_RUNS = Math.max(1, Number(process.env.SCHEDULE_ANOMALY_MIN_BASELINE_RUNS ?? '3'));
-const SCHEDULE_ANOMALY_RECORDS_DROP_PCT = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_RECORDS_DROP_PCT ?? '40'));
-const SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS ?? '15'));
-const SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS ?? '20'));
-const SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS = Math.max(0, Number(process.env.SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS ?? '20'));
-export const SCHEDULE_FAILURE_INJECTION_ENABLED = process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
+function getEnableScheduleIdempotency(): boolean {
+  return process.env.ENABLE_SCHEDULE_IDEMPOTENCY === '1';
+}
+
+function getAmountMinCoveragePct(): number {
+  return Number(process.env.AMOUNT_MIN_COVERAGE_PCT ?? '95');
+}
+
+function isScheduleAutoThrottleEnabled(): boolean {
+  return process.env.SCHEDULE_AUTO_THROTTLE !== '0';
+}
+
+function getScheduleMaxRecords(): number {
+  return Number(process.env.SCHEDULE_MAX_RECORDS ?? '75');
+}
+
+function getScheduleMaxRecordsFloor(): number {
+  return Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '75');
+}
+
+function getScheduleMaxRecordsCeiling(): number {
+  return Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '75');
+}
+
+function getScheduleRunMaxAttempts(): number {
+  return Math.max(1, Number(process.env.SCHEDULE_RUN_MAX_ATTEMPTS ?? '3'));
+}
+
+function getScheduleRunBaseDelayMs(): number {
+  return Math.max(0, Number(process.env.SCHEDULE_RUN_BASE_DELAY_MS ?? '1000'));
+}
+
+function getScheduleRunMaxDelayMs(): number {
+  return Math.max(getScheduleRunBaseDelayMs(), Number(process.env.SCHEDULE_RUN_MAX_DELAY_MS ?? '10000'));
+}
+
+function getScheduleAnomalyBaselineRuns(): number {
+  return Math.max(3, Number(process.env.SCHEDULE_ANOMALY_BASELINE_RUNS ?? '5'));
+}
+
+function getScheduleAnomalyMinBaselineRuns(): number {
+  return Math.max(1, Number(process.env.SCHEDULE_ANOMALY_MIN_BASELINE_RUNS ?? '3'));
+}
+
+function getScheduleAnomalyRecordsDropPct(): number {
+  return Math.max(0, Number(process.env.SCHEDULE_ANOMALY_RECORDS_DROP_PCT ?? '40'));
+}
+
+function getScheduleAnomalyAmountCoverageDropPts(): number {
+  return Math.max(0, Number(process.env.SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS ?? '15'));
+}
+
+function getScheduleAnomalyOcrSuccessDropPts(): number {
+  return Math.max(0, Number(process.env.SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS ?? '20'));
+}
+
+function getScheduleAnomalyRowFailRisePts(): number {
+  return Math.max(0, Number(process.env.SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS ?? '20'));
+}
+
+export function isScheduleFailureInjectionEnabled(): boolean {
+  return process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
+}
 
 export type Slot = 'morning' | 'afternoon' | 'evening';
 type TriggerSource = 'external' | 'manual';
@@ -199,7 +246,7 @@ function getSiteSchedules(site: SupportedSite): SiteScheduleConfig[] {
   const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? DEFAULT_WEEKDAYS)
     .split(',')
     .map((value) => value.trim().toUpperCase());
-  const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? SCHEDULE_MAX_RECORDS);
+  const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? getScheduleMaxRecords());
   const triggerLeadMinutes = Number(getSiteEnv(site, 'TRIGGER_LEAD_MINUTES') ?? (site === 'ca_sos' ? '180' : '0'));
 
   const slotTimes: Array<{ slot: Slot; finishByHour: number; finishByMinute: number }> = [
@@ -359,7 +406,7 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   if ((run.anomaly_detected ?? 0) > 0) reasons.push('quality_anomaly_detected');
   if (run.rows_uploaded !== run.records_scraped) reasons.push('row_upload_mismatch');
   if (run.records_scraped > 0 && !run.master_tab_title) reasons.push('master_tab_missing');
-  if (run.records_scraped > 0 && run.amount_coverage_pct < AMOUNT_MIN_COVERAGE_PCT) reasons.push('amount_coverage_below_target');
+  if (run.records_scraped > 0 && run.amount_coverage_pct < getAmountMinCoveragePct()) reasons.push('amount_coverage_below_target');
   if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
   if ((run.quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
 
@@ -398,12 +445,12 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
 }
 
 async function evaluateQualityAnomaly(site: SupportedSite, currentRun: ScheduledRun): Promise<QualityAnomalyEvaluation | null> {
-  const recent = await getStore().getRecentSuccessfulRuns(site, SCHEDULE_ANOMALY_BASELINE_RUNS + 1);
+  const recent = await getStore().getRecentSuccessfulRuns(site, getScheduleAnomalyBaselineRuns() + 1);
   const eligibleBaseline = recent
     .filter((run) => run.id !== currentRun.id && run.partial === 0 && run.deadline_hit === 0)
-    .slice(0, SCHEDULE_ANOMALY_BASELINE_RUNS);
+    .slice(0, getScheduleAnomalyBaselineRuns());
 
-  if (eligibleBaseline.length < SCHEDULE_ANOMALY_MIN_BASELINE_RUNS) {
+  if (eligibleBaseline.length < getScheduleAnomalyMinBaselineRuns()) {
     log({
       stage: 'scheduled_run_anomaly_skipped',
       site,
@@ -411,7 +458,7 @@ async function evaluateQualityAnomaly(site: SupportedSite, currentRun: Scheduled
       idempotency_key: currentRun.idempotency_key,
       reason: 'insufficient_baseline',
       baseline_sample_size: eligibleBaseline.length,
-      min_baseline_runs: SCHEDULE_ANOMALY_MIN_BASELINE_RUNS,
+      min_baseline_runs: getScheduleAnomalyMinBaselineRuns(),
     });
     return null;
   }
@@ -428,16 +475,16 @@ async function evaluateQualityAnomaly(site: SupportedSite, currentRun: Scheduled
   const recordsDropPct = baseline.records_scraped > 0
     ? ((baseline.records_scraped - currentRun.records_scraped) / baseline.records_scraped) * 100
     : 0;
-  if (baseline.records_scraped > 0 && recordsDropPct >= SCHEDULE_ANOMALY_RECORDS_DROP_PCT) {
+  if (baseline.records_scraped > 0 && recordsDropPct >= getScheduleAnomalyRecordsDropPct()) {
     metricsTriggered.push('records_scraped');
   }
-  if ((baseline.amount_coverage_pct - currentRun.amount_coverage_pct) >= SCHEDULE_ANOMALY_AMOUNT_COVERAGE_DROP_PTS) {
+  if ((baseline.amount_coverage_pct - currentRun.amount_coverage_pct) >= getScheduleAnomalyAmountCoverageDropPts()) {
     metricsTriggered.push('amount_coverage_pct');
   }
-  if ((baseline.ocr_success_pct - currentRun.ocr_success_pct) >= SCHEDULE_ANOMALY_OCR_SUCCESS_DROP_PTS) {
+  if ((baseline.ocr_success_pct - currentRun.ocr_success_pct) >= getScheduleAnomalyOcrSuccessDropPts()) {
     metricsTriggered.push('ocr_success_pct');
   }
-  if ((currentRun.row_fail_pct - baseline.row_fail_pct) >= SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS) {
+  if ((currentRun.row_fail_pct - baseline.row_fail_pct) >= getScheduleAnomalyRowFailRisePts()) {
     metricsTriggered.push('row_fail_pct');
   }
 
@@ -475,8 +522,8 @@ function isRetryableScheduledFailure(site: SupportedSite, failureClass: SiteConn
 }
 
 function getRetryDelayMs(attempt: number): number {
-  const raw = SCHEDULE_RUN_BASE_DELAY_MS * Math.pow(2, Math.max(attempt - 1, 0));
-  return Math.min(raw, SCHEDULE_RUN_MAX_DELAY_MS);
+  const raw = getScheduleRunBaseDelayMs() * Math.pow(2, Math.max(attempt - 1, 0));
+  return Math.min(raw, getScheduleRunMaxDelayMs());
 }
 
 function buildInjectedFailureError(failureClass: RetryableScheduledFailureClass): Error {
@@ -495,8 +542,8 @@ function buildInjectedFailureError(failureClass: RetryableScheduledFailureClass)
 function getSiteRecordBounds(site: SupportedSite): { min: number; max: number } {
   const configuredMax = getSiteSchedule(site).maxRecords;
   return {
-    min: clamp(configuredMax, SCHEDULE_MAX_RECORDS_FLOOR, SCHEDULE_MAX_RECORDS_CEILING),
-    max: clamp(configuredMax, SCHEDULE_MAX_RECORDS_FLOOR, SCHEDULE_MAX_RECORDS_CEILING),
+    min: clamp(configuredMax, getScheduleMaxRecordsFloor(), getScheduleMaxRecordsCeiling()),
+    max: clamp(configuredMax, getScheduleMaxRecordsFloor(), getScheduleMaxRecordsCeiling()),
   };
 }
 
@@ -522,7 +569,7 @@ async function hasNYCStableSuccessStreak(required = 3): Promise<boolean> {
 }
 
 function isAutoThrottleEnabled(site: SupportedSite): boolean {
-  return SCHEDULE_AUTO_THROTTLE && site !== 'ca_sos';
+  return isScheduleAutoThrottleEnabled() && site !== 'ca_sos';
 }
 
 async function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: number, currentCoveragePct: number): Promise<number> {
@@ -533,13 +580,13 @@ async function maybeAdjustEffectiveMaxRecords(site: SupportedSite, current: numb
     return clamp(current, bounds.min, bounds.max);
   }
 
-  if (currentCoveragePct < AMOUNT_MIN_COVERAGE_PCT) {
+  if (currentCoveragePct < getAmountMinCoveragePct()) {
     return clamp(Math.floor(current * 0.8), bounds.min, bounds.max);
   }
 
   const recent = await getStore().getRecentSuccessfulRuns(site, 2);
   const streak = [currentCoveragePct, ...recent.map((run) => run.amount_coverage_pct)];
-  if (streak.length >= 3 && streak.every((pct) => pct >= AMOUNT_MIN_COVERAGE_PCT + 2)) {
+  if (streak.length >= 3 && streak.every((pct) => pct >= getAmountMinCoveragePct() + 2)) {
     return clamp(Math.floor(current * 1.1), bounds.min, bounds.max);
   }
 
@@ -820,7 +867,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   const existing = await getStore().getByIdempotencyKey(idempotencyKey);
-  if (ENABLE_SCHEDULE_IDEMPOTENCY && existing && existing.status !== 'error') {
+  if (getEnableScheduleIdempotency() && existing && existing.status !== 'error') {
     log({ stage: 'scheduled_run_duplicate_skipped', site, idempotency_key: idempotencyKey, existing_run_id: existing.id });
     return { ...existing, duplicate_of: existing.id };
   }
@@ -897,7 +944,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     error: undefined,
     failure_class: undefined,
     attempt_count: 1,
-    max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+    max_attempts: getScheduleRunMaxAttempts(),
     retried: 0,
     retry_exhausted: 0,
     source_tab_title: undefined,
@@ -993,9 +1040,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
     let previousFailureClass = existing?.status === 'error' ? existing.failure_class : undefined;
     let injectedFailureConsumed = false;
-    for (let attempt = 1; attempt <= SCHEDULE_RUN_MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= getScheduleRunMaxAttempts(); attempt++) {
       run.attempt_count = attempt;
-      run.max_attempts = SCHEDULE_RUN_MAX_ATTEMPTS;
+      run.max_attempts = getScheduleRunMaxAttempts();
       run.retried = attempt > 1 ? 1 : 0;
       run.retry_exhausted = 0;
       run.status = 'running';
@@ -1008,7 +1055,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run_id: runId,
         idempotency_key: idempotencyKey,
         attempt,
-        max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+        max_attempts: getScheduleRunMaxAttempts(),
       });
 
       try {
@@ -1179,7 +1226,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           run_id: runId,
           idempotency_key: idempotencyKey,
           attempt,
-          max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+          max_attempts: getScheduleRunMaxAttempts(),
           records_scraped: records.length,
           rows_uploaded: uploadResult.uploaded,
           amount_coverage_pct: run.amount_coverage_pct,
@@ -1223,7 +1270,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           (connectivityAfterFailure.status === 'blocked' || connectivityAfterFailure.status === 'probing')
         );
         const retryable = isRetryableScheduledFailure(site, failureClass, errorMessage);
-        const hasRemainingAttempts = attempt < SCHEDULE_RUN_MAX_ATTEMPTS;
+        const hasRemainingAttempts = attempt < getScheduleRunMaxAttempts();
 
         if (retryable && hasRemainingAttempts && !retryBlockedByCircuit) {
           const delayMs = getRetryDelayMs(attempt);
@@ -1234,7 +1281,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
             run_id: runId,
             idempotency_key: idempotencyKey,
             attempt,
-            max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+            max_attempts: getScheduleRunMaxAttempts(),
             failure_class: failureClass,
             backoff_delay_ms: delayMs,
           });
@@ -1252,7 +1299,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           run_id: runId,
           idempotency_key: idempotencyKey,
           attempt,
-          max_attempts: SCHEDULE_RUN_MAX_ATTEMPTS,
+          max_attempts: getScheduleRunMaxAttempts(),
           failure_class: failureClass,
           retryable,
           retry_exhausted: run.retry_exhausted,
@@ -1298,7 +1345,7 @@ export async function getScheduleState(): Promise<ScheduleState> {
 
       const state: SiteScheduleState = {
         effective_max_records: effectiveMax,
-        target_amount_coverage_pct: AMOUNT_MIN_COVERAGE_PCT,
+        target_amount_coverage_pct: getAmountMinCoveragePct(),
         auto_throttle: isAutoThrottleEnabled(site),
         connectivity: {
           status: connectivity.status,

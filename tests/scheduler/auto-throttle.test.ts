@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockScraper = vi.fn();
@@ -79,6 +81,11 @@ describe('scheduler auto-throttle', () => {
     process.env.SCHEDULE_MAX_RECORDS = '75';
     process.env.SCHEDULE_MAX_RECORDS_FLOOR = '75';
     process.env.SCHEDULE_MAX_RECORDS_CEILING = '75';
+    delete process.env.LEAD_ALERT_WEBHOOK_URL;
+    delete process.env.LEAD_ALERT_RESEND_API_KEY;
+    delete process.env.LEAD_ALERT_EMAIL_FROM;
+    delete process.env.SCHEDULE_ALERT_WEBHOOK_URL;
+    fs.rmSync(path.join(process.cwd(), 'out', 'acris', 'scheduled-cache'), { recursive: true, force: true });
   });
 
   it('does not auto-throttle ca_sos after dynamic probing', async () => {
@@ -130,5 +137,24 @@ describe('scheduler auto-throttle', () => {
     const state = await getScheduleState();
     expect(state.nyc_acris.effective_max_records).toBe(75);
     expect(state.nyc_acris.auto_throttle).toBe(true);
+  });
+
+  it('re-reads scheduler env config across module reloads', async () => {
+    process.env.SCHEDULE_AUTO_THROTTLE = '0';
+    process.env.AMOUNT_MIN_COVERAGE_PCT = '80';
+
+    const { getScheduleState: getDisabledState } = await import('../../src/scheduler');
+    const disabledState = await getDisabledState();
+    expect(disabledState.nyc_acris.auto_throttle).toBe(false);
+    expect(disabledState.nyc_acris.target_amount_coverage_pct).toBe(80);
+
+    vi.resetModules();
+    process.env.SCHEDULE_AUTO_THROTTLE = '1';
+    process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
+
+    const { getScheduleState: getEnabledState } = await import('../../src/scheduler');
+    const enabledState = await getEnabledState();
+    expect(enabledState.nyc_acris.auto_throttle).toBe(true);
+    expect(enabledState.nyc_acris.target_amount_coverage_pct).toBe(95);
   });
 });

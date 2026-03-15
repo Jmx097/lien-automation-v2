@@ -29,18 +29,21 @@ export interface ScheduleRunRequest {
 }
 
 const DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
-const MAX_RECORDS_BY_SITE: Record<SupportedSite, number> = {
-  ca_sos: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
-  maricopa_recorder: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
-  nyc_acris: Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000'),
-};
-
 const allowedRetryFailureClasses = new Set<RetryableScheduledFailureClass>([
   'timeout_or_navigation',
   'viewer_roundtrip',
   'token_or_session_state',
   'sheet_export',
 ]);
+
+function getMaxRecordsBySite(): Record<SupportedSite, number> {
+  const ceiling = Number(process.env.SCHEDULE_MAX_RECORDS_CEILING ?? '1000');
+  return {
+    ca_sos: ceiling,
+    maricopa_recorder: ceiling,
+    nyc_acris: ceiling,
+  };
+}
 
 function asObject(input: unknown): Record<string, unknown> {
   return typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
@@ -66,14 +69,15 @@ function parseDate(value: string): Date | undefined {
 }
 
 function parseOptionalMaxRecords(raw: unknown, site: SupportedSite, issues: ValidationIssue[]): number | undefined {
+  const maxRecordsBySite = getMaxRecordsBySite();
   if (raw == null || raw === '') return undefined;
   const parsed = typeof raw === 'number' ? raw : Number(String(raw));
   if (!Number.isInteger(parsed) || parsed < 1) {
     issues.push({ field: 'max_records', message: 'max_records must be a positive integer' });
     return undefined;
   }
-  if (parsed > MAX_RECORDS_BY_SITE[site]) {
-    issues.push({ field: 'max_records', message: `max_records must be <= ${MAX_RECORDS_BY_SITE[site]} for ${site}` });
+  if (parsed > maxRecordsBySite[site]) {
+    issues.push({ field: 'max_records', message: `max_records must be <= ${maxRecordsBySite[site]} for ${site}` });
     return undefined;
   }
   return parsed;

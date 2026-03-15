@@ -20,7 +20,7 @@ curl -fsS http://127.0.0.1:8080/version
 
 You can also run `bash scripts/verify-runtime-version.sh` to enforce this check in one command.
 
-`npm run doctor` maps to `scripts/doctor.sh` (tooling/script preflight) and `npm run test:smoke` maps to `scripts/smoke-health.sh` (live `/health` check after starting `npm run dev`).
+`npm run doctor` runs `node scripts/doctor.js`, and `npm run test:smoke` runs `node scripts/smoke-health.js`.
 
 ---
 
@@ -72,9 +72,9 @@ You should then see `doctor`, `test:types`, and `test:smoke` (`scripts/doctor.sh
 
 ---
 
-## If `nvm` is NOT installed (your current case)
+## If `nvm` is NOT installed
 
-Install Node 22 from NodeSource and switch default `node`/`npm` binaries:
+Install Node 22 and confirm `node` / `npm` match the repo requirement in `.nvmrc`:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -99,23 +99,25 @@ node -v
 
 ---
 
-## Full local validation (exact commands)
+## Full local validation
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
 
-# clean partial install from interrupted npm ci
-rm -rf node_modules package-lock.json
 npm install
 
-mkdir -p data/db
 node src/queue/init-db.js
 
 npm run doctor
 npm run test:types
 npm run test:smoke
 npm run build
+npx vitest --config vitest.config.mts run
 ```
+
+Notes:
+- `node src/queue/init-db.js` is optional because queue and scheduler schema now auto-initialize on startup.
+- On Windows, use PowerShell equivalents for shell-specific commands like `rm -rf` and `mkdir -p`.
 
 ---
 

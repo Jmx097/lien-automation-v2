@@ -10,8 +10,8 @@ import {
   getNextRuns,
   getRunHistory,
   getScheduleState,
+  isScheduleFailureInjectionEnabled,
   runScheduledScrape,
-  SCHEDULE_FAILURE_INJECTION_ENABLED,
   type RetryableScheduledFailureClass,
 } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
@@ -256,7 +256,7 @@ app.post("/schedule/run", async (req, res) => {
     const requestedTestFailureClass = validation.value.test_retry_failure_class;
     const testFailureClass = requestedTestFailureClass as RetryableScheduledFailureClass | undefined;
 
-    if (requestedTestFailureClass && !SCHEDULE_FAILURE_INJECTION_ENABLED) {
+    if (requestedTestFailureClass && !isScheduleFailureInjectionEnabled()) {
       return res.status(400).json({ error: 'ENABLE_SCHEDULE_FAILURE_INJECTION is not enabled' });
     }
 

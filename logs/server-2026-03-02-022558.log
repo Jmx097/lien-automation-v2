@@ -1,6 +1,0 @@
-
-> lien-automation-v2@1.0.0 dev
-> ts-node src/server.ts
-
-[dotenv@17.3.1] injecting env (4) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
-Server running on port 8080

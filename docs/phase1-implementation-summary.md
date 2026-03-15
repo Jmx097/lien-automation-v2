@@ -15,13 +15,16 @@ Created in `src/gates/types.ts`:
 ### 2. Gate 1: Pre-Run Health Check
 
 Implemented in `src/gates/pre-run-health.ts`:
-- Docker container health check
-- Environment variable validation for required variables:
-  - `BRIGHT_DATA_PROXY`
-  - `GOOGLE_SHEETS_CREDENTIALS`
-  - `DATABASE_URL`
-- Canary request validation
+- Runtime environment validation for required variables:
+  - `SHEET_ID`
+  - `SHEETS_KEY`
+  - `SCHEDULE_RUN_TOKEN`
+  - one browser transport: `BRIGHTDATA_BROWSER_WS`, `BRIGHTDATA_PROXY_SERVER`, or `SBR_CDP_URL`
+  - per-site schedule env vars for the checked sites
+- `GET /schedule/health` readiness validation
+- `GET /version` runtime metadata validation
 - Playwright browser installation check
+- OCR runtime validation when `REQUIRE_OCR_TOOLS != 0`
 
 ### 3. Retry Policy Utility
 
@@ -82,6 +85,8 @@ if (!result.success) {
 }
 ```
 
+Warnings are returned separately for softer conditions such as merged-output fallback publishing.
+
 ### Using Retry Policy
 
 ```typescript
@@ -101,15 +106,9 @@ const result = await processRecordWithRetry(
 npm run demo:chunk chunk-001 01/01/2024 01/31/2024 10
 ```
 
-## Next Steps
+## Status Note
 
-As outlined in the original plan, the next phases would include:
-
-1. **Phase 2**: Implement chunking logic and update queue schema
-2. **Phase 3**: Implement Gate 2 (chunk integrity) and Gate 3 (post-run verification)
-3. **Phase 4**: Docker hardening with resource limits and health checks
-4. **Phase 5**: Implement watchdog script and monitoring
-5. **Phase 6**: Full Playwright MCP integration for debugging
+This summary reflects the current gate implementation, but the broader project has moved beyond the original Phase 1 scope. For current priorities, use `PR_SUMMARY.md` and `docs/production-hardening-assessment.md` as the active roadmap references.
 
 ## Testing
 

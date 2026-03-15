@@ -15,8 +15,8 @@ The goal is to identify what is already strong, what still introduces production
 
 The codebase already has several mature production controls (scheduler readiness checks, persisted schedule history, connectivity state machine, OCR runtime checks, and confidence scoring for extracted fields). The fastest path to materially higher reliability is **closing a few consistency and operations gaps**:
 
-1. **Unify and modernize pre-run health checks** so they align with actual runtime env vars and execution model.
-2. **Strengthen API input/runtime guardrails** (strict request schema validation + fail-fast dependency checks per route).
+1. **Finish unifying and modernizing pre-run health checks** so they stay aligned with the runtime env contract and execution model.
+2. **Expand runtime guardrails beyond request validation** with clearer dependency failures and route-level operator signals.
 3. **Codify site-specific SLO/SLA signals** (success rate, row-level extraction confidence, retry behavior, and circuit/open recovery metrics).
 4. **Harden operational runbooks with alert thresholds tied to scheduler/connectivity states** (not just ad hoc logs).
 
@@ -59,16 +59,20 @@ When preflight checks drift from real runtime dependencies, you can get false po
 ## 2) API-level runtime safety (high priority)
 
 ### Observed risk
-Route handlers perform manual shape checks but do not enforce a strict request schema with typed coercion and uniform validation errors.
+The repository now has shared request validation for scrape and schedule routes, but runtime dependency failures and operator-facing error handling still vary by route.
 
 ### Why this matters
-In production, malformed payloads and edge-case values are common and can create inconsistent behavior across routes (`/scrape`, `/enqueue`, `/scrape-enhanced`, `/schedule/run`).
+Request shape validation is in place, but production issues also come from missing credentials, downstream reachability, and inconsistent failure surfaces across `/scrape`, `/enqueue`, `/scrape-enhanced`, and `/schedule/run`.
+
+### Implemented now
+- Shared request validation exists in `src/http/validation.ts`.
+- Date format and date-range validity are enforced.
+- `max_records` bounds are enforced.
+- Validation failures return a stable 400 error payload.
 
 ### Recommended tightening
-- Introduce shared request schema validation (e.g., zod or equivalent).
-- Enforce date format and date-range validity (`date_start <= date_end`).
-- Enforce bounded `max_records` with site-specific min/max safety ceilings.
-- Return stable error shape for all 4xx validation failures.
+- Add route-level dependency checks with clearer 5xx operator messages when credentials or transports are missing.
+- Standardize non-validation runtime error payloads and logging across write routes.
 
 ---
 
