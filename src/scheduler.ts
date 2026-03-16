@@ -1164,7 +1164,10 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         const deadlineHit = isPastDeadline(site, slot, new Date());
         const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit, qualitySummary);
         const tabTitle = formatRunTabName(`Scheduled_${site}_${slot}_${runId}`, date_start, date_end, new Date());
-        const uploadResult = await pushToSheetsForTab(records, tabTitle, { runPartial: quality.partial === 1 });
+        const uploadResult = await pushToSheetsForTab(records, tabTitle, {
+          runPartial: quality.partial === 1,
+          scheduledRunId: runId,
+        });
         if (uploadResult.uploaded !== records.length) {
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }

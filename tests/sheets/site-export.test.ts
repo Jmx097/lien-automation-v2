@@ -252,4 +252,32 @@ describe('site-specific sheet export mapping', () => {
     expect(rows[0][11]).toBe('');
     expect(rows[0][13]).toBe('');
   });
+
+  it('appends the full scheduled run id for scheduled tabs without changing the visible export schema', () => {
+    const rows = buildRowValues([
+      {
+        state: 'CA',
+        source: 'ca_sos',
+        ucc_type: 'Federal Tax Lien',
+        debtor_name: 'JANE DOE',
+        debtor_address: '123 Main St, Los Angeles, CA 90001',
+        file_number: 'U260017962937',
+        secured_party_name: 'Internal Revenue Service',
+        secured_party_address: '',
+        status: 'Active',
+        filing_date: '03/10/2026',
+        lapse_date: '12/31/9999',
+        document_type: 'Notice of Federal Tax Lien',
+        pdf_filename: '',
+        processed: true,
+        confidence_score: 0.98,
+        lead_type: 'Lien',
+      },
+    ], {
+      scheduledRunId: 'sched_ca_sos_1773628803417_2d1c36',
+    });
+
+    expect(rows[0]).toHaveLength(FROZEN_SHEET_HEADERS.length + 1);
+    expect(rows[0][18]).toBe('sched_ca_sos_1773628803417_2d1c36');
+  });
 });

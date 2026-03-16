@@ -345,6 +345,7 @@ type SpreadsheetMetadataCache = {
 
 type BuildRowOptions = {
   runPartial?: boolean;
+  scheduledRunId?: string;
 };
 
 type ReviewReason =
@@ -510,7 +511,32 @@ export function formatRunTabName(
   const ts = getPacificTimestampForTab(runStartedAt);
   const suffix = `_${start}_to_${end}_${ts}_Pacific`;
   const maxLabelLength = Math.max(1, 100 - suffix.length);
-  const truncatedLabel = safeLabel.slice(0, maxLabelLength);
+  const scheduledRunId = parseScheduledRunIdFromSourceTab(safeLabel);
+  let truncatedLabel = safeLabel;
+
+  if (safeLabel.length > maxLabelLength) {
+    if (scheduledRunId && safeLabel.includes(scheduledRunId)) {
+      const runIdIndex = safeLabel.indexOf(scheduledRunId);
+      const prefix = safeLabel.slice(0, runIdIndex).replace(/_+$/g, '');
+      const suffixLabel = safeLabel.slice(runIdIndex);
+      const prefixBudget = Math.max(0, maxLabelLength - suffixLabel.length);
+      const trimmedPrefix = prefixBudget > 0
+        ? prefix.slice(Math.max(0, prefix.length - prefixBudget)).replace(/^_+/g, '')
+        : '';
+      truncatedLabel = [trimmedPrefix, suffixLabel].filter(Boolean).join('_');
+    } else {
+      truncatedLabel = safeLabel.slice(0, maxLabelLength);
+    }
+  }
+
+  if (truncatedLabel.length > maxLabelLength) {
+    truncatedLabel = truncatedLabel.slice(Math.max(0, truncatedLabel.length - maxLabelLength)).replace(/^_+/g, '');
+  }
+
+  if (!truncatedLabel) {
+    truncatedLabel = safeLabel.slice(0, maxLabelLength) || 'Run';
+  }
+
   return `${truncatedLabel}${suffix}`;
 }
 
@@ -700,12 +726,18 @@ function buildDirectorRowValue(r: LienRecord): any[] {
 export function buildRowValues(rows: LienRecord[], options: BuildRowOptions = {}) {
   return rows.map((row) => {
     const directorRow = buildDirectorRowValue(row);
-    return [
+    const values = [
       ...directorRow,
       row.source ?? '',
       row.file_number ? `'${row.file_number}` : '',
       options.runPartial ? '1' : '0',
     ];
+
+    if (options.scheduledRunId) {
+      values.push(options.scheduledRunId);
+    }
+
+    return values;
   });
 }
 
@@ -883,7 +915,9 @@ function normalizeCollectedRow(rawRow: any[], headerRow: any[] | undefined, sour
     row: normalized,
     sourceTab,
     sourceTabCapturedAt: parseSourceTabCapturedAt(sourceTab),
-    scheduledRunId: stringValue(getCellByHeader(rawRow, headerIndex, 'ScheduledRunId') ?? '') || parseScheduledRunIdFromSourceTab(sourceTab),
+    scheduledRunId:
+      stringValue(getCellByHeader(rawRow, headerIndex, 'ScheduledRunId') ?? fallbackValue(FROZEN_SHEET_HEADERS.length) ?? '') ||
+      parseScheduledRunIdFromSourceTab(sourceTab),
   };
 }
 

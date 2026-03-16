@@ -188,6 +188,16 @@ describe('syncMasterSheetTab', () => {
     return row;
   }
 
+  function sourceRowWithScheduledRunId(
+    scheduledRunId: string,
+    overrides: Partial<Record<number, any>> = {}
+  ): any[] {
+    return [
+      ...sourceRow(overrides),
+      scheduledRunId,
+    ];
+  }
+
   function mergedMasterRow(
     overrides: Partial<Record<number, any>> = {},
     meta: { sourceTab?: string; scheduledRunId?: string } = {}
@@ -613,8 +623,79 @@ describe('syncMasterSheetTab', () => {
     );
 
     expect(tabName.length).toBeLessThanOrEqual(100);
+    expect(tabName).toContain('sched_maricopa_recorder_1773625728891_03a3db');
     expect(tabName).toContain('_03-09-2026_to_03-16-2026_');
     expect(tabName.endsWith('_Pacific')).toBe(true);
+  });
+
+  it('preserves the full scheduled run id from the row payload when the visible tab title is shortened', async () => {
+    seedWorkbook('source-sheet', {
+      'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific': [
+        sourceRowWithScheduledRunId(
+          'sched_ca_sos_1773628803417_2d1c36',
+          { 0: 20, 14: 0.98, 15: 'ca_sos', 16: 'hidden-run-id-file' }
+        ),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({
+      currentSourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 0,
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      mergedMasterRow(
+        { 0: 20, 14: 0.98, 15: 'ca_sos', 16: 'hidden-run-id-file' },
+        {
+          sourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+          scheduledRunId: 'sched_ca_sos_1773628803417_2d1c36',
+        }
+      ),
+    ]);
+  });
+
+  it('accepts a fresh clean CA row even when many retained identical rows already exist', async () => {
+    seedWorkbook('source-sheet', {
+      'Scheduled_ca_sos_morning_sched_ca_sos_1773396024549_81fdd3_03-06-2026_to_03-13-2026_20260313T030102_': [
+        sourceRow({ 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }),
+      ],
+      'Scheduled_ca_sos_afternoon_sched_ca_sos_1773417624033_7fd9ef_03-06-2026_to_03-13-2026_20260313T09010': [
+        sourceRow({ 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }),
+      ],
+      'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific': [
+        sourceRowWithScheduledRunId(
+          'sched_ca_sos_1773628803417_2d1c36',
+          { 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }
+        ),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({
+      currentSourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 2,
+      current_run_conflict_row_count: 0,
+      review_summary: expect.objectContaining({
+        accepted_row_count: 1,
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      mergedMasterRow(
+        { 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' },
+        {
+          sourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+          scheduledRunId: 'sched_ca_sos_1773628803417_2d1c36',
+        }
+      ),
+    ]);
   });
 
   it('tags current-run duplicates against retained review rows with explicit conflict provenance', async () => {
