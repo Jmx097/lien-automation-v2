@@ -17,13 +17,18 @@ schedule_health_json="$(curl -fsS "${SERVICE_URL}/schedule/health")"
 schedule_json="$(curl -fsS "${SERVICE_URL}/schedule")"
 version_json="$(curl -fsS "${SERVICE_URL}/version")"
 
-runtime_sha="$(printf '%s' "${version_json}" | node -e "process.stdin.once('data', d => console.log(JSON.parse(d).git_sha ?? 'unknown'))")"
-persisted_flag="$(printf '%s' "${schedule_json}" | node -e "process.stdin.once('data', d => console.log(JSON.parse(d).persisted === true ? 'true' : 'false'))")"
-history_shape_ok="$(printf '%s' "${schedule_json}" | node -e "process.stdin.once('data', d => { const parsed = JSON.parse(d); console.log(Array.isArray(parsed.history) ? 'true' : 'false'); })")"
-scheduler_store="$(printf '%s' "${schedule_health_json}" | node -e "process.stdin.once('data', d => { const parsed = JSON.parse(d); const checks = Array.isArray(parsed.checks) ? parsed.checks : []; const db = checks.find((check) => check.name === 'db_reachable'); const detail = String(db?.detail ?? ''); const match = detail.match(/scheduler_store=([^,\\s]+)/); console.log(match?.[1] ?? 'unknown'); })")"
-schedule_ready="$(printf '%s' "${schedule_health_json}" | node -e "process.stdin.once('data', d => { const parsed = JSON.parse(d); console.log(parsed.status === 'ready' ? 'true' : 'false'); })")"
-target_reachable="$(printf '%s' "${schedule_health_json}" | node -e "process.stdin.once('data', d => { const parsed = JSON.parse(d); console.log(parsed.merged_output?.target_reachable === true ? 'true' : 'false'); })")"
-fallback_active="$(printf '%s' "${schedule_health_json}" | node -e "process.stdin.once('data', d => { const parsed = JSON.parse(d); console.log(parsed.merged_output?.fallback_active === true ? 'true' : 'false'); })")"
+node_json_eval() {
+  local expression="$1"
+  node -e "const fs = require('fs'); const input = fs.readFileSync(0, 'utf8'); const parsed = JSON.parse(input); ${expression}"
+}
+
+runtime_sha="$(printf '%s' "${version_json}" | node_json_eval "console.log(parsed.git_sha ?? 'unknown')")"
+persisted_flag="$(printf '%s' "${schedule_json}" | node_json_eval "console.log(parsed.persisted === true ? 'true' : 'false')")"
+history_shape_ok="$(printf '%s' "${schedule_json}" | node_json_eval "console.log(Array.isArray(parsed.history) ? 'true' : 'false')")"
+scheduler_store="$(printf '%s' "${schedule_health_json}" | node_json_eval "const checks = Array.isArray(parsed.checks) ? parsed.checks : []; const db = checks.find((check) => check.name === 'db_reachable'); const detail = String(db?.detail ?? ''); const match = detail.match(/scheduler_store=([^,\\s]+)/); console.log(match?.[1] ?? 'unknown')")"
+schedule_ready="$(printf '%s' "${schedule_health_json}" | node_json_eval "console.log(parsed.status === 'ready' ? 'true' : 'false')")"
+target_reachable="$(printf '%s' "${schedule_health_json}" | node_json_eval "console.log(parsed.merged_output?.target_reachable === true ? 'true' : 'false')")"
+fallback_active="$(printf '%s' "${schedule_health_json}" | node_json_eval "console.log(parsed.merged_output?.fallback_active === true ? 'true' : 'false')")"
 
 if [[ "${runtime_sha}" != "${EXPECTED_GIT_SHA}" ]]; then
   echo "Expected git_sha ${EXPECTED_GIT_SHA} but service reports ${runtime_sha}" >&2
