@@ -504,12 +504,14 @@ export function formatRunTabName(
   dateEnd: string,
   runStartedAt: Date
 ): string {
-  const safeLabel = (label || 'Run').trim().replace(/\s+/g, '_');
+  const safeLabel = sanitizeSheetTitle((label || 'Run').trim().replace(/\s+/g, '_')) || 'Run';
   const start = (dateStart || '').trim().replace(/\//g, '-');
   const end = (dateEnd || '').trim().replace(/\//g, '-');
   const ts = getPacificTimestampForTab(runStartedAt);
-  const raw = `${safeLabel}_${start}_to_${end}_${ts}_Pacific`;
-  return sanitizeSheetTitle(raw);
+  const suffix = `_${start}_to_${end}_${ts}_Pacific`;
+  const maxLabelLength = Math.max(1, 100 - suffix.length);
+  const truncatedLabel = safeLabel.slice(0, maxLabelLength);
+  return `${truncatedLabel}${suffix}`;
 }
 
 async function listSheetTitles(
@@ -1198,6 +1200,28 @@ export function classifyMergedRows(
     const sortedAccepted = [...acceptedCandidates].sort(compareCandidatePreference);
     const preferredCandidate = sortedAccepted[0];
     const equallyPreferred = sortedAccepted.filter((candidate) => compareCandidatePreference(candidate, preferredCandidate) === 0);
+    const equallyPreferredCurrentRun = equallyPreferred.filter((candidate) => isCurrentRunCandidate(candidate));
+
+    if (equallyPreferredCurrentRun.length === 1) {
+      acceptedRows.push(buildAcceptedRow(equallyPreferredCurrentRun[0]));
+      for (const candidate of bucket.filter((entry) => entry !== equallyPreferredCurrentRun[0])) {
+        const conflictType: ConflictType =
+          isCurrentRunCandidate(equallyPreferredCurrentRun[0]) && isCurrentRunCandidate(candidate)
+            ? 'lower_ranked_loser_against_current_run'
+            : 'lower_ranked_loser_against_accepted_candidate';
+        const retained = quarantineCandidate(
+          candidate,
+          quarantinedRows,
+          reviewReasonCounts,
+          options.reviewRetentionCutoff,
+          'conflict_lower_confidence',
+          conflictType
+        );
+        if (!retained) purgedReviewRowCount += 1;
+        else trackCurrentRunQuarantine(candidate, conflictType);
+      }
+      continue;
+    }
 
     if (equallyPreferred.length !== 1) {
       for (const candidate of bucket) {

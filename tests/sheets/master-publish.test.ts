@@ -532,6 +532,44 @@ describe('syncMasterSheetTab', () => {
     ]);
   });
 
+  it('prefers the current run when an otherwise-identical accepted row already exists in retained history', async () => {
+    seedWorkbook('source-sheet', {
+      'Scheduled_old_sched_ca_sos_1773620000000_deadbe_03-09-2026_to_03-16-2026': [
+        sourceRow({ 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' }),
+      ],
+      'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026': [
+        sourceRow({ 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({
+      currentSourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 1,
+      current_run_conflict_row_count: 0,
+      review_summary: expect.objectContaining({
+        accepted_row_count: 1,
+        review_reason_counts: expect.objectContaining({
+          conflict_lower_confidence: 1,
+          lower_ranked_loser_against_accepted_candidate: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
+      mergedMasterRow(
+        { 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' },
+        {
+          sourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026',
+          scheduledRunId: 'sched_ca_sos_1773625523337_53ff21',
+        }
+      ),
+    ]);
+  });
+
   it('reports current-run quarantine, conflict, and retained prior review counts separately', async () => {
     seedWorkbook('source-sheet', {
       Scheduled_old: [
@@ -563,6 +601,20 @@ describe('syncMasterSheetTab', () => {
       'low_confidence',
       'low_confidence',
     ]);
+  });
+
+  it('keeps the timestamp suffix when long run labels are truncated for sheet titles', async () => {
+    const { formatRunTabName } = await import('../../src/sheets/push');
+    const tabName = formatRunTabName(
+      'Scheduled_maricopa_recorder_evening_sched_maricopa_recorder_1773625728891_03a3db',
+      '03/09/2026',
+      '03/16/2026',
+      new Date('2026-03-15T22:15:30.000Z')
+    );
+
+    expect(tabName.length).toBeLessThanOrEqual(100);
+    expect(tabName).toContain('_03-09-2026_to_03-16-2026_');
+    expect(tabName.endsWith('_Pacific')).toBe(true);
   });
 
   it('tags current-run duplicates against retained review rows with explicit conflict provenance', async () => {
