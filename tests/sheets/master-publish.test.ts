@@ -623,9 +623,10 @@ describe('syncMasterSheetTab', () => {
     );
 
     expect(tabName.length).toBeLessThanOrEqual(100);
+    expect(tabName.startsWith('Scheduled_')).toBe(true);
     expect(tabName).toContain('sched_maricopa_recorder_1773625728891_03a3db');
     expect(tabName).toContain('_03-09-2026_to_03-16-2026_');
-    expect(tabName.endsWith('_Pacific')).toBe(true);
+    expect(/_\d{8}T\d{6}(?:_Pacific)?$/.test(tabName)).toBe(true);
   });
 
   it('preserves the full scheduled run id from the row payload when the visible tab title is shortened', async () => {

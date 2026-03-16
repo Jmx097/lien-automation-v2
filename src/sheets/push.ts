@@ -509,9 +509,10 @@ export function formatRunTabName(
   const start = (dateStart || '').trim().replace(/\//g, '-');
   const end = (dateEnd || '').trim().replace(/\//g, '-');
   const ts = getPacificTimestampForTab(runStartedAt);
-  const suffix = `_${start}_to_${end}_${ts}_Pacific`;
+  let suffix = `_${start}_to_${end}_${ts}_Pacific`;
   const maxLabelLength = Math.max(1, 100 - suffix.length);
   const scheduledRunId = parseScheduledRunIdFromSourceTab(safeLabel);
+  const scheduledPrefix = safeLabel.startsWith('Scheduled_') ? 'Scheduled_' : '';
   let truncatedLabel = safeLabel;
 
   if (safeLabel.length > maxLabelLength) {
@@ -519,25 +520,54 @@ export function formatRunTabName(
       const runIdIndex = safeLabel.indexOf(scheduledRunId);
       const prefix = safeLabel.slice(0, runIdIndex).replace(/_+$/g, '');
       const suffixLabel = safeLabel.slice(runIdIndex);
+      const reservedPrefixLength = Math.min(scheduledPrefix.length, maxLabelLength);
       const prefixBudget = Math.max(0, maxLabelLength - suffixLabel.length);
-      const trimmedPrefix = prefixBudget > 0
-        ? prefix.slice(Math.max(0, prefix.length - prefixBudget)).replace(/^_+/g, '')
+      const dynamicPrefixBudget = Math.max(0, prefixBudget - reservedPrefixLength);
+      const prefixRemainder = scheduledPrefix ? prefix.slice(scheduledPrefix.length) : prefix;
+      const trimmedRemainder = dynamicPrefixBudget > 0
+        ? prefixRemainder.slice(Math.max(0, prefixRemainder.length - dynamicPrefixBudget)).replace(/^_+/g, '')
         : '';
-      truncatedLabel = [trimmedPrefix, suffixLabel].filter(Boolean).join('_');
+      const preservedPrefix = scheduledPrefix.slice(0, reservedPrefixLength);
+      truncatedLabel = `${preservedPrefix}${trimmedRemainder ? `${trimmedRemainder}_` : ''}${suffixLabel}`;
     } else {
       truncatedLabel = safeLabel.slice(0, maxLabelLength);
     }
   }
 
   if (truncatedLabel.length > maxLabelLength) {
-    truncatedLabel = truncatedLabel.slice(Math.max(0, truncatedLabel.length - maxLabelLength)).replace(/^_+/g, '');
+    if (
+      scheduledPrefix &&
+      scheduledRunId &&
+      truncatedLabel.startsWith(scheduledPrefix) &&
+      truncatedLabel.includes(scheduledRunId) &&
+      maxLabelLength > scheduledPrefix.length
+    ) {
+      const runIdIndex = truncatedLabel.indexOf(scheduledRunId);
+      const suffixLabel = truncatedLabel.slice(runIdIndex);
+      const dynamicBudget = maxLabelLength - scheduledPrefix.length - suffixLabel.length;
+      const dynamicPrefixStart = scheduledPrefix.length;
+      const dynamicPrefix = dynamicBudget > 0
+        ? truncatedLabel.slice(
+          Math.max(dynamicPrefixStart, runIdIndex - dynamicBudget),
+          runIdIndex
+        ).replace(/^_+/g, '').replace(/_+$/g, '')
+        : '';
+      truncatedLabel = `${scheduledPrefix}${dynamicPrefix ? `${dynamicPrefix}_` : ''}${suffixLabel}`.replace(/_{2,}/g, '_');
+    } else {
+      truncatedLabel = truncatedLabel.slice(Math.max(0, truncatedLabel.length - maxLabelLength)).replace(/^_+/g, '');
+    }
   }
 
   if (!truncatedLabel) {
     truncatedLabel = safeLabel.slice(0, maxLabelLength) || 'Run';
   }
 
-  return `${truncatedLabel}${suffix}`;
+  let finalTitle = `${truncatedLabel}${suffix}`;
+  if (finalTitle.length > 100 && finalTitle.endsWith('_Pacific')) {
+    finalTitle = finalTitle.slice(0, -'_Pacific'.length);
+  }
+
+  return finalTitle.slice(0, 100);
 }
 
 async function listSheetTitles(
