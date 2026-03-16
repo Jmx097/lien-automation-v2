@@ -77,6 +77,12 @@ describe('scheduler connectivity state', () => {
       .toBe('session_missing_or_stale');
   });
 
+  it('classifies Maricopa Sheets quota failures as sheet_export', () => {
+    expect(
+      classifyMaricopaFailure("Error: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com'")
+    ).toBe('sheet_export');
+  });
+
   it('classifies NYC out-of-range result windows explicitly', () => {
     expect(
       classifyNYCAcrisFailure('ACRIS returned 10 rows outside requested range 03/08/2026-03/15/2026 upstream_range=03/04/2026-03/06/2026')

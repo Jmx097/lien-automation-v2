@@ -75,6 +75,22 @@ describe('scheduler auto-throttle', () => {
       source_tabs: 1,
       target_spreadsheet_id: 'source-sheet',
       fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 2,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 2,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {},
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
     });
     process.env.AMOUNT_MIN_COVERAGE_PCT = '95';
     process.env.SCHEDULE_AUTO_THROTTLE = '1';

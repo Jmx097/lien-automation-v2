@@ -145,6 +145,10 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
 export function classifyMaricopaFailure(message: string): MaricopaConnectivityFailureClass {
   const normalized = message.toLowerCase();
 
+  if (/sheet_upload_mismatch|sheet export|googleapis|sheets|quota exceeded|read requests per minute/i.test(message)) {
+    return 'sheet_export';
+  }
+
   if (/session is stale|session is missing|refresh:maricopa-session|session_missing_or_stale/.test(normalized)) {
     return 'session_missing_or_stale';
   }

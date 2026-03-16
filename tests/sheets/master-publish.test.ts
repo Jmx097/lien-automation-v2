@@ -8,6 +8,11 @@ type SheetTab = {
 
 const workbookState = new Map<string, Map<string, SheetTab>>();
 const workbookAccess = new Map<string, { read: boolean; write: boolean }>();
+const requestCounts = {
+  spreadsheetsGet: 0,
+  valuesGet: 0,
+  valuesBatchGet: 0,
+};
 
 function ensureWorkbook(spreadsheetId: string): Map<string, SheetTab> {
   let workbook = workbookState.get(spreadsheetId);
@@ -46,6 +51,7 @@ vi.mock('googleapis', () => {
       sheets: () => ({
         spreadsheets: {
           get: async ({ spreadsheetId }: { spreadsheetId: string }) => {
+            requestCounts.spreadsheetsGet += 1;
             const access = getWorkbookAccess(spreadsheetId);
             if (!access.read) throw new Error(`Access denied to ${spreadsheetId}`);
             const workbook = ensureWorkbook(spreadsheetId);
@@ -61,18 +67,22 @@ vi.mock('googleapis', () => {
             const access = getWorkbookAccess(spreadsheetId);
             if (!access.write) throw new Error(`Access denied to ${spreadsheetId}`);
             const workbook = ensureWorkbook(spreadsheetId);
+            const replies: any[] = [];
             for (const request of requestBody.requests) {
               if (request.addSheet) {
                 const title = request.addSheet.properties.title;
                 if (!workbook.has(title)) {
-                  workbook.set(title, { sheetId: workbook.size + 1, rows: [] });
+                  const sheetId = workbook.size + 1;
+                  workbook.set(title, { sheetId, rows: [] });
+                  replies.push({ addSheet: { properties: { title, sheetId } } });
                 }
               }
             }
-            return {};
+            return { data: { replies } };
           },
           values: {
             get: async ({ spreadsheetId, range }: { spreadsheetId: string; range: string }) => {
+              requestCounts.valuesGet += 1;
               const access = getWorkbookAccess(spreadsheetId);
               if (!access.read) throw new Error(`Access denied to ${spreadsheetId}`);
               const workbook = ensureWorkbook(spreadsheetId);
@@ -80,6 +90,22 @@ vi.mock('googleapis', () => {
               const tab = workbook.get(title);
               const values = row === 1 ? (tab?.header ?? []) : (tab?.rows ?? []);
               return { data: { values: values.map((valueRow) => [...valueRow]) } };
+            },
+            batchGet: async ({ spreadsheetId, ranges }: { spreadsheetId: string; ranges: string[] }) => {
+              requestCounts.valuesBatchGet += 1;
+              const access = getWorkbookAccess(spreadsheetId);
+              if (!access.read) throw new Error(`Access denied to ${spreadsheetId}`);
+              const workbook = ensureWorkbook(spreadsheetId);
+              const valueRanges = ranges.map((range) => {
+                const { title, row } = parseRange(range);
+                const tab = workbook.get(title);
+                const values = row === 1 ? (tab?.header ?? []) : (tab?.rows ?? []);
+                return {
+                  range,
+                  values: values.map((valueRow) => [...valueRow]),
+                };
+              });
+              return { data: { valueRanges } };
             },
             update: async ({ spreadsheetId, range, requestBody }: { spreadsheetId: string; range: string; requestBody: { values: any[][] } }) => {
               const access = getWorkbookAccess(spreadsheetId);
@@ -119,6 +145,9 @@ describe('syncMasterSheetTab', () => {
     vi.resetModules();
     workbookState.clear();
     workbookAccess.clear();
+    requestCounts.spreadsheetsGet = 0;
+    requestCounts.valuesGet = 0;
+    requestCounts.valuesBatchGet = 0;
     process.env.SHEETS_KEY = JSON.stringify({
       client_email: 'svc@example.com',
       private_key: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n',
@@ -249,6 +278,24 @@ describe('syncMasterSheetTab', () => {
       'ConflictType',
     ]);
     expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([Array(15).fill('old-master')]);
+  });
+
+  it('uses batched scheduled-tab reads and workbook metadata caching during merge sync', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_CA: [
+        sourceRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }),
+      ],
+      Scheduled_NYC: [
+        sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    await syncMasterSheetTab();
+
+    expect(requestCounts.valuesBatchGet).toBe(2);
+    expect(requestCounts.spreadsheetsGet).toBe(2);
+    expect(requestCounts.valuesGet).toBe(1);
   });
 
   it('falls back to the source workbook when the destination sheet is not writable', async () => {

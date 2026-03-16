@@ -1175,6 +1175,16 @@ async function recoverResultsSession(page: Page, state: SearchState, manifest?: 
   await loadResultPage(page, state.pageNum || 1, state, manifest);
 }
 
+async function resubmitFirstResultPageFromCanonicalSearch(
+  page: Page,
+  state: SearchState,
+  manifest?: RunManifest,
+): Promise<void> {
+  state.pageNum = 1;
+  await initializeSearchSession(page, state, manifest);
+  await loadResultPage(page, 1, state, manifest);
+}
+
 async function gotoPageUntilReady(
   page: Page,
   manifest: RunManifest | undefined,
@@ -1802,7 +1812,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
             manifest.warnings.push(
               `result_window_mismatch_retry requested=${state.requestDateRange.start}-${state.requestDateRange.end}`
             );
-            await recoverResultsSession(page, state, manifest);
+            await resubmitFirstResultPageFromCanonicalSearch(page, state, manifest);
             rows = await extractResultRows(page);
           }
 

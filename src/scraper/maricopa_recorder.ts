@@ -90,7 +90,8 @@ export type MaricopaConnectivityFailureClass =
   | 'artifact_candidates_missing'
   | 'artifact_fetch_failed'
   | 'challenge_or_interstitial'
-  | 'ocr_runtime_unavailable';
+  | 'ocr_runtime_unavailable'
+  | 'sheet_export';
 
 export interface MaricopaProbeResult {
   ok: boolean;

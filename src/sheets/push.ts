@@ -273,6 +273,36 @@ function getSheetsClient() {
   return google.sheets({ version: 'v4', auth });
 }
 
+function isSheetsQuotaError(error: unknown): boolean {
+  const message = String((error as { message?: string })?.message ?? error ?? '');
+  return /quota exceeded|rate limit|too many requests|429/i.test(message);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withSheetsRetry<T>(
+  operation: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error: unknown) {
+      lastError = error;
+      if (attempt >= attempts || !isSheetsQuotaError(error)) {
+        throw error;
+      }
+      await sleep(250 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
 export interface SpreadsheetAccessResult {
   ok: boolean;
   detail?: string;
@@ -302,6 +332,16 @@ export interface MasterSheetSyncResult {
   purged_review_row_count: number;
   review_summary: ReviewClassificationSummary;
 }
+
+type SheetMetadata = {
+  title: string;
+  sheetId: number;
+};
+
+type SpreadsheetMetadataCache = {
+  spreadsheetId: string;
+  sheetsByTitle: Map<string, SheetMetadata>;
+};
 
 type BuildRowOptions = {
   runPartial?: boolean;
@@ -476,12 +516,25 @@ async function listSheetTitles(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string
 ): Promise<string[]> {
-  const res = await sheets.spreadsheets.get({ spreadsheetId });
-  const titles =
-    res.data.sheets
-      ?.map(s => s.properties?.title)
-      .filter((t): t is string => typeof t === 'string') ?? [];
-  return titles;
+  const metadata = await loadSpreadsheetMetadata(sheets, spreadsheetId);
+  return Array.from(metadata.sheetsByTitle.keys());
+}
+
+async function loadSpreadsheetMetadata(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string
+): Promise<SpreadsheetMetadataCache> {
+  const res = await withSheetsRetry(() => sheets.spreadsheets.get({ spreadsheetId }));
+  const sheetsByTitle = new Map<string, SheetMetadata>();
+
+  for (const sheet of res.data.sheets ?? []) {
+    const title = sheet.properties?.title;
+    const sheetId = sheet.properties?.sheetId;
+    if (typeof title !== 'string' || typeof sheetId !== 'number') continue;
+    sheetsByTitle.set(title, { title, sheetId });
+  }
+
+  return { spreadsheetId, sheetsByTitle };
 }
 
 export async function checkSpreadsheetAccess(spreadsheetId: string): Promise<SpreadsheetAccessResult> {
@@ -500,10 +553,12 @@ export async function checkSpreadsheetAccess(spreadsheetId: string): Promise<Spr
 async function ensureSheetTabExists(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,
-  requestedTitle: string
+  requestedTitle: string,
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<string> {
   const baseTitle = sanitizeSheetTitle(requestedTitle) || 'Run';
-  const existing = new Set(await listSheetTitles(sheets, spreadsheetId));
+  const workbookMetadata = metadata ?? await loadSpreadsheetMetadata(sheets, spreadsheetId);
+  const existing = new Set(workbookMetadata.sheetsByTitle.keys());
 
   if (existing.has(baseTitle)) return baseTitle;
 
@@ -516,12 +571,23 @@ async function ensureSheetTabExists(
         : `${baseTitle.slice(0, 100 - suffix.length)}${suffix}`;
   }
 
-  await sheets.spreadsheets.batchUpdate({
+  const response = await withSheetsRetry(() => sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
       requests: [{ addSheet: { properties: { title } } }],
     },
-  });
+  }));
+
+  const createdSheetId = response.data.replies?.[0]?.addSheet?.properties?.sheetId;
+  if (typeof createdSheetId === 'number') {
+    workbookMetadata.sheetsByTitle.set(title, { title, sheetId: createdSheetId });
+  } else {
+    const refreshed = await loadSpreadsheetMetadata(sheets, spreadsheetId);
+    workbookMetadata.sheetsByTitle.clear();
+    for (const [sheetTitle, sheet] of refreshed.sheetsByTitle.entries()) {
+      workbookMetadata.sheetsByTitle.set(sheetTitle, sheet);
+    }
+  }
 
   return title;
 }
@@ -529,11 +595,11 @@ async function ensureSheetTabExists(
 async function getSheetIdByTitle(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,
-  title: string
+  title: string,
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<number> {
-  const res = await sheets.spreadsheets.get({ spreadsheetId });
-  const sheet = res.data.sheets?.find((s) => s.properties?.title === title);
-  const sheetId = sheet?.properties?.sheetId;
+  const workbookMetadata = metadata ?? await loadSpreadsheetMetadata(sheets, spreadsheetId);
+  const sheetId = workbookMetadata.sheetsByTitle.get(title)?.sheetId;
 
   if (typeof sheetId !== 'number') {
     throw new Error(`Unable to resolve sheet id for tab: ${title}`);
@@ -546,19 +612,20 @@ async function initializeSheetHeaderRow(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,
   tabTitle: string,
-  headers: readonly string[]
+  headers: readonly string[],
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<void> {
-  const sheetId = await getSheetIdByTitle(sheets, spreadsheetId, tabTitle);
+  const sheetId = await getSheetIdByTitle(sheets, spreadsheetId, tabTitle, metadata);
   const endColumn = directorHeadersEndColumn(headers);
 
-  await sheets.spreadsheets.values.update({
+  await withSheetsRetry(() => sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `'${tabTitle}'!A1:${endColumn}1`,
     valueInputOption: 'RAW',
     requestBody: { values: [Array.from(headers)] },
-  });
+  }));
 
-  await sheets.spreadsheets.batchUpdate({
+  await withSheetsRetry(() => sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
       requests: [
@@ -590,7 +657,7 @@ async function initializeSheetHeaderRow(
         },
       ],
     },
-  });
+  }));
 }
 
 function normalizeConfidenceScore(score?: number): number {
@@ -649,7 +716,8 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
   }
 
   const sheets = getSheetsClient();
-  await initializeSheetHeaderRow(sheets, process.env.SHEET_ID, 'Records', FROZEN_SHEET_HEADERS);
+  const metadata = await loadSpreadsheetMetadata(sheets, process.env.SHEET_ID);
+  await initializeSheetHeaderRow(sheets, process.env.SHEET_ID, 'Records', FROZEN_SHEET_HEADERS, metadata);
   const values = buildRowValues(rows);
 
   const spreadsheetId = process.env.SHEET_ID;
@@ -660,12 +728,12 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
     row_count: values.length,
   });
 
-  await sheets.spreadsheets.values.append({
+  await withSheetsRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId,
     range: 'Records!A2',
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
-  });
+  }));
 
   log({
     stage: 'sheets_append_records_complete',
@@ -683,9 +751,10 @@ export async function pushToSheetsForTab(
 ): Promise<{ uploaded: number; tab_title: string }> {
   const spreadsheetId = getSourceSpreadsheetId();
   const sheets = getSheetsClient();
+  const metadata = await loadSpreadsheetMetadata(sheets, spreadsheetId);
 
-  const tabTitle = await ensureSheetTabExists(sheets, spreadsheetId, requestedTabTitle);
-  await initializeSheetHeaderRow(sheets, spreadsheetId, tabTitle, FROZEN_SHEET_HEADERS);
+  const tabTitle = await ensureSheetTabExists(sheets, spreadsheetId, requestedTabTitle, metadata);
+  await initializeSheetHeaderRow(sheets, spreadsheetId, tabTitle, FROZEN_SHEET_HEADERS, metadata);
   const values = buildRowValues(rows, options);
 
   const range = `'${tabTitle}'!A2`;
@@ -698,12 +767,12 @@ export async function pushToSheetsForTab(
     row_count: values.length,
   });
 
-  await sheets.spreadsheets.values.append({
+  await withSheetsRetry(() => sheets.spreadsheets.values.append({
     spreadsheetId,
     range,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
-  });
+  }));
 
   log({
     stage: 'sheets_append_tab_complete',
@@ -720,9 +789,11 @@ async function collectRowsFromSourceTabs(
   spreadsheetId: string,
   includePrefixes: string[],
   masterTabTitle: string,
-  reviewTabTitle: string
+  reviewTabTitle: string,
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<{ rows: CollectedSourceRow[]; sourceTabs: string[] }> {
-  const existingTitles = await listSheetTitles(sheets, spreadsheetId);
+  const workbookMetadata = metadata ?? await loadSpreadsheetMetadata(sheets, spreadsheetId);
+  const existingTitles = Array.from(workbookMetadata.sheetsByTitle.keys());
   const sourceTabs = existingTitles.filter((title) =>
     title !== masterTabTitle &&
     title !== reviewTabTitle &&
@@ -730,17 +801,40 @@ async function collectRowsFromSourceTabs(
   );
 
   const rows: CollectedSourceRow[] = [];
+  if (sourceTabs.length === 0) {
+    return { rows, sourceTabs };
+  }
+
+  const headerRanges = sourceTabs.map((sourceTab) => `'${sourceTab}'!A1:ZZ1`);
+  const dataRanges = sourceTabs.map((sourceTab) => `'${sourceTab}'!A2:ZZ`);
+  const [headerResponse, dataResponse] = await Promise.all([
+    withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges: headerRanges,
+    })),
+    withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges: dataRanges,
+    })),
+  ]);
+
+  const headerRowsByTab = new Map<string, any[]>();
+  for (const valueRange of headerResponse.data.valueRanges ?? []) {
+    const title = valueRange.range?.match(/^'(.+)'!/i)?.[1];
+    if (!title) continue;
+    headerRowsByTab.set(title, valueRange.values?.[0] ?? []);
+  }
+
+  const dataRowsByTab = new Map<string, any[][]>();
+  for (const valueRange of dataResponse.data.valueRanges ?? []) {
+    const title = valueRange.range?.match(/^'(.+)'!/i)?.[1];
+    if (!title) continue;
+    dataRowsByTab.set(title, valueRange.values ?? []);
+  }
+
   for (const sourceTab of sourceTabs) {
-    const headerResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${sourceTab}'!A1:ZZ1`,
-    });
-    const dataResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `'${sourceTab}'!A2:ZZ`,
-    });
-    const headerRow = headerResponse.data.values?.[0] ?? [];
-    const dataRows = dataResponse.data.values ?? [];
+    const headerRow = headerRowsByTab.get(sourceTab) ?? [];
+    const dataRows = dataRowsByTab.get(sourceTab) ?? [];
     for (const valueRow of dataRows) {
       rows.push(normalizeCollectedRow(valueRow, headerRow, sourceTab));
     }
@@ -1168,10 +1262,10 @@ async function getExistingDirectorRows(
   tabTitle: string
 ): Promise<any[][]> {
   try {
-    const response = await sheets.spreadsheets.values.get({
+    const response = await withSheetsRetry(() => sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `'${tabTitle}'!A2:${DIRECTOR_HEADER_END_COLUMN}`,
-    });
+    }));
     return response.data.values ?? [];
   } catch {
     return [];
@@ -1184,23 +1278,24 @@ async function writeRowsToTab(
   tabTitle: string,
   headers: readonly string[],
   endColumn: string,
-  rows: any[][]
+  rows: any[][],
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<string> {
-  const ensuredTabTitle = await ensureSheetTabExists(sheets, spreadsheetId, tabTitle);
-  await initializeSheetHeaderRow(sheets, spreadsheetId, ensuredTabTitle, headers);
+  const ensuredTabTitle = await ensureSheetTabExists(sheets, spreadsheetId, tabTitle, metadata);
+  await initializeSheetHeaderRow(sheets, spreadsheetId, ensuredTabTitle, headers, metadata);
 
-  await sheets.spreadsheets.values.clear({
+  await withSheetsRetry(() => sheets.spreadsheets.values.clear({
     spreadsheetId,
     range: `'${ensuredTabTitle}'!A2:${endColumn}`,
-  });
+  }));
 
   if (rows.length > 0) {
-    await sheets.spreadsheets.values.update({
+    await withSheetsRetry(() => sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `'${ensuredTabTitle}'!A2`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: rows },
-    });
+    }));
   }
 
   return ensuredTabTitle;
@@ -1212,7 +1307,8 @@ async function writeMergedRowsToWorkbook(
   masterTabTitle: string,
   reviewTabTitle: string,
   acceptedRows: any[][],
-  quarantinedRows: any[][]
+  quarantinedRows: any[][],
+  metadata?: SpreadsheetMetadataCache,
 ): Promise<{ masterTabTitle: string; reviewTabTitle: string }> {
   const ensuredMasterTabTitle = await writeRowsToTab(
     sheets,
@@ -1220,7 +1316,8 @@ async function writeMergedRowsToWorkbook(
     masterTabTitle,
     MASTER_SHEET_HEADERS,
     MERGED_HEADER_END_COLUMN,
-    acceptedRows
+    acceptedRows,
+    metadata
   );
   const ensuredReviewTabTitle = await writeRowsToTab(
     sheets,
@@ -1228,7 +1325,8 @@ async function writeMergedRowsToWorkbook(
     reviewTabTitle,
     REVIEW_QUEUE_HEADERS,
     REVIEW_HEADER_END_COLUMN,
-    quarantinedRows
+    quarantinedRows,
+    metadata
   );
 
   return {
@@ -1251,13 +1349,22 @@ export async function syncMasterSheetTab(options: {
   const tabTitle = options.tabTitle ?? DEFAULT_MASTER_TAB_TITLE;
   const reviewTabTitle = options.reviewTabTitle ?? DEFAULT_REVIEW_TAB_TITLE;
   const includePrefixes = options.includePrefixes ?? ['Scheduled_'];
-  const { rows, sourceTabs } = await collectRowsFromSourceTabs(sheets, sourceSpreadsheetId, includePrefixes, tabTitle, reviewTabTitle);
+  const sourceMetadata = await loadSpreadsheetMetadata(sheets, sourceSpreadsheetId);
+  const { rows, sourceTabs } = await collectRowsFromSourceTabs(
+    sheets,
+    sourceSpreadsheetId,
+    includePrefixes,
+    tabTitle,
+    reviewTabTitle,
+    sourceMetadata
+  );
   const { acceptedRows, quarantinedRows, purgedReviewRowCount, reviewSummary } = classifyMergedRows(rows, {
     reviewRetentionCutoff: getReviewQueueRetentionCutoff(),
     currentSourceTab: options.currentSourceTab,
   });
 
   const finalize = async (targetSpreadsheetId: string, fallbackUsed: boolean) => {
+    const targetMetadata = await loadSpreadsheetMetadata(sheets, targetSpreadsheetId);
     const existingMasterRows = await getExistingDirectorRows(sheets, targetSpreadsheetId, tabTitle);
     const existingMasterKeys = new Set(existingMasterRows.map(serializeDirectorRow));
     const newMasterRowCount = acceptedRows.filter((row) => !existingMasterKeys.has(serializeDirectorRow(row))).length;
@@ -1267,7 +1374,8 @@ export async function syncMasterSheetTab(options: {
       tabTitle,
       reviewTabTitle,
       acceptedRows,
-      quarantinedRows
+      quarantinedRows,
+      targetMetadata
     );
 
     log({
