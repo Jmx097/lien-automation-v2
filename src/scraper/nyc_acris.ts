@@ -725,6 +725,20 @@ export function buildSearchPayload(
   };
 }
 
+export function buildResultPageRequestFields(
+  currentFields: Record<string, string>,
+  token: string,
+  pageNum: number,
+  profile: SearchProfile = { ...SEARCH_PROFILE },
+  dateRange?: { start: string; end: string },
+): Record<string, string> {
+  return {
+    ...currentFields,
+    __RequestVerificationToken: token,
+    ...buildSearchPayload(pageNum, profile, dateRange),
+  };
+}
+
 function formatDocIdDate(docId: string): string {
   const match = docId.match(/^(\d{4})(\d{2})(\d{2})/);
   if (!match) return '';
@@ -1227,10 +1241,10 @@ async function loadResultPage(page: Page, pageNum: number, state: SearchState, m
     await waitForActionDelay();
   }
   const token = await getToken(page);
+  const currentFields = await collectHiddenFields(page).catch(() => ({}));
   const profile = state.profile;
   await submitHiddenPostToResults(page, manifest, `${BASE}${PATHS.result}`, {
-    __RequestVerificationToken: token,
-    ...buildSearchPayload(pageNum, profile, state.requestDateRange),
+    ...buildResultPageRequestFields(currentFields, token, pageNum, profile, state.requestDateRange),
   }, `submit_result_page_${pageNum}`);
   state.pageNum = pageNum;
 }

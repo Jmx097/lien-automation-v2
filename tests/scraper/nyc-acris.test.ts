@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+  buildResultPageRequestFields,
   buildSearchPayload,
   chooseBetterDebtorName,
   extractNYCAcrisDetailFromHtml,
@@ -355,6 +356,53 @@ describe('nyc acris fixture parsing', () => {
       hid_datetod: '07',
       hid_datetoy: '2026',
       hid_page: '2',
+    });
+  });
+
+  it('preserves live hidden result-form fields while overriding the requested date range', () => {
+    const payload = buildResultPageRequestFields(
+      {
+        hid_doctype: 'FL',
+        hid_doctype_name: 'FEDERAL LIEN-IRS',
+        hid_selectdate: '7',
+        hid_datefromm: '03',
+        hid_datefromd: '04',
+        hid_datefromy: '2026',
+        hid_datetom: '03',
+        hid_datetod: '06',
+        hid_datetoy: '2026',
+        hid_max_rows: '10',
+        hid_SearchType: 'DOCTYPE',
+        hid_ISIntranet: 'N',
+        hid_sort: '',
+        hid_some_runtime_flag: 'keep-me',
+      },
+      'token-123',
+      1,
+      {
+        hid_doctype: 'FL',
+        hid_doctype_name: 'FEDERAL LIEN-IRS',
+        hid_selectdate: '7',
+        hid_borough: '0',
+        hid_borough_name: 'ALL BOROUGHS',
+        hid_max_rows: '10',
+        hid_SearchType: 'DOCTYPE',
+        hid_ISIntranet: 'N',
+        hid_sort: '',
+      },
+      { start: '03/08/2026', end: '03/15/2026' }
+    );
+
+    expect(payload).toMatchObject({
+      __RequestVerificationToken: 'token-123',
+      hid_selectdate: 'DR',
+      hid_datefromm: '03',
+      hid_datefromd: '08',
+      hid_datefromy: '2026',
+      hid_datetom: '03',
+      hid_datetod: '15',
+      hid_datetoy: '2026',
+      hid_some_runtime_flag: 'keep-me',
     });
   });
 

@@ -367,6 +367,7 @@ type CollectedSourceRow = {
   row: any[];
   sourceTab: string;
   sourceTabCapturedAt?: Date;
+  scheduledRunId?: string;
 };
 
 function directorHeadersEndColumn(headers: readonly string[]): string {
@@ -730,11 +731,19 @@ async function collectRowsFromSourceTabs(
 
   const rows: CollectedSourceRow[] = [];
   for (const sourceTab of sourceTabs) {
-    const range = `'${sourceTab}'!A2:${SOURCE_HEADER_END_COLUMN}`;
-    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range });
-    const values = response.data.values ?? [];
-    const sourceTabCapturedAt = parseSourceTabCapturedAt(sourceTab);
-    for (const valueRow of values) rows.push({ row: valueRow, sourceTab, sourceTabCapturedAt });
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sourceTab}'!A1:ZZ1`,
+    });
+    const dataResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sourceTab}'!A2:ZZ`,
+    });
+    const headerRow = headerResponse.data.values?.[0] ?? [];
+    const dataRows = dataResponse.data.values ?? [];
+    for (const valueRow of dataRows) {
+      rows.push(normalizeCollectedRow(valueRow, headerRow, sourceTab));
+    }
   }
 
   return { rows, sourceTabs };
@@ -742,6 +751,44 @@ async function collectRowsFromSourceTabs(
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+}
+
+function buildHeaderIndex(headers: unknown[]): Map<string, number> {
+  const index = new Map<string, number>();
+  headers.forEach((header, columnIndex) => {
+    const key = stringValue(header);
+    if (key) index.set(key, columnIndex);
+  });
+  return index;
+}
+
+function getCellByHeader(row: unknown[], headerIndex: Map<string, number>, header: string): unknown {
+  const index = headerIndex.get(header);
+  return index === undefined ? undefined : row[index];
+}
+
+function normalizeCollectedRow(rawRow: any[], headerRow: any[] | undefined, sourceTab: string): CollectedSourceRow {
+  const headerIndex = buildHeaderIndex(headerRow ?? []);
+  const normalized: any[] = Array.from({ length: FROZEN_SHEET_HEADERS.length }, () => '');
+  const fallbackValue = (index: number) => rawRow[index];
+
+  for (const [index, header] of DIRECTOR_SHEET_HEADERS.entries()) {
+    normalized[index] = getCellByHeader(rawRow, headerIndex, header) ?? fallbackValue(index) ?? '';
+  }
+
+  normalized[SOURCE_METADATA_COLUMN.recordSource] =
+    getCellByHeader(rawRow, headerIndex, 'RecordSource') ?? fallbackValue(SOURCE_METADATA_COLUMN.recordSource) ?? '';
+  normalized[SOURCE_METADATA_COLUMN.fileNumber] =
+    getCellByHeader(rawRow, headerIndex, 'FileNumber') ?? fallbackValue(SOURCE_METADATA_COLUMN.fileNumber) ?? '';
+  normalized[SOURCE_METADATA_COLUMN.runPartial] =
+    getCellByHeader(rawRow, headerIndex, 'RunPartial') ?? fallbackValue(SOURCE_METADATA_COLUMN.runPartial) ?? '';
+
+  return {
+    row: normalized,
+    sourceTab,
+    sourceTabCapturedAt: parseSourceTabCapturedAt(sourceTab),
+    scheduledRunId: stringValue(getCellByHeader(rawRow, headerIndex, 'ScheduledRunId') ?? '') || parseScheduledRunIdFromSourceTab(sourceTab),
+  };
 }
 
 function parseRunPartial(raw: unknown): boolean {
@@ -870,7 +917,7 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
     disposition: resolveCandidateDisposition(hardReasons, softReasons, confidenceScore),
     sourceTab: sourceRow.sourceTab,
     sourceTabCapturedAt: sourceRow.sourceTabCapturedAt,
-    scheduledRunId: parseScheduledRunIdFromSourceTab(sourceRow.sourceTab),
+    scheduledRunId: sourceRow.scheduledRunId ?? parseScheduledRunIdFromSourceTab(sourceRow.sourceTab),
   };
 }
 

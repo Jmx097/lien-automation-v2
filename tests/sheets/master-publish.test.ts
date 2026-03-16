@@ -573,6 +573,59 @@ describe('syncMasterSheetTab', () => {
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[21]).toBe('lower_ranked_loser_against_accepted_candidate');
   });
 
+  it('normalizes legacy scheduled tabs that already include merged provenance columns', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_legacy: [],
+    });
+    const legacyTab = ensureWorkbook('source-sheet').get('Scheduled_legacy');
+    if (!legacyTab) throw new Error('legacy tab missing');
+    legacyTab.header = [[
+      'Site Id',
+      'LienOrReceiveDate',
+      'Amount',
+      'LeadType',
+      'LeadSource',
+      'LiabilityType',
+      'BusinessPersonal',
+      'Company',
+      'FirstName',
+      'LastName',
+      'Street',
+      'City',
+      'State',
+      'Zip',
+      'ConfidenceScore',
+      'RecordSource',
+      'FileNumber',
+      'RunPartial',
+      'SourceTab',
+      'ScheduledRunId',
+      'ReviewReason',
+      'ConflictType',
+    ]];
+    legacyTab.rows = [
+      reviewQueueRow(
+        { 14: 0.72, 15: 'ca_sos', 16: 'legacy-file-1' },
+        {
+          sourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_legacy_03-01-2026_to_03-08-2026',
+          scheduledRunId: 'sched_ca_sos_legacy',
+          reviewReason: 'low_confidence',
+          conflictType: 'duplicate_against_retained_review',
+        }
+      ),
+    ];
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    await syncMasterSheetTab();
+
+    const row = ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0];
+    expect(row?.[16]).toBe('legacy-file-1');
+    expect(row?.[17]).toBe('0');
+    expect(row?.[18]).toBe('Scheduled_legacy');
+    expect(row?.[20]).toBe('low_confidence');
+    expect(row?.[21]).toBe('');
+  });
+
   it('purges quarantined rows older than the review retention window while keeping recent ones', async () => {
     seedWorkbook('source-sheet', {
       'Scheduled_old_01-01-2000_to_01-01-2000_20000101': [
