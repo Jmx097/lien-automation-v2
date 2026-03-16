@@ -159,6 +159,34 @@ describe('syncMasterSheetTab', () => {
     return row;
   }
 
+  function mergedMasterRow(
+    overrides: Partial<Record<number, any>> = {},
+    meta: { sourceTab?: string; scheduledRunId?: string } = {}
+  ): any[] {
+    const row = sourceRow(overrides);
+    return [
+      ...row.slice(0, 18),
+      meta.sourceTab ?? '',
+      meta.scheduledRunId ?? '',
+      '',
+      '',
+    ];
+  }
+
+  function reviewQueueRow(
+    overrides: Partial<Record<number, any>> = {},
+    meta: { sourceTab?: string; scheduledRunId?: string; reviewReason: string; conflictType?: string }
+  ): any[] {
+    const row = sourceRow(overrides);
+    return [
+      ...row.slice(0, 18),
+      meta.sourceTab ?? '',
+      meta.scheduledRunId ?? '',
+      meta.reviewReason,
+      meta.conflictType ?? '',
+    ];
+  }
+
   it('publishes merged scheduled rows into the destination workbook', async () => {
     seedWorkbook('source-sheet', {
       Scheduled_CA: [
@@ -191,11 +219,35 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
-      sourceRow({ 0: 20, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }).slice(0, 15),
-      sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }).slice(0, 15),
+      mergedMasterRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }, { sourceTab: 'Scheduled_CA' }),
+      mergedMasterRow({ 0: 20, 2: '250', 14: 0.91, 15: 'ca_sos', 16: 'ca-file-2' }, { sourceTab: 'Scheduled_CA' }),
+      mergedMasterRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }, { sourceTab: 'Scheduled_NYC' }),
     ]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([]);
+    expect(ensureWorkbook('target-sheet').get('Master')?.header?.[0]).toEqual([
+      'Site Id',
+      'LienOrReceiveDate',
+      'Amount',
+      'LeadType',
+      'LeadSource',
+      'LiabilityType',
+      'BusinessPersonal',
+      'Company',
+      'FirstName',
+      'LastName',
+      'Street',
+      'City',
+      'State',
+      'Zip',
+      'ConfidenceScore',
+      'RecordSource',
+      'FileNumber',
+      'RunPartial',
+      'SourceTab',
+      'ScheduledRunId',
+      'ReviewReason',
+      'ConflictType',
+    ]);
     expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([Array(15).fill('old-master')]);
   });
 
@@ -221,8 +273,8 @@ describe('syncMasterSheetTab', () => {
       quarantined_row_count: 0,
     }));
     expect(ensureWorkbook('source-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 15: 'ca_sos', 16: 'ca-file-1' }).slice(0, 15),
-      sourceRow({ 16: 'ny-file-1', 17: '1' }).slice(0, 15),
+      mergedMasterRow({ 15: 'ca_sos', 16: 'ca-file-1' }, { sourceTab: 'Scheduled_CA' }),
+      mergedMasterRow({ 16: 'ny-file-1', 17: '1' }, { sourceTab: 'Scheduled_NYC' }),
     ]);
     expect(ensureWorkbook('source-sheet').get('Review_Queue')?.rows).toEqual([]);
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([Array(15).fill('stale-target')]);
@@ -246,7 +298,7 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([]);
-    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toContain('low_confidence');
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[20]).toContain('low_confidence');
   });
 
   it('accepts otherwise-clean mid-confidence rows when they are above the review threshold', async () => {
@@ -267,7 +319,7 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 14: 0.8, 16: 'ny-mid-confidence' }).slice(0, 15),
+      mergedMasterRow({ 14: 0.8, 16: 'ny-mid-confidence' }, { sourceTab: 'Scheduled_NYC' }),
     ]);
   });
 
@@ -292,12 +344,10 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
-      [
-        ...sourceRow({ 14: 0.8, 16: 'ny-mid-confidence-partial', 17: '1' }).slice(0, 15),
-        'nyc_acris',
-        'ny-mid-confidence-partial',
-        'partial_run|low_confidence',
-      ],
+      reviewQueueRow(
+        { 14: 0.8, 16: 'ny-mid-confidence-partial', 17: '1' },
+        { sourceTab: 'Scheduled_NYC', reviewReason: 'partial_run|low_confidence' }
+      ),
     ]);
   });
 
@@ -322,7 +372,7 @@ describe('syncMasterSheetTab', () => {
         }),
       }),
     }));
-    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toContain('missing_required_fields');
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[20]).toContain('missing_required_fields');
   });
 
   it('keeps only the highest-confidence duplicate row in Master and quarantines the other copy', async () => {
@@ -341,9 +391,10 @@ describe('syncMasterSheetTab', () => {
       quarantined_row_count: 1,
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }).slice(0, 15),
+      mergedMasterRow({ 2: '125', 14: 0.98, 16: 'duplicate-file' }, { sourceTab: 'Scheduled_NYC' }),
     ]);
-    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[17]).toBe('conflict_lower_confidence');
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[20]).toBe('conflict_lower_confidence');
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[21]).toBe('lower_ranked_loser_against_accepted_candidate');
   });
 
   it('prefers a non-partial duplicate over an equally confident partial duplicate', async () => {
@@ -362,15 +413,13 @@ describe('syncMasterSheetTab', () => {
       quarantined_row_count: 1,
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '0' }).slice(0, 15),
+      mergedMasterRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '0' }, { sourceTab: 'Scheduled_NYC' }),
     ]);
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
-      [
-        ...sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '1' }).slice(0, 15),
-        'nyc_acris',
-        'duplicate-partial-file',
-        'partial_run',
-      ],
+      reviewQueueRow(
+        { 2: '100', 14: 0.9, 16: 'duplicate-partial-file', 17: '1' },
+        { sourceTab: 'Scheduled_NYC', reviewReason: 'partial_run', conflictType: 'lower_ranked_loser_against_accepted_candidate' }
+      ),
     ]);
   });
 
@@ -397,7 +446,10 @@ describe('syncMasterSheetTab', () => {
       }),
     }));
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
-      sourceRow({ 2: '125', 14: 0.9, 16: 'duplicate-newer-file' }).slice(0, 15),
+      mergedMasterRow(
+        { 2: '125', 14: 0.9, 16: 'duplicate-newer-file' },
+        { sourceTab: 'Scheduled_NYC_03-13-2026_to_03-13-2026_20260313T010101_Pacific' }
+      ),
     ]);
   });
 
@@ -423,9 +475,13 @@ describe('syncMasterSheetTab', () => {
         }),
       }),
     }));
-    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[17])).toEqual([
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[20])).toEqual([
       'conflict_ambiguous',
       'conflict_ambiguous',
+    ]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[21])).toEqual([
+      'ambiguous_tie_against_retained_review',
+      'ambiguous_tie_against_retained_review',
     ]);
   });
 
@@ -455,11 +511,66 @@ describe('syncMasterSheetTab', () => {
         retained_prior_review_row_count: 1,
       }),
     }));
-    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[17]).sort()).toEqual([
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[20]).sort()).toEqual([
       'conflict_lower_confidence',
       'low_confidence',
       'low_confidence',
     ]);
+  });
+
+  it('tags current-run duplicates against retained review rows with explicit conflict provenance', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_old: [
+        sourceRow({ 14: 0.72, 16: 'retained-review-duplicate' }),
+      ],
+      Scheduled_current: [
+        sourceRow({ 14: 0.72, 16: 'retained-review-duplicate' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({ currentSourceTab: 'Scheduled_current' });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 2,
+      current_run_conflict_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          duplicate_against_retained_review: 2,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.map((row) => row[21])).toEqual([
+      'duplicate_against_retained_review',
+      'duplicate_against_retained_review',
+    ]);
+  });
+
+  it('tags current-run losers against accepted retained candidates distinctly from current-run clashes', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_old: [
+        sourceRow({ 2: '200', 14: 0.98, 16: 'accepted-retained-winner' }),
+      ],
+      Scheduled_current: [
+        sourceRow({ 2: '100', 14: 0.91, 16: 'accepted-retained-winner' }),
+      ],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({ currentSourceTab: 'Scheduled_current' });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 1,
+      quarantined_row_count: 1,
+      current_run_conflict_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          lower_ranked_loser_against_accepted_candidate: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[21]).toBe('lower_ranked_loser_against_accepted_candidate');
   });
 
   it('purges quarantined rows older than the review retention window while keeping recent ones', async () => {
@@ -481,12 +592,10 @@ describe('syncMasterSheetTab', () => {
       purged_review_row_count: 1,
     }));
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows).toEqual([
-      [
-        ...sourceRow({ 14: 0.72, 16: 'new-review-file' }).slice(0, 15),
-        'nyc_acris',
-        'new-review-file',
-        'low_confidence',
-      ],
+      reviewQueueRow(
+        { 14: 0.72, 16: 'new-review-file' },
+        { sourceTab: 'Scheduled_new_01-01-2099_to_01-01-2099_20990101', reviewReason: 'low_confidence' }
+      ),
     ]);
   });
 });

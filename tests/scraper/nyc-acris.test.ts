@@ -10,6 +10,7 @@ import {
   extractViewerArtifactFromHtml,
   filterRowsByAcrisDateRange,
   inspectNYCAcrisPageReadiness,
+  isCompletelyOutOfRangeAcrisResultSet,
   isPlausibleDebtorName,
   isUnexpectedViewerPageUrl,
   normalizeOcrAddress,
@@ -385,5 +386,61 @@ describe('nyc acris fixture parsing', () => {
     expect(result.rows.map((row) => row.docId)).toEqual(['2026022700399005']);
     expect(result.filteredOutCount).toBe(1);
     expect(result.hadOutOfRangeRows).toBe(true);
+  });
+
+  it('flags a result set as completely out of range when every row misses the requested window', () => {
+    expect(
+      isCompletelyOutOfRangeAcrisResultSet(
+        [
+          {
+            docId: '2026031200399005',
+            filingDate: '03/12/2026',
+            debtorName: 'Too new',
+            securedPartyName: 'IRS',
+            documentType: 'FEDERAL LIEN-IRS',
+            rowText: '',
+            cells: [],
+          },
+          {
+            docId: '2026031300399005',
+            filingDate: '03/13/2026',
+            debtorName: 'Still too new',
+            securedPartyName: 'IRS',
+            documentType: 'FEDERAL LIEN-IRS',
+            rowText: '',
+            cells: [],
+          },
+        ],
+        { date_start: '02/25/2026', date_end: '03/01/2026' }
+      )
+    ).toBe(true);
+  });
+
+  it('does not flag a result set as completely out of range when at least one row is in range', () => {
+    expect(
+      isCompletelyOutOfRangeAcrisResultSet(
+        [
+          {
+            docId: '2026022700399005',
+            filingDate: '02/27/2026',
+            debtorName: 'In range',
+            securedPartyName: 'IRS',
+            documentType: 'FEDERAL LIEN-IRS',
+            rowText: '',
+            cells: [],
+          },
+          {
+            docId: '2026031200399005',
+            filingDate: '03/12/2026',
+            debtorName: 'Too new',
+            securedPartyName: 'IRS',
+            documentType: 'FEDERAL LIEN-IRS',
+            rowText: '',
+            cells: [],
+          },
+        ],
+        { date_start: '02/25/2026', date_end: '03/01/2026' }
+      )
+    ).toBe(false);
   });
 });

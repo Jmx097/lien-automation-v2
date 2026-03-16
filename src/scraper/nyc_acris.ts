@@ -488,6 +488,15 @@ export function filterRowsByAcrisDateRange(
   return { rows: filteredRows, filteredOutCount, hadOutOfRangeRows };
 }
 
+export function isCompletelyOutOfRangeAcrisResultSet(
+  rows: ResultRowCandidate[],
+  options: Pick<ScrapeOptions, 'date_start' | 'date_end'>,
+): boolean {
+  if (rows.length === 0) return false;
+  const filtered = filterRowsByAcrisDateRange(rows, options);
+  return filtered.rows.length === 0 && filtered.hadOutOfRangeRows;
+}
+
 function trimTrailingAddressNoiseAfterZip(value: string): string {
   const zipPattern = /\b\d{5}(?:-\d{4})?\b/g;
   let match: RegExpExecArray | null;
@@ -1752,6 +1761,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       await initializeSearchSession(page, state, manifest);
 
       const collectedRows: ResultRowCandidate[] = [];
+      let retriedFirstPageForRangeIntegrity = false;
       for (let pageNum = 1; pageNum <= limits.maxPages; pageNum++) {
         throwIfSessionBudgetExceeded(startedAtMs);
 
@@ -1762,7 +1772,46 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
 
         await loadResultPage(page, pageNum, state, manifest);
         manifest.resultPagesVisited = pageNum;
-        const rows = await extractResultRows(page);
+        let rows = await extractResultRows(page);
+
+        if (
+          pageNum === 1 &&
+          !checkpoint &&
+          state.requestDateRange &&
+          isCompletelyOutOfRangeAcrisResultSet(rows, {
+            date_start: state.requestDateRange.start,
+            date_end: state.requestDateRange.end,
+          })
+        ) {
+          if (!retriedFirstPageForRangeIntegrity) {
+            retriedFirstPageForRangeIntegrity = true;
+            manifest.warnings.push(
+              `result_window_mismatch_retry requested=${state.requestDateRange.start}-${state.requestDateRange.end}`
+            );
+            await recoverResultsSession(page, state, manifest);
+            rows = await extractResultRows(page);
+          }
+
+          if (
+            isCompletelyOutOfRangeAcrisResultSet(rows, {
+              date_start: state.requestDateRange.start,
+              date_end: state.requestDateRange.end,
+            })
+          ) {
+            const retriedRange = summarizeDateRange(rows);
+            manifest.upstreamMinFilingDate = retriedRange.min;
+            manifest.upstreamMaxFilingDate = retriedRange.max;
+            manifest.filteredOutCount = rows.length;
+            throw new NYCAcrisRangeIntegrityError({
+              requestedStart: state.requestDateRange.start,
+              requestedEnd: state.requestDateRange.end,
+              upstreamMin: retriedRange.min,
+              upstreamMax: retriedRange.max,
+              returnedRowCount: rows.length,
+            });
+          }
+        }
+
         const freshRows = rows.filter((row) => !collectedRows.some((existing) => existing.docId === row.docId));
 
         if (rows.length === 0) {
