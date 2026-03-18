@@ -909,8 +909,8 @@ export async function checkSiteConnectivity(): Promise<void> {
             stage: 'site_connectivity_probe_success',
             site,
             transport_mode: probe.transportMode,
-            detail: probe.detail,
             probe_recovery_action: probe.recoveryAction,
+            probe_bootstrap_strategy: probe.bootstrapStrategy,
             probe_step: probe.diagnostic?.step,
             probe_attempt: probe.diagnostic?.attempt,
             final_url: probe.diagnostic?.finalUrl,
@@ -918,6 +918,7 @@ export async function checkSiteConnectivity(): Promise<void> {
             has_shell_marker: probe.diagnostic?.hasShellMarker,
             has_result_marker: probe.diagnostic?.hasResultMarker,
             has_viewer_iframe: probe.diagnostic?.hasViewerIframe,
+            detail: probe.detail,
           });
         } else {
           const failureClass = probe.failureClass ?? classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
@@ -927,9 +928,9 @@ export async function checkSiteConnectivity(): Promise<void> {
             stage: 'site_connectivity_probe_failure',
             site,
             transport_mode: probe.transportMode,
-            detail: probe.detail,
             failure_class: failureClass,
             probe_recovery_action: probe.recoveryAction,
+            probe_bootstrap_strategy: probe.bootstrapStrategy,
             probe_step: probe.diagnostic?.step,
             probe_attempt: probe.diagnostic?.attempt,
             final_url: probe.diagnostic?.finalUrl,
@@ -937,6 +938,7 @@ export async function checkSiteConnectivity(): Promise<void> {
             has_shell_marker: probe.diagnostic?.hasShellMarker,
             has_result_marker: probe.diagnostic?.hasResultMarker,
             has_viewer_iframe: probe.diagnostic?.hasViewerIframe,
+            detail: probe.detail,
           });
         }
       } else {

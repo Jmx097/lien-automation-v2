@@ -214,6 +214,7 @@ interface ProbeResult {
   failureClass?: NYCAcrisFailureClass;
   diagnostic?: PageReadyDiagnostic;
   recoveryAction: ProbeRecoveryAction;
+  bootstrapStrategy: ProbeBootstrapStrategy;
 }
 
 interface OcrExtraction {
@@ -242,11 +243,13 @@ interface AcrisDateParts {
 }
 
 type ProbeRecoveryAction = 'none' | 'retry_new_page' | 'retry_fresh_context';
+type ProbeBootstrapStrategy = 'index_then_document_type' | 'direct_document_type';
 
 interface BootstrapSessionResult {
   handle: Awaited<ReturnType<typeof createAcrisContext>>;
   page: Page;
   recoveryAction: ProbeRecoveryAction;
+  bootstrapStrategy: ProbeBootstrapStrategy;
   diagnostic?: PageReadyDiagnostic;
 }
 
@@ -949,11 +952,26 @@ function summarizeProbeDiagnostic(diagnostic?: PageReadyDiagnostic) {
   };
 }
 
+function inferBootstrapStrategyFromDiagnostic(diagnostic?: PageReadyDiagnostic): ProbeBootstrapStrategy {
+  if (diagnostic?.step === 'load_document_type_page_direct' || diagnostic?.step === 'probe_document_type_page_direct') {
+    return 'direct_document_type';
+  }
+  return 'index_then_document_type';
+}
+
 function inferBootstrapRecoveryAction(manifest: RunManifest): ProbeRecoveryAction {
   const warnings = manifest.warnings.join(' ');
-  if (warnings.includes('bootstrap_recovery retry_fresh_context')) return 'retry_fresh_context';
-  if (warnings.includes('bootstrap_recovery retry_new_page')) return 'retry_new_page';
+  if (/bootstrap_recovery .*recovery=retry_fresh_context|bootstrap_recovery retry_fresh_context/.test(warnings)) {
+    return 'retry_fresh_context';
+  }
+  if (/bootstrap_recovery .*recovery=retry_new_page|bootstrap_recovery retry_new_page/.test(warnings)) {
+    return 'retry_new_page';
+  }
   return 'none';
+}
+
+function buildBootstrapAttemptLabel(strategy: ProbeBootstrapStrategy, recoveryAction: ProbeRecoveryAction): string {
+  return `strategy=${strategy} recovery=${recoveryAction}`;
 }
 
 export function summarizeAmountReasonCounts(rows: Pick<LienRecord, 'amount_reason'>[]): Record<string, number> {
@@ -1396,6 +1414,15 @@ async function gotoDocumentType(page: Page, manifest?: RunManifest): Promise<voi
   });
 }
 
+async function gotoDocumentTypeDirect(page: Page, manifest?: RunManifest): Promise<void> {
+  await gotoPageUntilReady(page, manifest, {
+    url: `${BASE}${PATHS.documentType}`,
+    expectedPath: PATHS.documentType,
+    step: 'load_document_type_page_direct',
+    kind: 'document_type',
+  });
+}
+
 async function loadResultPage(page: Page, pageNum: number, state: SearchState, manifest?: RunManifest): Promise<void> {
   if (pageNum > 1) {
     await waitForNextPageDelay();
@@ -1786,8 +1813,17 @@ function resolveSafeRunLimits(requestedMaxRecords?: number): { maxRecords: numbe
   };
 }
 
-async function initializeSearchSession(page: Page, state: SearchState, manifest?: RunManifest): Promise<void> {
-  await gotoDocumentType(page, manifest);
+async function initializeSearchSession(
+  page: Page,
+  state: SearchState,
+  manifest?: RunManifest,
+  strategy: ProbeBootstrapStrategy = 'index_then_document_type',
+): Promise<void> {
+  if (strategy === 'direct_document_type') {
+    await gotoDocumentTypeDirect(page, manifest);
+  } else {
+    await gotoDocumentType(page, manifest);
+  }
   state.profile = { ...SEARCH_PROFILE };
 }
 
@@ -1808,10 +1844,11 @@ async function openBootstrapPage(
   handle: Awaited<ReturnType<typeof createAcrisContext>>,
   state: SearchState,
   manifest: RunManifest,
+  strategy: ProbeBootstrapStrategy = 'index_then_document_type',
 ): Promise<Page> {
   const page = await handle.context.newPage();
   page.setDefaultTimeout(45000);
-  await initializeSearchSession(page, state, manifest);
+  await initializeSearchSession(page, state, manifest, strategy);
   return page;
 }
 
@@ -1825,12 +1862,13 @@ async function bootstrapSearchSession(
   await hardenContext(handle.context, manifest);
 
   let recoveryAction: ProbeRecoveryAction = 'none';
+  let bootstrapStrategy: ProbeBootstrapStrategy = 'index_then_document_type';
   let page = await handle.context.newPage();
   page.setDefaultTimeout(45000);
 
   try {
-    await initializeSearchSession(page, state, manifest);
-    return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+    await initializeSearchSession(page, state, manifest, bootstrapStrategy);
+    return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
   } catch (initialErr: unknown) {
     const initialDiagnostic = getLatestNavigationDiagnostic(manifest);
     const initialMessage = sanitizeErrorMessage(initialErr);
@@ -1840,15 +1878,15 @@ async function bootstrapSearchSession(
       throw initialErr;
     }
 
-    manifest.warnings.push(`bootstrap_recovery retry_new_page ${initialMessage}`);
+    manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel(bootstrapStrategy, 'retry_new_page')} ${initialMessage}`);
     await page.close().catch(() => {});
     recoveryAction = 'retry_new_page';
     page = await handle.context.newPage();
     page.setDefaultTimeout(45000);
 
     try {
-      await initializeSearchSession(page, state, manifest);
-      return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+      await initializeSearchSession(page, state, manifest, bootstrapStrategy);
+      return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
     } catch (pageRetryErr: unknown) {
       const pageRetryDiagnostic = getLatestNavigationDiagnostic(manifest);
       const pageRetryMessage = sanitizeErrorMessage(pageRetryErr);
@@ -1858,7 +1896,7 @@ async function bootstrapSearchSession(
         throw pageRetryErr;
       }
 
-      manifest.warnings.push(`bootstrap_recovery retry_fresh_context ${pageRetryMessage}`);
+      manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel(bootstrapStrategy, 'retry_fresh_context')} ${pageRetryMessage}`);
       await page.close().catch(() => {});
       await handle.close().catch(() => {});
 
@@ -1867,11 +1905,31 @@ async function bootstrapSearchSession(
       await hardenContext(handle.context, manifest);
       recoveryAction = 'retry_fresh_context';
       try {
-        page = await openBootstrapPage(handle, state, manifest);
-        return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
+        return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
       } catch (freshContextErr: unknown) {
+        const freshContextDiagnostic = getLatestNavigationDiagnostic(manifest);
+        const freshContextMessage = sanitizeErrorMessage(freshContextErr);
+        if (!shouldRetryBootstrapDiagnostic(freshContextDiagnostic, freshContextMessage)) {
+          await handle.close().catch(() => {});
+          throw freshContextErr;
+        }
+
+        manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel('direct_document_type', 'retry_fresh_context')} ${freshContextMessage}`);
         await handle.close().catch(() => {});
-        throw freshContextErr;
+
+        handle = await createAcrisContext({ headed: options?.headed });
+        manifest.transportMode = handle.mode;
+        await hardenContext(handle.context, manifest);
+        bootstrapStrategy = 'direct_document_type';
+
+        try {
+          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
+          return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
+        } catch (directFallbackErr: unknown) {
+          await handle.close().catch(() => {});
+          throw directFallbackErr;
+        }
       }
     }
   }
@@ -2165,6 +2223,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         initial_cap_enforced: ENFORCE_INITIAL_CAP,
         session_duration_ms: manifest.sessionDurationMs,
         probe_recovery_action: bootstrapRecoveryAction,
+        probe_bootstrap_strategy: inferBootstrapStrategyFromDiagnostic(bootstrapDiagnostic),
         amount_reason_counts: summarizeAmountReasonCounts(outputRows),
         ...summarizeProbeDiagnostic(bootstrapDiagnostic),
       });
@@ -2236,6 +2295,7 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
         transportMode: handle.mode,
         diagnostic,
         recoveryAction: bootstrap.recoveryAction,
+        bootstrapStrategy: bootstrap.bootstrapStrategy,
       };
     } catch (err: unknown) {
       const message = sanitizeErrorMessage(err);
@@ -2247,6 +2307,7 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
         diagnostic,
         failureClass: classifyNYCAcrisFailure(message),
         recoveryAction: inferBootstrapRecoveryAction(manifest),
+        bootstrapStrategy: inferBootstrapStrategyFromDiagnostic(diagnostic),
       };
     } finally {
       await page?.close().catch(() => {});

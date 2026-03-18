@@ -112,7 +112,54 @@ describe('NYC ACRIS bootstrap recovery', () => {
 
     expect(result.ok).toBe(true);
     expect(result.recoveryAction).toBe('retry_new_page');
+    expect(result.bootstrapStrategy).toBe('index_then_document_type');
     expect(result.diagnostic?.finalUrl).toContain('/DS/DocumentSearch/DocumentType');
+  });
+
+  it('falls back to direct document type bootstrap after repeated blank index startup', async () => {
+    mockCreateIsolatedBrowserContext
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ]),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ]),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            {
+              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
+              html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
+              title: 'Search By Document Type',
+              readyState: 'complete',
+            },
+          ],
+        ]),
+      );
+
+    const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
+    const pending = probeNYCAcrisConnectivity();
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(result.recoveryAction).toBe('retry_fresh_context');
+    expect(result.bootstrapStrategy).toBe('direct_document_type');
+    expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
   });
 
   it('classifies exhausted blank bootstrap recovery as transport_or_bootstrap', async () => {
@@ -136,6 +183,14 @@ describe('NYC ACRIS bootstrap recovery', () => {
             { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
           ],
         ]),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ]),
       );
 
     const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
@@ -146,6 +201,8 @@ describe('NYC ACRIS bootstrap recovery', () => {
     expect(result.ok).toBe(false);
     expect(result.failureClass).toBe('transport_or_bootstrap');
     expect(result.recoveryAction).toBe('retry_fresh_context');
+    expect(result.bootstrapStrategy).toBe('direct_document_type');
+    expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
     expect(result.diagnostic?.finalUrl).toBe('about:blank');
   });
 });

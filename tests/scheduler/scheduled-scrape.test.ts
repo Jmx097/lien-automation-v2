@@ -633,6 +633,7 @@ describe('runScheduledScrape', () => {
       transportMode: 'legacy-sbr-cdp',
       failureClass: 'transport_or_bootstrap',
       recoveryAction: 'retry_fresh_context',
+      bootstrapStrategy: 'direct_document_type',
       diagnostic: {
         step: 'probe_index_page',
         attempt: 2,
@@ -661,6 +662,7 @@ describe('runScheduledScrape', () => {
       site: 'nyc_acris',
       failure_class: 'transport_or_bootstrap',
       probe_recovery_action: 'retry_fresh_context',
+      probe_bootstrap_strategy: 'direct_document_type',
       probe_step: 'probe_index_page',
       probe_attempt: 2,
       final_url: 'about:blank',
