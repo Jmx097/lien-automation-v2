@@ -15,7 +15,9 @@ import {
   isPlausibleDebtorName,
   isUnexpectedViewerPageUrl,
   normalizeOcrAddress,
+  processSelectedRows,
   resolveNYCAcrisDelay,
+  resolveNYCAcrisResumeStartIndex,
   sanitizeDebtorName,
   shouldRetryViewerOpen,
 } from '../../src/scraper/nyc_acris';
@@ -490,5 +492,48 @@ describe('nyc acris fixture parsing', () => {
         { date_start: '02/25/2026', date_end: '03/01/2026' }
       )
     ).toBe(false);
+  });
+
+  it('resumes from the exact checkpointed docId without skipping or duplicating rows', () => {
+    const selectedRows = [
+      { docId: 'doc-1' },
+      { docId: 'doc-2' },
+      { docId: 'doc-3' },
+    ] as Array<{ docId: string }>;
+
+    expect(resolveNYCAcrisResumeStartIndex(selectedRows as any, { docIndex: 2, docId: 'doc-2' })).toBe(2);
+    expect(resolveNYCAcrisResumeStartIndex(selectedRows as any, { docIndex: 0 })).toBe(0);
+    expect(() => resolveNYCAcrisResumeStartIndex(selectedRows as any, { docIndex: 2, docId: 'doc-x' })).toThrow(/not present/i);
+  });
+
+  it('preserves a checkpoint when a forced stop interrupts doc processing', async () => {
+    const selectedRows = [
+      { docId: 'doc-1' },
+      { docId: 'doc-2' },
+      { docId: 'doc-3' },
+    ] as Array<{ docId: string }>;
+    const saved: any[] = [];
+    let stopChecks = 0;
+
+    const result = await processSelectedRows({
+      selectedRows: selectedRows as any,
+      pageNum: 4,
+      stopRequested: () => {
+        stopChecks += 1;
+        return stopChecks > 1;
+      },
+      extractArtifact: async (row) => ({ docId: row.docId, imageUrls: [], title: row.docId } as any),
+      saveCheckpoint: async (checkpoint) => {
+        saved.push(checkpoint);
+      },
+      waitForDocDelay: async () => undefined,
+    });
+
+    expect(result.stopped).toBe(true);
+    expect(result.documents).toHaveLength(1);
+    expect(result.documents[0].docId).toBe('doc-1');
+    expect(saved).toEqual([
+      expect.objectContaining({ docIndex: 1, docId: 'doc-1', pageNum: 4 }),
+    ]);
   });
 });

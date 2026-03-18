@@ -5,6 +5,7 @@ import {
   discoverMaricopaArtifactCandidates,
   filterValidMaricopaArtifactCandidates,
   isFreshMaricopaSession,
+  isUsableMaricopaArtifactPayload,
   validateMaricopaArtifactCandidate,
 } from '../../src/scraper/maricopa_artifacts';
 
@@ -179,5 +180,22 @@ describe('maricopa artifact helpers', () => {
     delete process.env.MARICOPA_OUT_DIR;
     fs.rmSync(sqliteDbPath, { force: true });
     fs.rmSync(maricopaOutDir, { recursive: true, force: true });
+  });
+
+  it('rejects HTML or non-artifact download bodies before they are saved', () => {
+    const pdfBody = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\ntrailer\n%%EOF\n' + ' '.repeat(48), 'latin1');
+    const htmlBody = Buffer.from('<html><body>Just a moment...</body></html>', 'utf8');
+    const pngBody = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+      0xde,
+    ]);
+
+    expect(isUsableMaricopaArtifactPayload(pdfBody, 'application/pdf', 'https://example.test/doc.pdf')).toBe(true);
+    expect(isUsableMaricopaArtifactPayload(htmlBody, 'text/html', 'https://example.test/doc.pdf')).toBe(false);
+    expect(isUsableMaricopaArtifactPayload(Buffer.from('not a pdf', 'utf8'), 'application/pdf', 'https://example.test/doc.pdf')).toBe(false);
+    expect(isUsableMaricopaArtifactPayload(pngBody, 'image/png', 'https://example.test/doc.png')).toBe(true);
   });
 });

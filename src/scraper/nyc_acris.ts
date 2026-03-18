@@ -139,10 +139,11 @@ interface PageReadyDiagnostic {
   reason: string;
 }
 
-interface CheckpointState {
+export interface NYCAcrisCheckpointState {
   version: 1;
   pageNum: number;
   docIndex: number;
+  docId?: string;
   updatedAt: string;
 }
 
@@ -166,6 +167,7 @@ interface RunManifest {
   checkpoint?: {
     pageNum: number;
     docIndex: number;
+    docId?: string;
   };
   requestedDateStart?: string;
   requestedDateEnd?: string;
@@ -242,6 +244,96 @@ function unique<T>(items: T[]): T[] {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+export function resolveNYCAcrisResumeStartIndex(
+  selectedRows: Pick<ResultRowCandidate, 'docId'>[],
+  checkpoint?: Pick<NYCAcrisCheckpointState, 'docIndex' | 'docId'> | null,
+): number {
+  if (!checkpoint) return 0;
+
+  if (checkpoint.docId) {
+    const foundIndex = selectedRows.findIndex((row) => row.docId === checkpoint.docId);
+    if (foundIndex < 0) {
+      throw new Error(`Checkpoint docId ${checkpoint.docId} is not present in the current NYC ACRIS result set`);
+    }
+
+    const expectedNextIndex = foundIndex + 1;
+    if (checkpoint.docIndex !== expectedNextIndex) {
+      throw new Error(
+        `Checkpoint index mismatch for NYC ACRIS docId ${checkpoint.docId}: checkpoint docIndex=${checkpoint.docIndex}, expected ${expectedNextIndex}`,
+      );
+    }
+
+    return expectedNextIndex;
+  }
+
+  if (!Number.isFinite(checkpoint.docIndex)) return 0;
+  return Math.min(Math.max(0, checkpoint.docIndex), selectedRows.length);
+}
+
+interface ProcessSelectedRowsOptions {
+  selectedRows: ResultRowCandidate[];
+  checkpoint?: NYCAcrisCheckpointState | null;
+  pageNum: number;
+  stopRequested?: () => boolean;
+  extractArtifact: (row: ResultRowCandidate, index: number) => Promise<ViewerArtifact>;
+  saveCheckpoint: (checkpoint: NYCAcrisCheckpointState) => Promise<void>;
+  onWarning?: (warning: string) => void;
+  onFailure?: (failure: string) => void;
+  waitForDocDelay?: () => Promise<void>;
+}
+
+interface ProcessSelectedRowsResult {
+  documents: ViewerArtifact[];
+  stopped: boolean;
+  attemptedDocs: number;
+}
+
+export async function processSelectedRows(options: ProcessSelectedRowsOptions): Promise<ProcessSelectedRowsResult> {
+  const documents: ViewerArtifact[] = [];
+  let stopped = false;
+  let attemptedDocs = 0;
+  const startIndex = resolveNYCAcrisResumeStartIndex(options.selectedRows, options.checkpoint);
+
+  for (let index = startIndex; index < options.selectedRows.length; index++) {
+    if (options.stopRequested?.()) {
+      stopped = true;
+      options.onWarning?.(`stop_requested before viewer fetch for ${options.selectedRows[index].docId}`);
+      if (documents.length === 0 && !options.checkpoint?.docId && options.checkpoint?.docIndex !== 0) {
+        await options.saveCheckpoint({
+          version: 1,
+          pageNum: options.pageNum,
+          docIndex: index,
+          updatedAt: nowIso(),
+        });
+      }
+      break;
+    }
+
+    try {
+      attemptedDocs = index + 1;
+      const artifact = await options.extractArtifact(options.selectedRows[index], index);
+      documents.push(artifact);
+      await options.saveCheckpoint({
+        version: 1,
+        pageNum: options.pageNum,
+        docIndex: index + 1,
+        docId: options.selectedRows[index].docId,
+        updatedAt: nowIso(),
+      });
+
+      if (index < options.selectedRows.length - 1) {
+        await (options.waitForDocDelay ?? waitForDocDelay)();
+      }
+    } catch (err: unknown) {
+      const failure = `doc ${options.selectedRows[index].docId}: ${sanitizeErrorMessage(err)}`;
+      options.onFailure?.(failure);
+      throw err;
+    }
+  }
+
+  return { documents, stopped, attemptedDocs };
 }
 
 export function resolveNYCAcrisDelay(minMs: number, maxMs: number, randomValue = Math.random()): number {
@@ -757,11 +849,11 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
-async function loadCheckpoint(options: ScrapeOptions): Promise<CheckpointState | null> {
+async function loadCheckpoint(options: ScrapeOptions): Promise<NYCAcrisCheckpointState | null> {
   try {
     const file = getCheckpointPath(options);
     const raw = await fs.readFile(file, 'utf8');
-    const parsed = JSON.parse(raw) as CheckpointState;
+    const parsed = JSON.parse(raw) as NYCAcrisCheckpointState;
     if (parsed.version === 1) return parsed;
     return null;
   } catch {
@@ -769,7 +861,7 @@ async function loadCheckpoint(options: ScrapeOptions): Promise<CheckpointState |
   }
 }
 
-async function saveCheckpoint(options: ScrapeOptions, checkpoint: CheckpointState): Promise<void> {
+async function saveCheckpoint(options: ScrapeOptions, checkpoint: NYCAcrisCheckpointState): Promise<void> {
   await ensureDir(CHECKPOINT_DIR);
   await fs.writeFile(getCheckpointPath(options), JSON.stringify(checkpoint, null, 2), 'utf8');
 }
@@ -1760,7 +1852,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       attemptedDocs: 0,
       completedDocs: 0,
       connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
-      checkpoint: checkpoint ? { pageNum: checkpoint.pageNum, docIndex: checkpoint.docIndex } : undefined,
+      checkpoint: checkpoint ? { pageNum: checkpoint.pageNum, docIndex: checkpoint.docIndex, docId: checkpoint.docId } : undefined,
       requestedDateStart: normalizeAcrisDate(options.date_start) ?? options.date_start,
       requestedDateEnd: normalizeAcrisDate(options.date_end) ?? options.date_end,
     };
@@ -1878,37 +1970,32 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       manifest.docIds = selectedRows.map((row) => row.docId);
       manifest.returnedCount = selectedRows.length;
 
-      const startIndex = checkpoint?.docIndex ?? 0;
-      for (let index = startIndex; index < selectedRows.length; index++) {
-        throwIfSessionBudgetExceeded(startedAtMs);
+      const processedDocs = await processSelectedRows({
+        selectedRows,
+        checkpoint,
+        pageNum: state.pageNum,
+        stopRequested: options.stop_requested,
+        extractArtifact: (row) => extractViewerArtifactInSession(page, state, row.docId, manifest),
+        saveCheckpoint: async (nextCheckpoint) => {
+          manifest.checkpoint = {
+            pageNum: nextCheckpoint.pageNum,
+            docIndex: nextCheckpoint.docIndex,
+            docId: nextCheckpoint.docId,
+          };
+          await saveCheckpoint(options, nextCheckpoint);
+        },
+        onWarning: (warning) => manifest.warnings.push(warning),
+        onFailure: (failure) => manifest.failures.push(failure),
+        waitForDocDelay,
+      });
+      manifest.documents.push(...processedDocs.documents);
+      manifest.attemptedDocs = processedDocs.attemptedDocs;
+      manifest.completedDocs = manifest.documents.length;
 
-        if (options.stop_requested?.()) {
-          manifest.warnings.push(`stop_requested before viewer fetch for ${selectedRows[index].docId}`);
-          break;
-        }
-
-        try {
-          manifest.attemptedDocs = index + 1;
-          const artifact = await extractViewerArtifactInSession(page, state, selectedRows[index].docId, manifest);
-          manifest.documents.push(artifact);
-          manifest.completedDocs = manifest.documents.length;
-          await saveCheckpoint(options, {
-            version: 1,
-            pageNum: state.pageNum,
-            docIndex: index + 1,
-            updatedAt: nowIso(),
-          });
-
-          if (index < selectedRows.length - 1) {
-            await waitForDocDelay();
-          }
-        } catch (err: unknown) {
-          manifest.failures.push(`doc ${selectedRows[index].docId}: ${sanitizeErrorMessage(err)}`);
-          throw err;
-        }
+      if (!processedDocs.stopped) {
+        await clearCheckpoint(options);
       }
 
-      await clearCheckpoint(options);
       const artifactsByDocId = new Map(manifest.documents.map((artifact) => [artifact.docId, artifact]));
       manifest.finishedAt = nowIso();
       manifest.sessionDurationMs = Date.now() - startedAtMs;
@@ -1951,8 +2038,12 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
           discovered_count: manifest.discoveredCount ?? collectedRows.length,
           returned_count: manifest.returnedCount ?? selectedRows.length,
           quarantined_count: 0,
-          partial_run: manifest.filteredOutCount !== undefined && manifest.filteredOutCount > 0,
-          partial_reason: manifest.filteredOutCount && manifest.filteredOutCount > 0 ? 'rows_filtered_outside_requested_range' : undefined,
+          partial_run: processedDocs.stopped || (manifest.filteredOutCount ?? 0) > 0,
+          partial_reason: processedDocs.stopped
+            ? 'stop_requested'
+            : manifest.filteredOutCount && manifest.filteredOutCount > 0
+              ? 'rows_filtered_outside_requested_range'
+              : undefined,
           filtered_out_count: manifest.filteredOutCount ?? 0,
           returned_min_filing_date: manifest.returnedMinFilingDate,
           returned_max_filing_date: manifest.returnedMaxFilingDate,

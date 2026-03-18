@@ -148,6 +148,52 @@ function sanitizeMaricopaStorageState(
   };
 }
 
+function hasPdfSignature(buffer: Buffer): boolean {
+  const prefix = buffer.subarray(0, 16).toString('latin1').trimStart();
+  return prefix.startsWith('%PDF-');
+}
+
+function hasPngSignature(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+}
+
+function hasJpegSignature(buffer: Buffer): boolean {
+  return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+}
+
+export function isUsableMaricopaArtifactPayload(
+  buffer: Buffer,
+  contentType?: string,
+  url = '',
+): boolean {
+  if (!buffer || buffer.length < 32) return false;
+
+  const normalizedContentType = contentType?.toLowerCase() ?? '';
+  const normalizedUrl = url.toLowerCase();
+  const looksLikePdfUrl = /\.pdf(?:$|[?#])/i.test(normalizedUrl) || /\/preview\/pdf\?/i.test(normalizedUrl);
+  const looksLikeImageUrl = /\.(?:png|jpe?g)(?:$|[?#])/i.test(normalizedUrl) || /\/document-preview\.html\?/i.test(normalizedUrl);
+
+  if (normalizedContentType.includes('text/html')) return false;
+
+  if (normalizedContentType.includes('pdf') || looksLikePdfUrl) {
+    return hasPdfSignature(buffer);
+  }
+
+  if (normalizedContentType.includes('png') || normalizedUrl.endsWith('.png') || normalizedUrl.includes('image')) {
+    return hasPngSignature(buffer);
+  }
+
+  if (normalizedContentType.includes('jpeg') || normalizedContentType.includes('jpg') || normalizedUrl.endsWith('.jpg') || normalizedUrl.endsWith('.jpeg')) {
+    return hasJpegSignature(buffer);
+  }
+
+  if (looksLikeImageUrl) {
+    return hasPngSignature(buffer) || hasJpegSignature(buffer);
+  }
+
+  return hasPdfSignature(buffer) || hasPngSignature(buffer) || hasJpegSignature(buffer);
+}
+
 export function isFreshMaricopaSession(capturedAt: string): boolean {
   const maxAgeMinutes = Math.max(1, Number(process.env.MARICOPA_SESSION_MAX_AGE_MINUTES ?? '240'));
   const ageMs = Date.now() - new Date(capturedAt).getTime();
@@ -431,9 +477,10 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
 
       if (apiResponse?.ok()) {
         const contentType = apiResponse.headers()['content-type'] ?? undefined;
-        if (!/text\/html/i.test(contentType ?? '')) {
+        const buffer = Buffer.from(await apiResponse.body());
+        if (isUsableMaricopaArtifactPayload(buffer, contentType, apiResponse.url())) {
           return {
-            buffer: Buffer.from(await apiResponse.body()),
+            buffer,
             contentType,
             url: apiResponse.url(),
           };
@@ -459,15 +506,23 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
           failOnStatusCode: false,
         }).catch(() => null);
         if (!imageResponse || !imageResponse.ok()) return null;
+        const imageBuffer = Buffer.from(await imageResponse.body());
+        if (!isUsableMaricopaArtifactPayload(imageBuffer, imageResponse.headers()['content-type'] ?? undefined, absoluteImageUrl)) {
+          return null;
+        }
         return {
-          buffer: Buffer.from(await imageResponse.body()),
+          buffer: imageBuffer,
           contentType: imageResponse.headers()['content-type'] ?? undefined,
           url: absoluteImageUrl,
         };
       }
 
+      const responseBuffer = Buffer.from(await response.body());
+      if (!isUsableMaricopaArtifactPayload(responseBuffer, contentType, response.url())) {
+        return null;
+      }
       return {
-        buffer: Buffer.from(await response.body()),
+        buffer: responseBuffer,
         contentType,
         url: response.url(),
       };
