@@ -5,6 +5,7 @@ export type SiteConnectivityStatus = 'healthy' | 'degraded' | 'blocked' | 'probi
 
 export type NYCAcrisFailureClass =
   | 'policy_block'
+  | 'transport_or_bootstrap'
   | 'timeout_or_navigation'
   | 'token_or_session_state'
   | 'selector_or_empty_results'
@@ -127,6 +128,12 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
     return 'range_result_integrity';
   }
 
+  if (
+    /about:blank|chrome-error:\/\/chromewebdata|unexpected_url|net::err|err_|navigation timeout|page not ready/.test(normalized)
+  ) {
+    return 'transport_or_bootstrap';
+  }
+
   if (/missing anti-forgery token|requestverificationtoken|session_budget_exceeded|live session state/.test(normalized)) {
     return 'token_or_session_state';
   }
@@ -203,6 +210,7 @@ export function recordConnectivityFailure(
   } else if (failureClass === 'policy_block') {
     state.policy_block_count += 1;
   } else if (
+    failureClass === 'transport_or_bootstrap' ||
     failureClass === 'timeout_or_navigation' ||
     failureClass === 'viewer_roundtrip' ||
     failureClass === 'token_or_session_state' ||

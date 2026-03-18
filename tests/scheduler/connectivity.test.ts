@@ -89,6 +89,14 @@ describe('scheduler connectivity state', () => {
     ).toBe('range_result_integrity');
   });
 
+  it('classifies blank bootstrap failures separately from selector issues', () => {
+    expect(
+      classifyNYCAcrisFailure(
+        'NYC probe_index_page page not ready: {"step":"probe_index_page","attempt":2,"kind":"index","expectedPath":"/DS/DocumentSearch/Index","finalUrl":"about:blank","title":"","readyState":"unavailable","htmlLength":0,"bodyTextLength":0,"hasToken":false,"hasShellMarker":false,"hasResultMarker":false,"hasViewerIframe":false,"ok":false,"reason":"unexpected_url"}'
+      )
+    ).toBe('transport_or_bootstrap');
+  });
+
   it('blocks Maricopa immediately when persisted session state is missing', () => {
     const result = recordConnectivityFailure(
       createDefaultConnectivityState('maricopa_recorder'),

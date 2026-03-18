@@ -10,6 +10,7 @@ const mockLog = vi.fn();
 const mockFetch = vi.fn();
 const mockProbeMaricopaRecorderConnectivity = vi.fn();
 const mockGetMaricopaPersistedStateReadiness = vi.fn();
+const mockProbeNYCAcrisConnectivity = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
@@ -31,6 +32,10 @@ vi.mock('../../src/scraper/ca_sos_enhanced', () => ({
 
 vi.mock('../../src/scraper/maricopa_recorder', () => ({
   probeMaricopaRecorderConnectivity: mockProbeMaricopaRecorderConnectivity,
+}));
+
+vi.mock('../../src/scraper/nyc_acris', () => ({
+  probeNYCAcrisConnectivity: mockProbeNYCAcrisConnectivity,
 }));
 
 vi.mock('../../src/scraper/maricopa_artifacts', () => ({
@@ -131,6 +136,7 @@ describe('runScheduledScrape', () => {
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
     mockProbeMaricopaRecorderConnectivity.mockReset();
+    mockProbeNYCAcrisConnectivity.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockResolvedValue({
       artifactRetrievalEnabled: false,
@@ -608,6 +614,61 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('deferred');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(result.failure_class).toBe('session_missing_or_stale');
+  });
+
+  it('logs compact NYC probe diagnostics when connectivity probing fails', async () => {
+    connectivityState.set('nyc_acris', {
+      site: 'nyc_acris',
+      status: 'blocked',
+      policy_block_count: 0,
+      timeout_count: 3,
+      empty_result_count: 0,
+      consecutive_probe_successes: 0,
+      next_probe_at: new Date(Date.now() - 1_000).toISOString(),
+      last_failure_reason: 'prior bootstrap failure',
+    });
+    mockProbeNYCAcrisConnectivity.mockResolvedValueOnce({
+      ok: false,
+      detail: 'NYC probe_index_page page not ready: {"finalUrl":"about:blank","reason":"unexpected_url"}',
+      transportMode: 'legacy-sbr-cdp',
+      failureClass: 'transport_or_bootstrap',
+      recoveryAction: 'retry_fresh_context',
+      diagnostic: {
+        step: 'probe_index_page',
+        attempt: 2,
+        kind: 'index',
+        expectedPath: '/DS/DocumentSearch/Index',
+        finalUrl: 'about:blank',
+        title: '',
+        readyState: 'unavailable',
+        htmlLength: 0,
+        bodyTextLength: 0,
+        hasToken: false,
+        hasShellMarker: false,
+        hasResultMarker: false,
+        hasViewerIframe: false,
+        ok: false,
+        reason: 'unexpected_url',
+      },
+    });
+
+    const { checkSiteConnectivity } = await import('../../src/scheduler');
+
+    await checkSiteConnectivity();
+
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'site_connectivity_probe_failure',
+      site: 'nyc_acris',
+      failure_class: 'transport_or_bootstrap',
+      probe_recovery_action: 'retry_fresh_context',
+      probe_step: 'probe_index_page',
+      probe_attempt: 2,
+      final_url: 'about:blank',
+      ready_state: 'unavailable',
+      has_shell_marker: false,
+      has_result_marker: false,
+      has_viewer_iframe: false,
+    }));
   });
 
   it('reuses cached nyc rows when the previous failure was sheet export', async () => {

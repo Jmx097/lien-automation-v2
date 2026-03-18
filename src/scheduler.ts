@@ -905,12 +905,39 @@ export async function checkSiteConnectivity(): Promise<void> {
         if (probe.ok) {
           await applyConnectivitySuccess(site, 'probe');
           state = await getConnectivityState(site);
-          log({ stage: 'site_connectivity_probe_success', site, transport_mode: probe.transportMode, detail: probe.detail });
+          log({
+            stage: 'site_connectivity_probe_success',
+            site,
+            transport_mode: probe.transportMode,
+            detail: probe.detail,
+            probe_recovery_action: probe.recoveryAction,
+            probe_step: probe.diagnostic?.step,
+            probe_attempt: probe.diagnostic?.attempt,
+            final_url: probe.diagnostic?.finalUrl,
+            ready_state: probe.diagnostic?.readyState,
+            has_shell_marker: probe.diagnostic?.hasShellMarker,
+            has_result_marker: probe.diagnostic?.hasResultMarker,
+            has_viewer_iframe: probe.diagnostic?.hasViewerIframe,
+          });
         } else {
-          const failureClass = classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
+          const failureClass = probe.failureClass ?? classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
           await applyConnectivityFailure(site, failureClass, probe.detail ?? 'probe_failed');
           state = await getConnectivityState(site);
-          log({ stage: 'site_connectivity_probe_failure', site, transport_mode: probe.transportMode, detail: probe.detail });
+          log({
+            stage: 'site_connectivity_probe_failure',
+            site,
+            transport_mode: probe.transportMode,
+            detail: probe.detail,
+            failure_class: failureClass,
+            probe_recovery_action: probe.recoveryAction,
+            probe_step: probe.diagnostic?.step,
+            probe_attempt: probe.diagnostic?.attempt,
+            final_url: probe.diagnostic?.finalUrl,
+            ready_state: probe.diagnostic?.readyState,
+            has_shell_marker: probe.diagnostic?.hasShellMarker,
+            has_result_marker: probe.diagnostic?.hasResultMarker,
+            has_viewer_iframe: probe.diagnostic?.hasViewerIframe,
+          });
         }
       } else {
         const probe = await probeMaricopaRecorderConnectivity();

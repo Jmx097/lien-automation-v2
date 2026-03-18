@@ -181,6 +181,18 @@ For CA SOS scheduled runs specifically:
 - Cloud Run deploy defaults schedule CA SOS, Maricopa Recorder, and NYC ACRIS on weekdays only in `America/Denver`, with finish-by targets of `10:00`, `14:00`, and `22:00`.
 - Active schedule configuration should be set with explicit per-site env vars (`SCHEDULE_CA_SOS_*`, `SCHEDULE_MARICOPA_RECORDER_*`, `SCHEDULE_NYC_ACRIS_*`) rather than relying on legacy global fallback vars.
 
+## Operator Thread Handoff
+
+To keep operational threads compact, prefer carrying forward only:
+
+- current deployed state
+- completed validations
+- current blocker
+- immediate next actions
+- exact service URL or key command only when needed
+
+Avoid pasting full endpoint payloads, repeated change inventories, or long historical logs into the next thread unless they are still the active blocker.
+
 ## OCR Runtime Notes
 
 - OCR-backed amount extraction requires both `tesseract` and `pdftoppm`.

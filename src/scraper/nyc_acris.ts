@@ -211,6 +211,9 @@ interface ProbeResult {
   ok: boolean;
   detail?: string;
   transportMode: BrowserTransportMode;
+  failureClass?: NYCAcrisFailureClass;
+  diagnostic?: PageReadyDiagnostic;
+  recoveryAction: ProbeRecoveryAction;
 }
 
 interface OcrExtraction {
@@ -236,6 +239,15 @@ interface AcrisDateParts {
   month: string;
   day: string;
   year: string;
+}
+
+type ProbeRecoveryAction = 'none' | 'retry_new_page' | 'retry_fresh_context';
+
+interface BootstrapSessionResult {
+  handle: Awaited<ReturnType<typeof createAcrisContext>>;
+  page: Page;
+  recoveryAction: ProbeRecoveryAction;
+  diagnostic?: PageReadyDiagnostic;
 }
 
 function unique<T>(items: T[]): T[] {
@@ -903,6 +915,54 @@ function formatDiagnostic(diag: PageReadyDiagnostic): string {
     ok: diag.ok,
     reason: diag.reason,
   });
+}
+
+function getLatestNavigationDiagnostic(manifest?: RunManifest): PageReadyDiagnostic | undefined {
+  return manifest?.navigationDiagnostics?.[manifest.navigationDiagnostics.length - 1];
+}
+
+function shouldRetryBootstrapDiagnostic(diagnostic?: PageReadyDiagnostic, message?: string): boolean {
+  if (!diagnostic) return /about:blank|unexpected_url|page not ready|net::err|chrome-error/i.test(message ?? '');
+
+  const blankBootstrap =
+    diagnostic.reason === 'unexpected_url' &&
+    (!diagnostic.finalUrl || diagnostic.finalUrl === 'about:blank' || diagnostic.finalUrl.startsWith('chrome-error://'));
+  const emptyShell =
+    !diagnostic.hasShellMarker &&
+    !diagnostic.hasToken &&
+    !diagnostic.hasResultMarker &&
+    !diagnostic.hasViewerIframe &&
+    diagnostic.bodyTextLength === 0;
+
+  return blankBootstrap || emptyShell || diagnostic.readyState === 'unavailable';
+}
+
+function summarizeProbeDiagnostic(diagnostic?: PageReadyDiagnostic) {
+  return {
+    probe_step: diagnostic?.step,
+    probe_attempt: diagnostic?.attempt,
+    final_url: diagnostic?.finalUrl,
+    ready_state: diagnostic?.readyState,
+    has_shell_marker: diagnostic?.hasShellMarker,
+    has_result_marker: diagnostic?.hasResultMarker,
+    has_viewer_iframe: diagnostic?.hasViewerIframe,
+  };
+}
+
+function inferBootstrapRecoveryAction(manifest: RunManifest): ProbeRecoveryAction {
+  const warnings = manifest.warnings.join(' ');
+  if (warnings.includes('bootstrap_recovery retry_fresh_context')) return 'retry_fresh_context';
+  if (warnings.includes('bootstrap_recovery retry_new_page')) return 'retry_new_page';
+  return 'none';
+}
+
+export function summarizeAmountReasonCounts(rows: Pick<LienRecord, 'amount_reason'>[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const key = row.amount_reason ?? 'unknown';
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
 }
 
 function parseViewerTotalPages(viewerSrc: string | null): number {
@@ -1744,6 +1804,79 @@ async function createAcrisContext(options?: { headed?: boolean }) {
   });
 }
 
+async function openBootstrapPage(
+  handle: Awaited<ReturnType<typeof createAcrisContext>>,
+  state: SearchState,
+  manifest: RunManifest,
+): Promise<Page> {
+  const page = await handle.context.newPage();
+  page.setDefaultTimeout(45000);
+  await initializeSearchSession(page, state, manifest);
+  return page;
+}
+
+async function bootstrapSearchSession(
+  state: SearchState,
+  manifest: RunManifest,
+  options?: { headed?: boolean },
+): Promise<BootstrapSessionResult> {
+  let handle = await createAcrisContext({ headed: options?.headed });
+  manifest.transportMode = handle.mode;
+  await hardenContext(handle.context, manifest);
+
+  let recoveryAction: ProbeRecoveryAction = 'none';
+  let page = await handle.context.newPage();
+  page.setDefaultTimeout(45000);
+
+  try {
+    await initializeSearchSession(page, state, manifest);
+    return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+  } catch (initialErr: unknown) {
+    const initialDiagnostic = getLatestNavigationDiagnostic(manifest);
+    const initialMessage = sanitizeErrorMessage(initialErr);
+    if (!shouldRetryBootstrapDiagnostic(initialDiagnostic, initialMessage)) {
+      await page.close().catch(() => {});
+      await handle.close().catch(() => {});
+      throw initialErr;
+    }
+
+    manifest.warnings.push(`bootstrap_recovery retry_new_page ${initialMessage}`);
+    await page.close().catch(() => {});
+    recoveryAction = 'retry_new_page';
+    page = await handle.context.newPage();
+    page.setDefaultTimeout(45000);
+
+    try {
+      await initializeSearchSession(page, state, manifest);
+      return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+    } catch (pageRetryErr: unknown) {
+      const pageRetryDiagnostic = getLatestNavigationDiagnostic(manifest);
+      const pageRetryMessage = sanitizeErrorMessage(pageRetryErr);
+      if (!shouldRetryBootstrapDiagnostic(pageRetryDiagnostic, pageRetryMessage)) {
+        await page.close().catch(() => {});
+        await handle.close().catch(() => {});
+        throw pageRetryErr;
+      }
+
+      manifest.warnings.push(`bootstrap_recovery retry_fresh_context ${pageRetryMessage}`);
+      await page.close().catch(() => {});
+      await handle.close().catch(() => {});
+
+      handle = await createAcrisContext({ headed: options?.headed });
+      manifest.transportMode = handle.mode;
+      await hardenContext(handle.context, manifest);
+      recoveryAction = 'retry_fresh_context';
+      try {
+        page = await openBootstrapPage(handle, state, manifest);
+        return { handle, page, recoveryAction, diagnostic: getLatestNavigationDiagnostic(manifest) };
+      } catch (freshContextErr: unknown) {
+        await handle.close().catch(() => {});
+        throw freshContextErr;
+      }
+    }
+  }
+}
+
 export async function validateNYCAcrisSelectors(options: ValidationOptions = {}): Promise<RunManifest> {
   return nycAcrisLimiter.schedule(async () => {
     const startedAtMs = Date.now();
@@ -1763,20 +1896,18 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
       connectivityStatusAtStart: options.connectivity_status_at_start ?? 'healthy',
     };
 
-    const handle = await createAcrisContext({ headed: options.headed });
-    manifest.transportMode = handle.mode;
-
-    const page = await handle.context.newPage();
-    page.setDefaultTimeout(45000);
     const state: SearchState = {
       pageNum: 1,
       profile: { ...SEARCH_PROFILE },
     };
+    let handle: Awaited<ReturnType<typeof createAcrisContext>> | null = null;
+    let page: Page | null = null;
 
     try {
-      await hardenContext(handle.context, manifest);
       throwIfSessionBudgetExceeded(startedAtMs);
-      await initializeSearchSession(page, state, manifest);
+      const bootstrap = await bootstrapSearchSession(state, manifest, { headed: options.headed });
+      handle = bootstrap.handle;
+      page = bootstrap.page;
       manifest.validationSteps?.push({ step: 'open_document_type', ok: true });
 
       throwIfSessionBudgetExceeded(startedAtMs);
@@ -1824,12 +1955,14 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
       manifest.failures.push(message);
       manifest.validationSteps?.push({ step: 'validation_failed', ok: false, detail: message });
       manifest.sessionDurationMs = Date.now() - startedAtMs;
-      await captureValidationEvidence(page, 'acris-validation-failure');
+      if (page) {
+        await captureValidationEvidence(page, 'acris-validation-failure');
+      }
       await writeManifest(manifest, `validation-failed-${Date.now()}.json`).catch(() => null);
       throw err;
     } finally {
-      await page.close().catch(() => {});
-      await handle.close().catch(() => {});
+      await page?.close().catch(() => {});
+      await handle?.close().catch(() => {});
     }
   });
 }
@@ -1857,11 +1990,6 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       requestedDateEnd: normalizeAcrisDate(options.date_end) ?? options.date_end,
     };
 
-    const handle = await createAcrisContext();
-    manifest.transportMode = handle.mode;
-
-    const page = await handle.context.newPage();
-    page.setDefaultTimeout(45000);
     const state: SearchState = {
       pageNum: checkpoint?.pageNum ?? 1,
       profile: { ...SEARCH_PROFILE },
@@ -1870,11 +1998,18 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         end: normalizeAcrisDate(options.date_end) ?? options.date_end,
       },
     };
+    let handle: Awaited<ReturnType<typeof createAcrisContext>> | null = null;
+    let page: Page | null = null;
+    let bootstrapRecoveryAction: ProbeRecoveryAction = 'none';
+    let bootstrapDiagnostic: PageReadyDiagnostic | undefined;
 
     try {
-      await hardenContext(handle.context, manifest);
       throwIfSessionBudgetExceeded(startedAtMs);
-      await initializeSearchSession(page, state, manifest);
+      const bootstrap = await bootstrapSearchSession(state, manifest);
+      handle = bootstrap.handle;
+      page = bootstrap.page;
+      bootstrapRecoveryAction = bootstrap.recoveryAction;
+      bootstrapDiagnostic = bootstrap.diagnostic;
 
       const collectedRows: ResultRowCandidate[] = [];
       let retriedFirstPageForRangeIntegrity = false;
@@ -1975,7 +2110,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         checkpoint,
         pageNum: state.pageNum,
         stopRequested: options.stop_requested,
-        extractArtifact: (row) => extractViewerArtifactInSession(page, state, row.docId, manifest),
+        extractArtifact: (row) => extractViewerArtifactInSession(page!, state, row.docId, manifest),
         saveCheckpoint: async (nextCheckpoint) => {
           manifest.checkpoint = {
             pageNum: nextCheckpoint.pageNum,
@@ -2006,6 +2141,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         network: manifest.network.slice(0, 200),
       });
 
+      const outputRows = selectedRows.map((row) => toLienRecord(row, artifactsByDocId.get(row.docId)));
       log({
         stage: 'scraper_complete',
         site: 'nyc_acris',
@@ -2028,10 +2164,13 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         manifest_file: manifestFile,
         initial_cap_enforced: ENFORCE_INITIAL_CAP,
         session_duration_ms: manifest.sessionDurationMs,
+        probe_recovery_action: bootstrapRecoveryAction,
+        amount_reason_counts: summarizeAmountReasonCounts(outputRows),
+        ...summarizeProbeDiagnostic(bootstrapDiagnostic),
       });
 
       return attachScrapeQualitySummary(
-        selectedRows.map((row) => toLienRecord(row, artifactsByDocId.get(row.docId))),
+        outputRows,
         {
           requested_date_start: manifest.requestedDateStart ?? options.date_start,
           requested_date_end: manifest.requestedDateEnd ?? options.date_end,
@@ -2060,8 +2199,8 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       await writeManifest(manifest, `run-failed-${Date.now()}.json`).catch(() => null);
       throw err;
     } finally {
-      await page.close().catch(() => {});
-      await handle.close().catch(() => {});
+      await page?.close().catch(() => {});
+      await handle?.close().catch(() => {});
     }
   });
 }
@@ -2079,35 +2218,39 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
       network: [],
       navigationDiagnostics: [],
     };
-    const handle = await createAcrisContext();
-    manifest.transportMode = handle.mode;
-    const page = await handle.context.newPage();
-    page.setDefaultTimeout(30000);
+    const state: SearchState = {
+      pageNum: 1,
+      profile: { ...SEARCH_PROFILE },
+    };
+    let handle: Awaited<ReturnType<typeof createAcrisContext>> | null = null;
+    let page: Page | null = null;
 
     try {
-      await hardenContext(handle.context, manifest);
-      const diagnostic = await gotoPageUntilReady(page, manifest, {
-        url: `${BASE}${PATHS.index}`,
-        expectedPath: PATHS.index,
-        step: 'probe_index_page',
-        kind: 'index',
-        gotoTimeoutMs: 30000,
-        readyTimeoutMs: 15000,
-      });
+      const bootstrap = await bootstrapSearchSession(state, manifest);
+      handle = bootstrap.handle;
+      page = bootstrap.page;
+      const diagnostic = bootstrap.diagnostic;
       return {
         ok: true,
-        detail: `loaded ${diagnostic.finalUrl} ${formatDiagnostic(diagnostic)}`,
+        detail: diagnostic ? `loaded ${diagnostic.finalUrl} ${formatDiagnostic(diagnostic)}` : 'loaded NYC bootstrap session',
         transportMode: handle.mode,
+        diagnostic,
+        recoveryAction: bootstrap.recoveryAction,
       };
     } catch (err: unknown) {
+      const message = sanitizeErrorMessage(err);
+      const diagnostic = getLatestNavigationDiagnostic(manifest);
       return {
         ok: false,
-        detail: sanitizeErrorMessage(err),
-        transportMode: handle.mode,
+        detail: message,
+        transportMode: handle?.mode ?? manifest.transportMode,
+        diagnostic,
+        failureClass: classifyNYCAcrisFailure(message),
+        recoveryAction: inferBootstrapRecoveryAction(manifest),
       };
     } finally {
-      await page.close().catch(() => {});
-      await handle.close().catch(() => {});
+      await page?.close().catch(() => {});
+      await handle?.close().catch(() => {});
     }
   });
 }

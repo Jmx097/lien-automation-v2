@@ -19,6 +19,7 @@ import {
   resolveNYCAcrisDelay,
   resolveNYCAcrisResumeStartIndex,
   sanitizeDebtorName,
+  summarizeAmountReasonCounts,
   shouldRetryViewerOpen,
 } from '../../src/scraper/nyc_acris';
 
@@ -535,5 +536,20 @@ describe('nyc acris fixture parsing', () => {
     expect(saved).toEqual([
       expect.objectContaining({ docIndex: 1, docId: 'doc-1', pageNum: 4 }),
     ]);
+  });
+
+  it('summarizes amount reasons for compact scraper logs', () => {
+    expect(
+      summarizeAmountReasonCounts([
+        { amount_reason: 'ok' },
+        { amount_reason: 'amount_low_confidence' },
+        { amount_reason: 'ok' },
+        { amount_reason: 'ocr_missing' },
+      ] as any)
+    ).toEqual({
+      ok: 2,
+      amount_low_confidence: 1,
+      ocr_missing: 1,
+    });
   });
 });
