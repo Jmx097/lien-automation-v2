@@ -404,6 +404,53 @@ export async function pushToSheets(rows: LienRecord[]): Promise<{ uploaded: numb
   return { uploaded: rows.length };
 }
 
+
+function escapeSheetNameForFormula(name: string): string {
+  return name.replace(/'/g, "''");
+}
+
+async function refreshMasterSheetTab(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sourceTabTitle: string
+): Promise<void> {
+  const masterTabTitle = 'Master';
+  await ensureSheetTabExists(sheets, spreadsheetId, masterTabTitle);
+  await initializeSheetHeaderRow(sheets, spreadsheetId, masterTabTitle);
+
+  const titles = await listSheetTitles(sheets, spreadsheetId);
+  const aggregateSources = titles.filter((title) =>
+    title !== masterTabTitle &&
+    title !== 'Records' &&
+    title.startsWith('Scheduled_')
+  );
+
+  const formula = aggregateSources.length > 0
+    ? `=IFERROR(QUERY({${aggregateSources.map((title) => `INDIRECT("'${escapeSheetNameForFormula(title)}'!A2:${HEADER_END_COLUMN}")`).join(';')}},"where Col1 is not null",0),)`
+    : '';
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `'${masterTabTitle}'!A2:${HEADER_END_COLUMN}`,
+  });
+
+  if (formula) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${masterTabTitle}'!A2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[formula]] },
+    });
+  }
+
+  log({
+    stage: 'sheets_master_tab_refresh_complete',
+    spreadsheet_id_suffix: spreadsheetId.slice(-6),
+    source_tab_title: sourceTabTitle,
+    master_tab_title: masterTabTitle,
+    source_tab_count: aggregateSources.length,
+  });
+}
 export async function pushToSheetsForTab(
   rows: LienRecord[],
   requestedTabTitle: string
@@ -431,6 +478,8 @@ export async function pushToSheetsForTab(
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
   });
+
+  await refreshMasterSheetTab(sheets, spreadsheetId, tabTitle);
 
   log({
     stage: 'sheets_append_tab_complete',

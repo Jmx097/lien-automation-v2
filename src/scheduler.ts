@@ -64,6 +64,11 @@ interface SiteScheduleConfig {
   slot: Slot;
 }
 
+interface SiteSlotDefaults {
+  morning: { hour: number; minute: number };
+  afternoon: { hour: number; minute: number };
+}
+
 export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
   cooldown_of?: string;
@@ -168,12 +173,48 @@ function getSiteEnv(site: SupportedSite, suffix: string, legacyName?: string): s
   return process.env[`${sitePrefix(site)}_${suffix}`] ?? (legacyName ? process.env[legacyName] : undefined);
 }
 
-function getSiteSchedule(site: SupportedSite): SiteScheduleConfig {
+function getSiteSlotDefaults(site: SupportedSite): SiteSlotDefaults {
+  if (site === 'nyc_acris') {
+    return {
+      morning: { hour: 10, minute: 0 },
+      afternoon: { hour: 14, minute: 0 },
+    };
+  }
+
+  return {
+    morning: { hour: 9, minute: 0 },
+    afternoon: { hour: 15, minute: 0 },
+  };
+}
+
+function resolveConfiguredSlots(site: SupportedSite): Slot[] {
+  const raw = (getSiteEnv(site, 'SLOTS') ?? 'morning,afternoon')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value): value is Slot => value === 'morning' || value === 'afternoon');
+
+  if (raw.length === 0) return ['morning', 'afternoon'];
+  return Array.from(new Set(raw));
+}
+
+function getSiteSchedule(site: SupportedSite, requestedSlot?: Slot): SiteScheduleConfig {
+  const slotDefaults = getSiteSlotDefaults(site);
+  const resolvedSlot = requestedSlot
+    ?? ((new Date().getHours() < 12 ? 'morning' : 'afternoon') as Slot);
+
   if (site === 'nyc_acris') {
     const timezone = getSiteEnv(site, 'TIMEZONE') ?? 'America/New_York';
     const days = (getSiteEnv(site, 'WEEKLY_DAYS') ?? 'TU,WE,TH,FR').split(',').map((value) => value.trim().toUpperCase());
-    const runHour = Number(getSiteEnv(site, 'RUN_HOUR') ?? '14');
-    const runMinute = Number(getSiteEnv(site, 'RUN_MINUTE') ?? '0');
+    const runHour = Number(
+      getSiteEnv(site, `${resolvedSlot.toUpperCase()}_RUN_HOUR`)
+      ?? getSiteEnv(site, 'RUN_HOUR')
+      ?? String(slotDefaults[resolvedSlot].hour)
+    );
+    const runMinute = Number(
+      getSiteEnv(site, `${resolvedSlot.toUpperCase()}_RUN_MINUTE`)
+      ?? getSiteEnv(site, 'RUN_MINUTE')
+      ?? String(slotDefaults[resolvedSlot].minute)
+    );
     const deadlineHour = Number(getSiteEnv(site, 'DEADLINE_HOUR') ?? '18');
     const deadlineMinute = Number(getSiteEnv(site, 'DEADLINE_MINUTE') ?? '0');
     const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? '5');
@@ -188,14 +229,22 @@ function getSiteSchedule(site: SupportedSite): SiteScheduleConfig {
       finishByMinute: deadlineMinute,
       triggerLeadMinutes: 0,
       maxRecords,
-      slot: runHour < 12 ? 'morning' : 'afternoon',
+      slot: resolvedSlot,
     };
   }
 
   const timezone = getSiteEnv(site, 'TIMEZONE', 'SCHEDULE_TARGET_TIMEZONE') ?? 'America/New_York';
   const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? 'TU,WE').split(',').map((value) => value.trim().toUpperCase());
-  const finishByHour = Number(getSiteEnv(site, 'RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '9');
-  const finishByMinute = Number(getSiteEnv(site, 'RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0');
+  const finishByHour = Number(
+    getSiteEnv(site, `${resolvedSlot.toUpperCase()}_RUN_HOUR`)
+    ?? getSiteEnv(site, 'RUN_HOUR', 'SCHEDULE_RUN_HOUR')
+    ?? String(slotDefaults[resolvedSlot].hour)
+  );
+  const finishByMinute = Number(
+    getSiteEnv(site, `${resolvedSlot.toUpperCase()}_RUN_MINUTE`)
+    ?? getSiteEnv(site, 'RUN_MINUTE', 'SCHEDULE_RUN_MINUTE')
+    ?? String(slotDefaults[resolvedSlot].minute)
+  );
   const triggerLeadMinutes = Number(getSiteEnv(site, 'TRIGGER_LEAD_MINUTES') ?? '180');
   const triggerTime = subtractMinutes(finishByHour, finishByMinute, triggerLeadMinutes);
   const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? SCHEDULE_MAX_RECORDS);
@@ -210,7 +259,7 @@ function getSiteSchedule(site: SupportedSite): SiteScheduleConfig {
     finishByMinute,
     triggerLeadMinutes,
     maxRecords,
-    slot: finishByHour < 12 ? 'morning' : 'afternoon',
+    slot: resolvedSlot,
   };
 }
 
@@ -244,19 +293,19 @@ function isScheduledDay(site: SupportedSite, now: Date): boolean {
 }
 
 function buildDefaultIdempotencyKey(site: SupportedSite, now: Date, slot: Slot): string {
-  const config = getSiteSchedule(site);
+  const config = getSiteSchedule(site, slot);
   const parts = getDateParts(now, config.timezone);
   return `${site}:${parts.year}-${parts.month}-${parts.day}:${slot}`;
 }
 
-function buildDeadlineIso(site: SupportedSite, now: Date): string {
-  const config = getSiteSchedule(site);
+function buildDeadlineIso(site: SupportedSite, now: Date, slot: Slot): string {
+  const config = getSiteSchedule(site, slot);
   const parts = getDateParts(now, config.timezone);
   return `${parts.year}-${parts.month}-${parts.day}T${String(config.finishByHour).padStart(2, '0')}:${String(config.finishByMinute).padStart(2, '0')}:00 ${config.timezone}`;
 }
 
-function isPastDeadline(site: SupportedSite, now: Date): boolean {
-  const config = getSiteSchedule(site);
+function isPastDeadline(site: SupportedSite, now: Date, slot: Slot): boolean {
+  const config = getSiteSchedule(site, slot);
   const parts = getDateParts(now, config.timezone);
   if (parts.hour > config.finishByHour) return true;
   if (parts.hour === config.finishByHour && parts.minute >= config.finishByMinute) return true;
@@ -616,6 +665,7 @@ async function getRecordsForScheduledRun(
   date_start: string,
   date_end: string,
   effectiveMaxRecords: number,
+  slot: Slot,
   previousFailureClass?: string,
 ) {
   if (shouldUseCachedNYCRows(site, previousFailureClass)) {
@@ -631,7 +681,7 @@ async function getRecordsForScheduledRun(
     date_start,
     date_end,
     max_records: effectiveMaxRecords,
-    stop_requested: () => isPastDeadline(site, new Date()),
+    stop_requested: () => isPastDeadline(site, new Date(), slot),
     connectivity_status_at_start: connectivityAtStart.status,
   } as any);
 
@@ -664,7 +714,7 @@ export async function checkSiteConnectivity(): Promise<void> {
 
 export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}): Promise<ScheduledRun> {
   const site = options.site ?? 'ca_sos';
-  const schedule = getSiteSchedule(site);
+  const schedule = getSiteSchedule(site, options.slot);
   const now = new Date();
   const slot = options.slot ?? schedule.slot;
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
@@ -695,7 +745,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   }
 
   const { date_start, date_end } = getLast7DaysRange();
-  const deadlineIso = buildDeadlineIso(site, now);
+  const deadlineIso = buildDeadlineIso(site, now, slot);
   const seededMaxRecords = await resolveEffectiveMaxRecords(site);
   let effectiveMaxRecords = seededMaxRecords;
   let skipScrape = false;
@@ -869,6 +919,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           date_start,
           date_end,
           effectiveMaxRecords,
+          slot,
           previousFailureClass,
         );
 
@@ -895,7 +946,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }
 
-        const deadlineHit = isPastDeadline(site, new Date());
+        const deadlineHit = isPastDeadline(site, new Date(), slot);
         const quality = computeQualityMetrics(records, effectiveMaxRecords, deadlineHit);
 
         run.records_scraped = records.length;
@@ -1128,46 +1179,51 @@ export async function getScheduleState(): Promise<ScheduleState> {
   return Object.fromEntries(entries) as ScheduleState;
 }
 
-export function getNextRuns(): Array<{ site: SupportedSite; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
-  return supportedSites.map((site) => {
-    const config = getSiteSchedule(site);
-    return {
-      site,
-      schedule: 'weekly',
-      days: config.days.join(','),
-      run_time: formatClock(config.triggerHour, config.triggerMinute),
-      trigger_time: formatClock(config.triggerHour, config.triggerMinute),
-      finish_by_time: formatClock(config.finishByHour, config.finishByMinute),
-      deadline_time: formatClock(config.finishByHour, config.finishByMinute),
-      timezone: config.timezone,
-    };
-  });
+export function getNextRuns(): Array<{ site: SupportedSite; slot: Slot; schedule: string; days: string; run_time: string; trigger_time: string; finish_by_time: string; deadline_time: string; timezone: string }> {
+  return supportedSites.flatMap((site) =>
+    resolveConfiguredSlots(site).map((slot) => {
+      const config = getSiteSchedule(site, slot);
+      return {
+        site,
+        slot,
+        schedule: 'daily',
+        days: config.days.join(','),
+        run_time: formatClock(config.triggerHour, config.triggerMinute),
+        trigger_time: formatClock(config.triggerHour, config.triggerMinute),
+        finish_by_time: formatClock(config.finishByHour, config.finishByMinute),
+        deadline_time: formatClock(config.finishByHour, config.finishByMinute),
+        timezone: config.timezone,
+      };
+    })
+  );
 }
 
 export async function checkMissedRuns(): Promise<void> {
   const now = new Date();
 
   for (const site of supportedSites) {
-    const config = getSiteSchedule(site);
-    if (!isScheduledDay(site, now)) continue;
+    for (const slot of resolveConfiguredSlots(site)) {
+      const config = getSiteSchedule(site, slot);
+      if (!isScheduledDay(site, now)) continue;
 
-    const parts = getDateParts(now, config.timezone);
-    const dueHour = config.triggerHour + Math.floor((config.triggerMinute + MISSED_RUN_GRACE_MINUTES) / 60);
-    const dueMinute = (config.triggerMinute + MISSED_RUN_GRACE_MINUTES) % 60;
-    const overdue = parts.hour > dueHour || (parts.hour === dueHour && parts.minute >= dueMinute);
-    if (!overdue) continue;
+      const parts = getDateParts(now, config.timezone);
+      const dueHour = config.triggerHour + Math.floor((config.triggerMinute + MISSED_RUN_GRACE_MINUTES) / 60);
+      const dueMinute = (config.triggerMinute + MISSED_RUN_GRACE_MINUTES) % 60;
+      const overdue = parts.hour > dueHour || (parts.hour === dueHour && parts.minute >= dueMinute);
+      if (!overdue) continue;
 
-    const key = buildDefaultIdempotencyKey(site, now, config.slot);
-    const success = await getStore().getSuccessfulRunByIdempotencyKey(key);
-    if (success) continue;
+      const key = buildDefaultIdempotencyKey(site, now, config.slot);
+      const success = await getStore().getSuccessfulRunByIdempotencyKey(key);
+      if (success) continue;
 
-    const existingAlert = await getStore().getMissedAlertByKey(key);
-    if (existingAlert) continue;
+      const existingAlert = await getStore().getMissedAlertByKey(key);
+      if (existingAlert) continue;
 
-    const expectedAtIso = `${parts.year}-${parts.month}-${parts.day}T${String(dueHour).padStart(2, '0')}:${String(dueMinute).padStart(2, '0')}:00`;
-    await getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
-    await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
-    log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
+      const expectedAtIso = `${parts.year}-${parts.month}-${parts.day}T${String(dueHour).padStart(2, '0')}:${String(dueMinute).padStart(2, '0')}:00`;
+      await getStore().insertMissedAlert({ site, idempotency_key: key, slot: config.slot, expected_by: expectedAtIso });
+      await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
+      log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
+    }
   }
 }
 
