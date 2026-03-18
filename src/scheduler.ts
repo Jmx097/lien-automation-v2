@@ -128,6 +128,14 @@ export interface ScheduledRun extends ScheduledRunRecord {
 export interface RunConfidenceSummary {
   status: 'high' | 'medium' | 'low';
   reasons: string[];
+  evidence: {
+    source_publish_confirmed: boolean;
+    master_sync_confirmed: boolean;
+    source_tab_title_present: boolean;
+    master_tab_title_present: boolean;
+    review_tab_title_present: boolean;
+    uploaded_rows_match_scraped_rows: boolean;
+  };
   metrics: {
     records_scraped: number;
     rows_uploaded: number;
@@ -152,6 +160,10 @@ export interface SiteScheduleState {
   effective_max_records: number;
   target_amount_coverage_pct: number;
   auto_throttle: boolean;
+  recent_run_count: number;
+  latest_run_started_at?: string;
+  latest_run_confidence_status?: RunConfidenceSummary['status'];
+  latest_run_confidence_reasons?: string[];
   connectivity: {
     status: SiteConnectivityState['status'];
     next_probe_at?: string;
@@ -248,8 +260,8 @@ function getSiteEnv(site: SupportedSite, suffix: string, legacyName?: string): s
 }
 
 function getSiteSchedules(site: SupportedSite): SiteScheduleConfig[] {
-  const timezone = getSiteEnv(site, 'TIMEZONE', 'SCHEDULE_TARGET_TIMEZONE') ?? DEFAULT_TIMEZONE;
-  const days = (getSiteEnv(site, 'WEEKLY_DAYS', 'SCHEDULE_WEEKLY_DAYS') ?? DEFAULT_WEEKDAYS)
+  const timezone = getSiteEnv(site, 'TIMEZONE') ?? DEFAULT_TIMEZONE;
+  const days = (getSiteEnv(site, 'WEEKLY_DAYS') ?? DEFAULT_WEEKDAYS)
     .split(',')
     .map((value) => value.trim().toUpperCase());
   const maxRecords = Number(getSiteEnv(site, 'MAX_RECORDS') ?? process.env.ACRIS_INITIAL_MAX_RECORDS ?? getScheduleMaxRecords());
@@ -263,13 +275,13 @@ function getSiteSchedules(site: SupportedSite): SiteScheduleConfig[] {
     },
     {
       slot: 'afternoon',
-      finishByHour: Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR', 'SCHEDULE_RUN_HOUR') ?? '14'),
-      finishByMinute: Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE', 'SCHEDULE_RUN_MINUTE') ?? '0'),
+      finishByHour: Number(getSiteEnv(site, 'AFTERNOON_RUN_HOUR') ?? '14'),
+      finishByMinute: Number(getSiteEnv(site, 'AFTERNOON_RUN_MINUTE') ?? '0'),
     },
     {
       slot: 'evening',
-      finishByHour: Number(getSiteEnv(site, 'EVENING_RUN_HOUR', 'SCHEDULE_DEADLINE_HOUR') ?? '22'),
-      finishByMinute: Number(getSiteEnv(site, 'EVENING_RUN_MINUTE', 'SCHEDULE_DEADLINE_MINUTE') ?? '0'),
+      finishByHour: Number(getSiteEnv(site, 'EVENING_RUN_HOUR') ?? '22'),
+      finishByMinute: Number(getSiteEnv(site, 'EVENING_RUN_MINUTE') ?? '0'),
     },
   ];
 
@@ -411,15 +423,34 @@ function average(values: number[]): number {
 
 function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   const reasons: string[] = [];
+  const sourcePublishConfirmed = Boolean(
+    run.records_scraped === 0 ||
+    (
+      Boolean(run.source_tab_title) ||
+      (run.status === 'success' && run.rows_uploaded === run.records_scraped && run.rows_uploaded > 0)
+    )
+  );
+  const masterSyncConfirmed = Boolean(
+    run.records_scraped === 0 ||
+    run.master_tab_title ||
+    run.review_tab_title ||
+    (run.new_master_row_count ?? 0) > 0 ||
+    (run.purged_review_row_count ?? 0) > 0 ||
+    (run.current_run_quarantined_row_count ?? 0) > 0 ||
+    (run.current_run_conflict_row_count ?? 0) > 0 ||
+    (run.retained_prior_review_row_count ?? 0) > 0 ||
+    (run.master_fallback_used ?? 0) > 0
+  );
+  const uploadedRowsMatchScrapedRows = run.rows_uploaded === run.records_scraped;
 
   if (run.status !== 'success') reasons.push('run_not_successful');
-  if (!run.source_tab_title && run.records_scraped > 0) reasons.push('source_tab_missing');
+  if (!sourcePublishConfirmed && run.records_scraped > 0) reasons.push('source_tab_missing');
   if (run.partial === 1) reasons.push('partial_run');
   if ((run.retry_exhausted ?? 0) > 0) reasons.push('retry_budget_exhausted');
   if ((run.master_fallback_used ?? 0) > 0) reasons.push('master_publish_fallback_active');
   if ((run.anomaly_detected ?? 0) > 0) reasons.push('quality_anomaly_detected');
-  if (run.rows_uploaded !== run.records_scraped) reasons.push('row_upload_mismatch');
-  if (run.records_scraped > 0 && !run.master_tab_title) reasons.push('master_tab_missing');
+  if (!uploadedRowsMatchScrapedRows) reasons.push('row_upload_mismatch');
+  if (run.records_scraped > 0 && !masterSyncConfirmed) reasons.push('master_tab_missing');
   if (run.records_scraped > 0 && run.amount_coverage_pct < getAmountMinCoveragePct()) reasons.push('amount_coverage_below_target');
   if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
   if ((run.current_run_quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
@@ -447,6 +478,14 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   return {
     status,
     reasons,
+    evidence: {
+      source_publish_confirmed: sourcePublishConfirmed,
+      master_sync_confirmed: masterSyncConfirmed,
+      source_tab_title_present: Boolean(run.source_tab_title),
+      master_tab_title_present: Boolean(run.master_tab_title),
+      review_tab_title_present: Boolean(run.review_tab_title),
+      uploaded_rows_match_scraped_rows: uploadedRowsMatchScrapedRows,
+    },
     metrics: {
       records_scraped: run.records_scraped,
       rows_uploaded: run.rows_uploaded,
@@ -1432,6 +1471,8 @@ export async function getScheduleState(): Promise<ScheduleState> {
       const defaultMax = getSiteSchedule(site).maxRecords;
       const effectiveMax = control?.effective_max_records ?? clamp(defaultMax, bounds.min, bounds.max);
       const recent = await getStore().getRecentSuccessfulRuns(site, 4);
+      const latestRun = await getStore().getMostRecentRun(site);
+      const latestRunConfidence = latestRun ? buildRunConfidence(latestRun) : undefined;
       const connectivity = await getConnectivityState(site);
       const latestAnomaly = await getStore().getLatestQualityAnomalyAlert(site);
 
@@ -1439,6 +1480,10 @@ export async function getScheduleState(): Promise<ScheduleState> {
         effective_max_records: effectiveMax,
         target_amount_coverage_pct: getAmountMinCoveragePct(),
         auto_throttle: isAutoThrottleEnabled(site),
+        recent_run_count: recent.length,
+        latest_run_started_at: latestRun?.started_at,
+        latest_run_confidence_status: latestRunConfidence?.status,
+        latest_run_confidence_reasons: latestRunConfidence?.reasons,
         connectivity: {
           status: connectivity.status,
           next_probe_at: connectivity.next_probe_at,

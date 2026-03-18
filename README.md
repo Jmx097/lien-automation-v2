@@ -21,7 +21,8 @@ This project provides an Express.js API server that scrapes lien data from the C
 - **Scheduler readiness + introspection**:
   - `GET /schedule/health` reports readiness checks and configuration status.
   - `GET /schedule` returns next run windows and persisted schedule history, including per-run confidence summaries.
-  - `GET /schedule/confidence` returns a lightweight operator view of recent run confidence outcomes.
+- `GET /schedule/confidence` returns a lightweight operator view of recent run confidence outcomes.
+- `npm run proof:scheduled-evidence` triggers a repeatable scheduled-run proof flow that writes fresh per-site evidence for `/schedule` and `/schedule/confidence`.
 - **Externally triggered schedule runs**: `POST /schedule/run` supports authenticated scheduler triggers with slot/idempotency controls.
 - **Persisted scheduler history**: scheduled run records are stored in SQLite locally and can use Postgres-backed durable state in hosted environments when `DATABASE_URL` is configured.
 - **Structured logging and retry behavior**: runtime logs and scraper safeguards for operational reliability.
@@ -178,6 +179,7 @@ For CA SOS scheduled runs specifically:
 - `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES` controls how much earlier the external scheduler should call `POST /schedule/run` so the CA probe + scrape can finish ahead of that time. Default: `180`.
 - Scheduled CA runs size themselves from the live `Results: N` value on the search results page. If the probe finds `0`, the run completes successfully without scraping rows or uploading a sheet tab.
 - Cloud Run deploy defaults schedule CA SOS, Maricopa Recorder, and NYC ACRIS on weekdays only in `America/Denver`, with finish-by targets of `10:00`, `14:00`, and `22:00`.
+- Active schedule configuration should be set with explicit per-site env vars (`SCHEDULE_CA_SOS_*`, `SCHEDULE_MARICOPA_RECORDER_*`, `SCHEDULE_NYC_ACRIS_*`) rather than relying on legacy global fallback vars.
 
 ## OCR Runtime Notes
 
@@ -475,6 +477,8 @@ Linux cron example:
 ```
 
 Cloud Scheduler equivalent: create one job per site/slot with the schedule returned by `GET /schedule`, since CA SOS trigger times are derived from finish-by targets plus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`.
+
+For operator evidence backfills outside CI, run `npm run proof:scheduled-evidence`. The script executes scheduled runs with deterministic proof idempotency keys, then prints the resulting persisted run evidence, `GET /schedule` next-run config, and per-site state summary.
 
 Verification helpers:
 

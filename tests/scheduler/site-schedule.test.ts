@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import dotenv from 'dotenv';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockScraper = vi.fn();
@@ -78,9 +81,13 @@ describe('site-aware scheduler', () => {
     mockProbeCASOSResultCount.mockReset();
     mockPushToSheetsForTab.mockReset();
     mockSyncMasterSheetTab.mockReset();
-    delete process.env.SCHEDULE_NYC_ACRIS_RUN_HOUR;
-    delete process.env.SCHEDULE_NYC_ACRIS_RUN_MINUTE;
     delete process.env.SCHEDULE_NYC_ACRIS_WEEKLY_DAYS;
+    delete process.env.SCHEDULE_TARGET_TIMEZONE;
+    delete process.env.SCHEDULE_WEEKLY_DAYS;
+    delete process.env.SCHEDULE_RUN_HOUR;
+    delete process.env.SCHEDULE_RUN_MINUTE;
+    delete process.env.SCHEDULE_DEADLINE_HOUR;
+    delete process.env.SCHEDULE_DEADLINE_MINUTE;
   });
 
   it('returns independent next-run config for CA and NYC', async () => {
@@ -98,6 +105,67 @@ describe('site-aware scheduler', () => {
     );
   });
 
+  it('uses explicit site schedule vars from .env when loaded through dotenv', async () => {
+    const envPath = path.resolve(process.cwd(), '.env');
+    const parsed = dotenv.parse(fs.readFileSync(envPath, 'utf8'));
+    const scheduleKeys = Object.keys(parsed).filter((key) => key.startsWith('SCHEDULE_'));
+    const previous = new Map(scheduleKeys.map((key) => [key, process.env[key]]));
+
+    for (const key of scheduleKeys) {
+      process.env[key] = parsed[key];
+    }
+
+    try {
+      const { getNextRuns } = await import('../../src/scheduler');
+      const nextRuns = getNextRuns();
+
+      expect(nextRuns).toHaveLength(9);
+      expect(nextRuns).toEqual(expect.arrayContaining([
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR', run_time: '07:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR', run_time: '11:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'ca_sos', schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '19:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR', run_time: '10:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR', run_time: '14:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'maricopa_recorder', schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '22:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR', run_time: '10:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR', run_time: '14:00', timezone: 'America/Denver' }),
+        expect.objectContaining({ site: 'nyc_acris', schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '22:00', timezone: 'America/Denver' }),
+      ]));
+    } finally {
+      for (const [key, value] of previous.entries()) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('prefers explicit site schedule vars over legacy globals', async () => {
+    process.env.SCHEDULE_TARGET_TIMEZONE = 'America/New_York';
+    process.env.SCHEDULE_WEEKLY_DAYS = 'TU,WE';
+    process.env.SCHEDULE_RUN_HOUR = '9';
+    process.env.SCHEDULE_RUN_MINUTE = '30';
+    process.env.SCHEDULE_DEADLINE_HOUR = '13';
+    process.env.SCHEDULE_DEADLINE_MINUTE = '15';
+    process.env.SCHEDULE_CA_SOS_TIMEZONE = 'America/Denver';
+    process.env.SCHEDULE_CA_SOS_WEEKLY_DAYS = 'MO,TU,WE,TH,FR';
+    process.env.SCHEDULE_CA_SOS_MORNING_RUN_HOUR = '10';
+    process.env.SCHEDULE_CA_SOS_MORNING_RUN_MINUTE = '0';
+    process.env.SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR = '14';
+    process.env.SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE = '0';
+    process.env.SCHEDULE_CA_SOS_EVENING_RUN_HOUR = '22';
+    process.env.SCHEDULE_CA_SOS_EVENING_RUN_MINUTE = '0';
+    process.env.SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES = '180';
+
+    const { getNextRuns } = await import('../../src/scheduler');
+    const caRuns = getNextRuns().filter((run) => run.site === 'ca_sos');
+
+    expect(caRuns).toEqual([
+      expect.objectContaining({ schedule: 'daily_morning', days: 'MO,TU,WE,TH,FR', run_time: '07:00', timezone: 'America/Denver' }),
+      expect.objectContaining({ schedule: 'daily_afternoon', days: 'MO,TU,WE,TH,FR', run_time: '11:00', timezone: 'America/Denver' }),
+      expect.objectContaining({ schedule: 'daily_evening', days: 'MO,TU,WE,TH,FR', run_time: '19:00', timezone: 'America/Denver' }),
+    ]);
+  });
+
   it('namespaces idempotency and control state by site', async () => {
     mockProbeCASOSResultCount.mockResolvedValueOnce(1);
     mockScraper.mockResolvedValue([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
@@ -112,6 +180,9 @@ describe('site-aware scheduler', () => {
     expect(state.maricopa_recorder).toBeDefined();
     expect(state.nyc_acris).toBeDefined();
     expect(state.ca_sos.latest_anomaly).toBeUndefined();
+    expect(state.ca_sos.recent_run_count).toBe(1);
+    expect(state.nyc_acris.recent_run_count).toBe(1);
+    expect(state.ca_sos.latest_run_started_at).toBeTruthy();
     expect(Array.from(runs.keys())).toEqual(
       expect.arrayContaining(['ca_sos:2026-03-03:morning', 'nyc_acris:2026-03-03:afternoon'])
     );

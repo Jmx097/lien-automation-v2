@@ -93,6 +93,7 @@ function setReadyEnv(): void {
   });
   process.env.SCHEDULE_RUN_TOKEN = 'token';
   process.env.SBR_CDP_URL = 'wss://example.invalid';
+  process.env.SCHEDULE_CA_SOS_TIMEZONE = 'America/Denver';
   process.env.SCHEDULE_CA_SOS_WEEKLY_DAYS = 'MO,TU,WE,TH,FR';
   process.env.SCHEDULE_CA_SOS_MORNING_RUN_HOUR = '10';
   process.env.SCHEDULE_CA_SOS_MORNING_RUN_MINUTE = '0';
@@ -100,6 +101,8 @@ function setReadyEnv(): void {
   process.env.SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE = '0';
   process.env.SCHEDULE_CA_SOS_EVENING_RUN_HOUR = '22';
   process.env.SCHEDULE_CA_SOS_EVENING_RUN_MINUTE = '0';
+  process.env.SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES = '180';
+  process.env.SCHEDULE_MARICOPA_RECORDER_TIMEZONE = 'America/Denver';
   process.env.SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS = 'MO,TU,WE,TH,FR';
   process.env.SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR = '10';
   process.env.SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE = '0';

@@ -61,8 +61,9 @@ vi.mock('../../src/scheduler/store', () => {
       return runs.get(idempotencyKey) ?? null;
     }
 
-    getMostRecentRun() {
-      return null;
+    getMostRecentRun(site?: string) {
+      const items = Array.from(runs.values()).filter((run: any) => !site || run.site === site);
+      return items[items.length - 1] ?? null;
     }
 
     getSuccessfulRunByIdempotencyKey(idempotencyKey: string) {
@@ -321,6 +322,13 @@ describe('runScheduledScrape', () => {
     expect(history[0].source_tab_title).toBe('tab-name');
     expect(history[0].master_tab_title).toBe('Master');
     expect(['high', 'medium']).toContain(history[0].confidence?.status);
+    expect(history[0].confidence?.evidence).toEqual(expect.objectContaining({
+      source_publish_confirmed: true,
+      master_sync_confirmed: true,
+      source_tab_title_present: true,
+      master_tab_title_present: true,
+      uploaded_rows_match_scraped_rows: true,
+    }));
     expect(history[0].confidence?.reasons).not.toEqual(expect.arrayContaining([
       'run_not_successful',
       'source_tab_missing',
@@ -370,6 +378,112 @@ describe('runScheduledScrape', () => {
     expect(history[0].current_run_quarantined_row_count).toBe(0);
     expect(history[0].retained_prior_review_row_count).toBe(200);
     expect(history[0].confidence?.reasons).not.toContain('quarantine_exceeds_scraped_rows');
+  });
+
+  it('treats successful publish and sync telemetry as evidence even when tab titles are absent', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: undefined });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: undefined,
+      row_count: 0,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 1,
+      current_run_quarantined_row_count: 1,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 0,
+        quarantined_row_count: 1,
+        purged_review_row_count: 0,
+        review_reason_counts: { low_confidence: 1 },
+        current_run_quarantined_row_count: 1,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-12:afternoon:evidence-without-titles',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].confidence?.evidence).toEqual(expect.objectContaining({
+      source_publish_confirmed: true,
+      master_sync_confirmed: true,
+      source_tab_title_present: false,
+      master_tab_title_present: false,
+      review_tab_title_present: true,
+    }));
+    expect(history[0].confidence?.reasons).not.toContain('source_tab_missing');
+    expect(history[0].confidence?.reasons).not.toContain('master_tab_missing');
+  });
+
+  it('persists scheduled-run evidence for every supported site', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValue([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValue({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValue({
+      tab_title: 'Master',
+      row_count: 1,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 1,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 1,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {},
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory, getScheduleState } = await import('../../src/scheduler');
+    for (const site of ['ca_sos', 'maricopa_recorder', 'nyc_acris'] as const) {
+      await runScheduledScrape({
+        site,
+        idempotencyKey: `${site}:2026-03-12:morning:persisted-evidence`,
+        slot: 'morning',
+        triggerSource: 'manual',
+      });
+    }
+
+    const history = await getRunHistory(10);
+    const state = await getScheduleState();
+
+    for (const site of ['ca_sos', 'maricopa_recorder', 'nyc_acris'] as const) {
+      const persisted = history.find((run) => run.site === site);
+      expect(persisted).toEqual(expect.objectContaining({
+        source_tab_title: 'tab-name',
+        master_tab_title: 'Master',
+        review_tab_title: 'Review_Queue',
+      }));
+      expect(persisted?.confidence?.evidence).toEqual(expect.objectContaining({
+        source_publish_confirmed: true,
+        master_sync_confirmed: true,
+      }));
+      expect(state[site].recent_run_count).toBeGreaterThan(0);
+      expect(state[site].latest_run_started_at).toBeTruthy();
+      expect(state[site].latest_run_confidence_status).toBeTruthy();
+    }
   });
 
   it('fails the run when sheet upload count mismatches', async () => {
@@ -927,7 +1041,8 @@ describe('runScheduledScrape', () => {
     });
 
     expect(result.status).toBe('success');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(mockFetch.mock.calls.some((call) => call[0] === 'https://example.invalid/webhook')).toBe(true);
     expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'scheduled_run_anomaly_detected',
       webhook_attempted: true,
