@@ -924,8 +924,15 @@ function getLatestNavigationDiagnostic(manifest?: RunManifest): PageReadyDiagnos
   return manifest?.navigationDiagnostics?.[manifest.navigationDiagnostics.length - 1];
 }
 
+function isClosedBrowserLifecycleError(message?: string): boolean {
+  return /target page, context or browser has been closed|browser has been closed|context has been closed|page has been closed/i.test(message ?? '');
+}
+
 function shouldRetryBootstrapDiagnostic(diagnostic?: PageReadyDiagnostic, message?: string): boolean {
-  if (!diagnostic) return /about:blank|unexpected_url|page not ready|net::err|chrome-error/i.test(message ?? '');
+  if (!diagnostic) {
+    return /about:blank|unexpected_url|page not ready|net::err|chrome-error/i.test(message ?? '') ||
+      isClosedBrowserLifecycleError(message);
+  }
 
   const blankBootstrap =
     diagnostic.reason === 'unexpected_url' &&
@@ -1881,16 +1888,17 @@ async function bootstrapSearchSession(
     manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel(bootstrapStrategy, 'retry_new_page')} ${initialMessage}`);
     await page.close().catch(() => {});
     recoveryAction = 'retry_new_page';
-    page = await handle.context.newPage();
-    page.setDefaultTimeout(45000);
 
     try {
-      await initializeSearchSession(page, state, manifest, bootstrapStrategy);
+      page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
       return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
     } catch (pageRetryErr: unknown) {
       const pageRetryDiagnostic = getLatestNavigationDiagnostic(manifest);
       const pageRetryMessage = sanitizeErrorMessage(pageRetryErr);
-      if (!shouldRetryBootstrapDiagnostic(pageRetryDiagnostic, pageRetryMessage)) {
+      if (
+        !isClosedBrowserLifecycleError(pageRetryMessage) &&
+        !shouldRetryBootstrapDiagnostic(pageRetryDiagnostic, pageRetryMessage)
+      ) {
         await page.close().catch(() => {});
         await handle.close().catch(() => {});
         throw pageRetryErr;

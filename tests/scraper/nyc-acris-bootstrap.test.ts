@@ -13,6 +13,10 @@ type Scenario = {
   readyState?: string;
 };
 
+type PageFactoryStep =
+  | { type: 'page'; scenarios: Scenario[] }
+  | { type: 'throw'; message: string };
+
 class FakePage {
   private gotoIndex = 0;
   private current: Scenario;
@@ -53,7 +57,7 @@ class FakePage {
   async close() {}
 }
 
-function buildHandle(pageScenarios: Scenario[][], mode = 'legacy-sbr-cdp') {
+function buildHandle(pageSteps: Array<Scenario[] | PageFactoryStep>, mode = 'legacy-sbr-cdp') {
   let pageIndex = 0;
   return {
     mode,
@@ -61,8 +65,12 @@ function buildHandle(pageScenarios: Scenario[][], mode = 'legacy-sbr-cdp') {
       on: vi.fn(),
       route: vi.fn().mockResolvedValue(undefined),
       newPage: vi.fn(async () => {
-        const scenarios = pageScenarios[Math.min(pageIndex, pageScenarios.length - 1)];
+        const step = pageSteps[Math.min(pageIndex, pageSteps.length - 1)];
         pageIndex += 1;
+        if ((step as PageFactoryStep)?.type === 'throw') {
+          throw new Error((step as Extract<PageFactoryStep, { type: 'throw' }>).message);
+        }
+        const scenarios = Array.isArray(step) ? step : (step as Extract<PageFactoryStep, { type: 'page' }>).scenarios;
         return new FakePage(scenarios);
       }),
     },
@@ -160,6 +168,47 @@ describe('NYC ACRIS bootstrap recovery', () => {
     expect(result.recoveryAction).toBe('retry_fresh_context');
     expect(result.bootstrapStrategy).toBe('direct_document_type');
     expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
+  });
+
+  it('falls back to a fresh context when retry_new_page hits a closed-context error', async () => {
+    mockCreateIsolatedBrowserContext
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+          { type: 'throw', message: 'browserContext.newPage: Target page, context or browser has been closed' },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            {
+              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/Index',
+              html: '<html><head><script src="/DS/Scripts/Global.js"></script></head><body></body></html>',
+              title: 'ACRIS Document Search',
+              readyState: 'complete',
+            },
+            {
+              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
+              html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
+              title: 'Search By Document Type',
+              readyState: 'complete',
+            },
+          ],
+        ]),
+      );
+
+    const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
+    const pending = probeNYCAcrisConnectivity();
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(result.recoveryAction).toBe('retry_fresh_context');
+    expect(result.bootstrapStrategy).toBe('index_then_document_type');
+    expect(result.diagnostic?.finalUrl).toContain('/DS/DocumentSearch/DocumentType');
   });
 
   it('classifies exhausted blank bootstrap recovery as transport_or_bootstrap', async () => {
