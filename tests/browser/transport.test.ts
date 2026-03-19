@@ -42,6 +42,7 @@ describe('resolveTransportMode', () => {
 
 describe('createIsolatedBrowserContext', () => {
   const originalEnv = { ...process.env };
+  const mockLog = vi.fn();
 
   beforeEach(() => {
     vi.resetModules();
@@ -55,6 +56,10 @@ describe('createIsolatedBrowserContext', () => {
     process.env.BRIGHTDATA_BROWSER_WS_CONNECT_RETRIES = '1';
     process.env.BROWSER_TRANSPORT_RETRY_BASE_DELAY_MS = '10';
     process.env.BROWSER_TRANSPORT_RETRY_MAX_DELAY_MS = '10';
+    process.env.BROWSER_CONTEXT_CREATE_TIMEOUT_MS = '25';
+    vi.doMock('../../src/utils/logger', () => ({
+      log: mockLog,
+    }));
   });
 
   afterEach(() => {
@@ -86,6 +91,26 @@ describe('createIsolatedBrowserContext', () => {
     expect(connectOverCDP.mock.calls[0][1]).toMatchObject({ timeout: 1234 });
     expect(handle.mode).toBe('brightdata-browser-api');
     expect(newContext).toHaveBeenCalledWith(expect.objectContaining({ acceptDownloads: true }));
+    expect(handle.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: 'connect_over_cdp', status: 'started', attempt: 1, timeoutMs: 1234 }),
+        expect.objectContaining({ stage: 'connect_over_cdp', status: 'failed', attempt: 1, timeoutMs: 1234 }),
+        expect.objectContaining({ stage: 'connect_over_cdp', status: 'started', attempt: 2, timeoutMs: 1234 }),
+        expect.objectContaining({ stage: 'connect_over_cdp', status: 'succeeded', attempt: 2, timeoutMs: 1234 }),
+        expect.objectContaining({ stage: 'create_browser_context', status: 'succeeded', attempt: 1, timeoutMs: 25 }),
+      ]),
+    );
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'browser_transport_connect_over_cdp_failed',
+      transport_mode: 'brightdata-browser-api',
+      attempt: 1,
+      timeout_ms: 1234,
+    }));
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'browser_transport_create_browser_context_succeeded',
+      transport_mode: 'brightdata-browser-api',
+      timeout_ms: 25,
+    }));
   });
 
   it('does not retry non-transient Browser API CDP failures', async () => {
@@ -102,5 +127,65 @@ describe('createIsolatedBrowserContext', () => {
 
     await expect(createIsolatedBrowserContext()).rejects.toThrow('Invalid Browser API credentials');
     expect(connectOverCDP).toHaveBeenCalledTimes(1);
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'browser_transport_connect_over_cdp_failed',
+      transport_mode: 'brightdata-browser-api',
+      attempt: 1,
+      error: 'Invalid Browser API credentials',
+    }));
+  });
+
+  it('bounds browser context creation hangs and records the failing stage', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const connectOverCDP = vi.fn().mockResolvedValue({ newContext: () => new Promise(() => {}), close });
+
+    vi.doMock('playwright', () => ({
+      chromium: {
+        connectOverCDP,
+        launch: vi.fn(),
+      },
+    }));
+
+    const { createIsolatedBrowserContext } = await import('../../src/browser/transport');
+    const pending = createIsolatedBrowserContext();
+    const expectation = expect(pending).rejects.toThrow('browser transport create_browser_context timed out after 25ms');
+    await vi.advanceTimersByTimeAsync(30);
+
+    await expectation;
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'browser_transport_create_browser_context_failed',
+      transport_mode: 'brightdata-browser-api',
+      timeout_ms: 25,
+      error: 'browser transport create_browser_context timed out after 25ms',
+    }));
+  });
+
+  it('records successful transport diagnostics for connect and context creation', async () => {
+    const context = { close: vi.fn().mockResolvedValue(undefined) };
+    const browser = { newContext: vi.fn().mockResolvedValue(context), close: vi.fn().mockResolvedValue(undefined) };
+    const connectOverCDP = vi.fn().mockResolvedValue(browser);
+
+    vi.doMock('playwright', () => ({
+      chromium: {
+        connectOverCDP,
+        launch: vi.fn(),
+      },
+    }));
+
+    const { createIsolatedBrowserContext } = await import('../../src/browser/transport');
+    const handle = await createIsolatedBrowserContext();
+
+    expect(handle.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: 'connect_over_cdp', status: 'succeeded', attempt: 1, timeoutMs: 1234 }),
+        expect.objectContaining({ stage: 'create_browser_context', status: 'succeeded', attempt: 1, timeoutMs: 25 }),
+      ]),
+    );
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'browser_transport_connect_over_cdp_succeeded',
+      transport_mode: 'brightdata-browser-api',
+      attempt: 1,
+      timeout_ms: 1234,
+    }));
   });
 });

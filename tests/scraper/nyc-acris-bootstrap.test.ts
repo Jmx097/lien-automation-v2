@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreateIsolatedBrowserContext = vi.fn();
+const originalEnv = { ...process.env };
 
 vi.mock('../../src/browser/transport', () => ({
   createIsolatedBrowserContext: mockCreateIsolatedBrowserContext,
@@ -61,6 +62,17 @@ function buildHandle(pageSteps: Array<Scenario[] | PageFactoryStep>, mode = 'leg
   let pageIndex = 0;
   return {
     mode,
+    diagnostics: [
+      {
+        stage: 'create_browser_context',
+        status: 'succeeded',
+        transportMode: mode,
+        attempt: 1,
+        at: new Date().toISOString(),
+        timeoutMs: 30000,
+        durationMs: 10,
+      },
+    ],
     context: {
       on: vi.fn(),
       route: vi.fn().mockResolvedValue(undefined),
@@ -83,10 +95,12 @@ describe('NYC ACRIS bootstrap recovery', () => {
     vi.resetModules();
     vi.clearAllMocks();
     vi.useFakeTimers();
+    process.env = { ...originalEnv };
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    process.env = { ...originalEnv };
   });
 
   it('recovers from an about:blank bootstrap by recreating the page', async () => {
@@ -122,6 +136,13 @@ describe('NYC ACRIS bootstrap recovery', () => {
     expect(result.recoveryAction).toBe('retry_new_page');
     expect(result.bootstrapStrategy).toBe('index_then_document_type');
     expect(result.diagnostic?.finalUrl).toContain('/DS/DocumentSearch/DocumentType');
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: 'bootstrap_create_page', ok: true }),
+        expect.objectContaining({ step: 'bootstrap_load_index_page', ok: true }),
+        expect.objectContaining({ step: 'bootstrap_load_document_type_page', ok: true }),
+      ]),
+    );
   });
 
   it('falls back to direct document type bootstrap after repeated blank index startup', async () => {
@@ -253,5 +274,69 @@ describe('NYC ACRIS bootstrap recovery', () => {
     expect(result.bootstrapStrategy).toBe('direct_document_type');
     expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
     expect(result.diagnostic?.finalUrl).toBe('about:blank');
+  });
+
+  it('fails probe bootstrap with a bounded stage timeout and step diagnostics', async () => {
+    process.env.NYC_ACRIS_PROBE_BOOTSTRAP_TIMEOUT_MS = '5000';
+    process.env.NYC_ACRIS_BOOTSTRAP_NEW_PAGE_TIMEOUT_MS = '2000';
+    mockCreateIsolatedBrowserContext.mockResolvedValueOnce({
+      mode: 'brightdata-browser-api',
+      diagnostics: [
+        {
+          stage: 'create_browser_context',
+          status: 'succeeded',
+          transportMode: 'brightdata-browser-api',
+          attempt: 1,
+          at: new Date().toISOString(),
+          timeoutMs: 30000,
+          durationMs: 10,
+        },
+      ],
+      context: {
+        on: vi.fn(),
+        route: vi.fn().mockResolvedValue(undefined),
+        newPage: vi.fn(async () => new Promise(() => {})),
+      },
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const stageEvents: Array<{ step: string; status: string }> = [];
+    const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
+    const pending = probeNYCAcrisConnectivity({
+      onStageEvent: (event) => {
+        stageEvents.push({ step: event.step, status: event.status });
+      },
+    });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('bootstrap_create_page timed out after 2000ms');
+    expect(result.detail).toContain('inner_step=');
+    expect(result.detail).toContain('"step":"probe_bootstrap_search_session"');
+    expect(result.detail).toContain('latest_transport=');
+    expect(result.detail).toContain('"stage":"create_browser_context"');
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          step: 'probe_bootstrap_search_session',
+          ok: false,
+          timeoutMs: 5000,
+        }),
+        expect.objectContaining({
+          step: 'bootstrap_create_page',
+          ok: false,
+          timeoutMs: 2000,
+        }),
+      ]),
+    );
+    expect(stageEvents).toEqual(
+      expect.arrayContaining([
+        { step: 'probe_bootstrap_search_session', status: 'started' },
+        { step: 'bootstrap_create_page', status: 'started' },
+        { step: 'bootstrap_create_page', status: 'failed' },
+        { step: 'probe_bootstrap_search_session', status: 'failed' },
+      ]),
+    );
   });
 });

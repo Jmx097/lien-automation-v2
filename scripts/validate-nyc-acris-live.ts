@@ -4,13 +4,33 @@ import { resolveTransportMode } from '../src/browser/transport';
 
 dotenv.config();
 
+function logStageEvent(event: {
+  step: string;
+  status: 'started' | 'succeeded' | 'failed';
+  at: string;
+  detail?: string;
+  durationMs?: number;
+  timeoutMs?: number;
+}): void {
+  const timeout = event.timeoutMs ? ` timeout_ms=${event.timeoutMs}` : '';
+  const duration = typeof event.durationMs === 'number' ? ` duration_ms=${event.durationMs}` : '';
+  const detail = event.detail ? ` detail=${event.detail}` : '';
+  console.error(`[${event.at}] nyc_validation step=${event.step} status=${event.status}${timeout}${duration}${detail}`);
+}
+
 async function main(): Promise<void> {
   if (resolveTransportMode() !== 'brightdata-browser-api') {
     throw new Error('NYC live selector validation requires BRIGHTDATA_BROWSER_WS Browser API transport');
   }
 
   const maxDocuments = Number(process.env.ACRIS_VALIDATION_MAX_DOCS ?? '2');
-  const manifest = await validateNYCAcrisSelectors({ max_documents: maxDocuments });
+  console.error(
+    `[${new Date().toISOString()}] nyc_validation starting transport=brightdata-browser-api max_documents=${maxDocuments}`
+  );
+  const manifest = await validateNYCAcrisSelectors({
+    max_documents: maxDocuments,
+    onStageEvent: logStageEvent,
+  });
 
   console.log(
     JSON.stringify(
@@ -30,7 +50,19 @@ async function main(): Promise<void> {
 }
 
 void main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  if (err instanceof Error) {
+    console.error(
+      JSON.stringify(
+        {
+          error: err.message,
+          name: err.name,
+        },
+        null,
+        2
+      )
+    );
+  } else {
+    console.error(String(err));
+  }
   process.exitCode = 1;
 });
-

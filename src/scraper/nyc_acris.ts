@@ -3,7 +3,11 @@ import path from 'path';
 import Bottleneck from 'bottleneck';
 import type { BrowserContext, Page } from 'playwright';
 import { execFileSync } from 'child_process';
-import { createIsolatedBrowserContext, type BrowserTransportMode } from '../browser/transport';
+import {
+  createIsolatedBrowserContext,
+  type BrowserTransportMode,
+  type TransportDiagnostic,
+} from '../browser/transport';
 import { extractAmountFromText, type AmountReason } from './amount-extraction';
 import { checkOCRRuntime, getOCRBinaryCommands } from './ocr-runtime';
 import type { NYCAcrisFailureClass, SiteConnectivityStatus } from '../scheduler/connectivity';
@@ -50,6 +54,14 @@ const NYC_ACRIS_PAGE_DELAY_MAX_MS = Number(process.env.NYC_ACRIS_PAGE_DELAY_MAX_
 const NYC_ACRIS_SESSION_MAX_MINUTES = Number(process.env.NYC_ACRIS_SESSION_MAX_MINUTES ?? '20');
 const NYC_ACRIS_IMAGE_VIEW_RETRIES = Number(process.env.NYC_ACRIS_IMAGE_VIEW_RETRIES ?? '2');
 const NYC_ACRIS_OCR_MAX_PAGES = Number(process.env.NYC_ACRIS_OCR_MAX_PAGES ?? '2');
+const NYC_ACRIS_PROBE_BOOTSTRAP_TIMEOUT_MS = Number(process.env.NYC_ACRIS_PROBE_BOOTSTRAP_TIMEOUT_MS ?? '120000');
+const NYC_ACRIS_VALIDATION_BOOTSTRAP_TIMEOUT_MS = Number(process.env.NYC_ACRIS_VALIDATION_BOOTSTRAP_TIMEOUT_MS ?? '120000');
+const NYC_ACRIS_VALIDATION_RESULT_PAGE_TIMEOUT_MS = Number(process.env.NYC_ACRIS_VALIDATION_RESULT_PAGE_TIMEOUT_MS ?? '120000');
+const NYC_ACRIS_VALIDATION_EXTRACT_ROWS_TIMEOUT_MS = Number(process.env.NYC_ACRIS_VALIDATION_EXTRACT_ROWS_TIMEOUT_MS ?? '30000');
+const NYC_ACRIS_VALIDATION_VIEWER_TIMEOUT_MS = Number(process.env.NYC_ACRIS_VALIDATION_VIEWER_TIMEOUT_MS ?? '180000');
+const NYC_ACRIS_VALIDATION_RELOAD_TIMEOUT_MS = Number(process.env.NYC_ACRIS_VALIDATION_RELOAD_TIMEOUT_MS ?? '120000');
+const NYC_ACRIS_BOOTSTRAP_NEW_PAGE_TIMEOUT_MS = Number(process.env.NYC_ACRIS_BOOTSTRAP_NEW_PAGE_TIMEOUT_MS ?? '30000');
+const NYC_ACRIS_BOOTSTRAP_NAVIGATION_TIMEOUT_MS = Number(process.env.NYC_ACRIS_BOOTSTRAP_NAVIGATION_TIMEOUT_MS ?? '90000');
 const nycAcrisLimiter = new Bottleneck({ maxConcurrent: 1 });
 
 export interface ScrapeOptions {
@@ -64,6 +76,7 @@ export interface ValidationOptions {
   max_documents?: number;
   headed?: boolean;
   connectivity_status_at_start?: SiteConnectivityStatus;
+  onStageEvent?: (event: NYCAcrisStageEvent) => void;
 }
 
 interface SearchState {
@@ -117,6 +130,19 @@ interface ValidationStep {
   step: string;
   ok: boolean;
   detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  timeoutMs?: number;
+}
+
+export interface NYCAcrisStageEvent {
+  step: string;
+  status: 'started' | 'succeeded' | 'failed';
+  at: string;
+  detail?: string;
+  durationMs?: number;
+  timeoutMs?: number;
 }
 
 type NYCAcrisPageKind = 'index' | 'document_type' | 'detail' | 'results' | 'image_view';
@@ -158,6 +184,7 @@ interface RunManifest {
   failures: string[];
   network: NetworkEvent[];
   navigationDiagnostics?: PageReadyDiagnostic[];
+  transportDiagnostics?: TransportDiagnostic[];
   validationSteps?: ValidationStep[];
   failureClass?: NYCAcrisFailureClass;
   sessionDurationMs?: number;
@@ -215,6 +242,12 @@ interface ProbeResult {
   diagnostic?: PageReadyDiagnostic;
   recoveryAction: ProbeRecoveryAction;
   bootstrapStrategy: ProbeBootstrapStrategy;
+  steps?: ValidationStep[];
+}
+
+export interface ProbeOptions {
+  headed?: boolean;
+  onStageEvent?: (event: NYCAcrisStageEvent) => void;
 }
 
 interface OcrExtraction {
@@ -259,6 +292,25 @@ function unique<T>(items: T[]): T[] {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+class NYCAcrisStageTimeoutError extends Error {
+  readonly step: string;
+  readonly timeoutMs: number;
+
+  constructor(step: string, timeoutMs: number, detail?: string) {
+    super(detail ? `NYC ${step} timed out after ${timeoutMs}ms: ${detail}` : `NYC ${step} timed out after ${timeoutMs}ms`);
+    this.name = 'NYCAcrisStageTimeoutError';
+    this.step = step;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function emitNYCAcrisStageEvent(
+  onStageEvent: ValidationOptions['onStageEvent'] | ProbeOptions['onStageEvent'] | undefined,
+  event: NYCAcrisStageEvent,
+): void {
+  onStageEvent?.(event);
 }
 
 export function resolveNYCAcrisResumeStartIndex(
@@ -920,8 +972,167 @@ function formatDiagnostic(diag: PageReadyDiagnostic): string {
   });
 }
 
+function formatTransportDiagnostic(diag: TransportDiagnostic): string {
+  return JSON.stringify({
+    stage: diag.stage,
+    status: diag.status,
+    transportMode: diag.transportMode,
+    attempt: diag.attempt,
+    at: diag.at,
+    timeoutMs: diag.timeoutMs,
+    durationMs: diag.durationMs,
+    detail: diag.detail,
+  });
+}
+
 function getLatestNavigationDiagnostic(manifest?: RunManifest): PageReadyDiagnostic | undefined {
   return manifest?.navigationDiagnostics?.[manifest.navigationDiagnostics.length - 1];
+}
+
+function getLatestTransportDiagnostic(manifest?: RunManifest): TransportDiagnostic | undefined {
+  return manifest?.transportDiagnostics?.[manifest.transportDiagnostics.length - 1];
+}
+
+function getLatestValidationStep(
+  manifest?: RunManifest,
+  options?: { excludeStep?: string },
+): ValidationStep | undefined {
+  if (!manifest?.validationSteps?.length) return undefined;
+  for (let index = manifest.validationSteps.length - 1; index >= 0; index--) {
+    const step = manifest.validationSteps[index];
+    if (options?.excludeStep && step.step === options.excludeStep) {
+      continue;
+    }
+    return step;
+  }
+  return undefined;
+}
+
+function describeRecentManifestContext(manifest?: RunManifest): string | undefined {
+  const parts: string[] = [];
+  const latestTransportDiagnostic = getLatestTransportDiagnostic(manifest);
+  if (latestTransportDiagnostic) {
+    parts.push(`latest_transport=${formatTransportDiagnostic(latestTransportDiagnostic)}`);
+  }
+  const latestValidationStep = getLatestValidationStep(manifest);
+  if (latestValidationStep) {
+    parts.push(
+      `latest_step=${JSON.stringify({
+        step: latestValidationStep.step,
+        ok: latestValidationStep.ok,
+        detail: latestValidationStep.detail,
+        startedAt: latestValidationStep.startedAt,
+        finishedAt: latestValidationStep.finishedAt,
+        durationMs: latestValidationStep.durationMs,
+        timeoutMs: latestValidationStep.timeoutMs,
+      })}`,
+    );
+  }
+  const latestDiagnostic = getLatestNavigationDiagnostic(manifest);
+  if (latestDiagnostic) {
+    parts.push(`latest_navigation=${formatDiagnostic(latestDiagnostic)}`);
+  }
+  const latestFailure = manifest?.failures?.[manifest.failures.length - 1];
+  if (latestFailure) {
+    parts.push(`last_failure=${latestFailure}`);
+  }
+  const latestWarning = manifest?.warnings?.[manifest.warnings.length - 1];
+  if (latestWarning) {
+    parts.push(`last_warning=${latestWarning}`);
+  }
+  return parts.length > 0 ? parts.join(' ') : undefined;
+}
+
+async function runNYCAcrisStage<T>(
+  manifest: RunManifest | undefined,
+  options: {
+    step: string;
+    timeoutMs: number;
+    onStageEvent?: (event: NYCAcrisStageEvent) => void;
+    startDetail?: string;
+  },
+  run: () => Promise<T>,
+  describeSuccess?: (result: T) => string | undefined,
+): Promise<T> {
+  const startedAt = nowIso();
+  const startedAtMs = Date.now();
+  const stepRecord: ValidationStep = {
+    step: options.step,
+    ok: false,
+    detail: options.startDetail,
+    startedAt,
+    timeoutMs: options.timeoutMs,
+  };
+  manifest?.validationSteps?.push(stepRecord);
+  emitNYCAcrisStageEvent(options.onStageEvent, {
+    step: options.step,
+    status: 'started',
+    at: startedAt,
+    detail: options.startDetail,
+    timeoutMs: options.timeoutMs,
+  });
+
+  let timer: NodeJS.Timeout | undefined;
+
+  try {
+    const result = await Promise.race([
+      run(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          const parts = [describeRecentManifestContext(manifest)];
+          const latestOtherStep = getLatestValidationStep(manifest, { excludeStep: options.step });
+          if (latestOtherStep) {
+            parts.unshift(
+              `inner_step=${JSON.stringify({
+                step: latestOtherStep.step,
+                ok: latestOtherStep.ok,
+                detail: latestOtherStep.detail,
+                startedAt: latestOtherStep.startedAt,
+                finishedAt: latestOtherStep.finishedAt,
+                durationMs: latestOtherStep.durationMs,
+                timeoutMs: latestOtherStep.timeoutMs,
+              })}`,
+            );
+          }
+          reject(new NYCAcrisStageTimeoutError(options.step, options.timeoutMs, parts.filter(Boolean).join(' ')));
+        }, options.timeoutMs);
+      }),
+    ]);
+
+    const durationMs = Date.now() - startedAtMs;
+    const successDetail = describeSuccess?.(result);
+    stepRecord.ok = true;
+    stepRecord.finishedAt = nowIso();
+    stepRecord.durationMs = durationMs;
+    stepRecord.detail = successDetail ?? stepRecord.detail;
+    emitNYCAcrisStageEvent(options.onStageEvent, {
+      step: options.step,
+      status: 'succeeded',
+      at: stepRecord.finishedAt,
+      detail: successDetail,
+      durationMs,
+      timeoutMs: options.timeoutMs,
+    });
+    return result;
+  } catch (err: unknown) {
+    const durationMs = Date.now() - startedAtMs;
+    const detail = sanitizeErrorMessage(err);
+    stepRecord.ok = false;
+    stepRecord.finishedAt = nowIso();
+    stepRecord.durationMs = durationMs;
+    stepRecord.detail = detail;
+    emitNYCAcrisStageEvent(options.onStageEvent, {
+      step: options.step,
+      status: 'failed',
+      at: stepRecord.finishedAt,
+      detail,
+      durationMs,
+      timeoutMs: options.timeoutMs,
+    });
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function isClosedBrowserLifecycleError(message?: string): boolean {
@@ -1382,10 +1593,32 @@ async function gotoPageUntilReady(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    let gotoWatchdog: NodeJS.Timeout | undefined;
+    let gotoWatchdogFired = false;
     try {
-      await page.goto(options.url, { waitUntil: 'commit', timeout: gotoTimeoutMs });
+      const gotoPromise = page.goto(options.url, { waitUntil: 'commit', timeout: gotoTimeoutMs });
+      const watchdogPromise = new Promise<never>((_, reject) => {
+        gotoWatchdog = setTimeout(() => {
+          gotoWatchdogFired = true;
+          manifest?.warnings.push(`goto_watchdog_fired step=${options.step} attempt=${attempt} url=${options.url}`);
+          page.close({ runBeforeUnload: false }).catch(() => {});
+          reject(new Error(`NYC ${options.step} goto watchdog fired after ${gotoTimeoutMs}ms url=${options.url}`));
+        }, gotoTimeoutMs);
+      });
+      await Promise.race([gotoPromise, watchdogPromise]);
     } catch (err: unknown) {
       lastError = err;
+      if (!gotoWatchdogFired && err instanceof Error && /page\.goto: Timeout/i.test(err.message)) {
+        lastError = new Error(`NYC ${options.step} goto timed out after ${gotoTimeoutMs}ms url=${options.url}`);
+      }
+    } finally {
+      if (gotoWatchdog) {
+        clearTimeout(gotoWatchdog);
+      }
+    }
+
+    if (gotoWatchdogFired) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError ?? `Failed to load ${options.url}`));
     }
 
     const deadline = Date.now() + readyTimeoutMs;
@@ -1406,18 +1639,23 @@ async function gotoPageUntilReady(
   throw lastError instanceof Error ? lastError : new Error(String(lastError ?? `Failed to load ${options.url}`));
 }
 
-async function gotoDocumentType(page: Page, manifest?: RunManifest): Promise<void> {
+async function gotoIndexPage(page: Page, manifest?: RunManifest): Promise<void> {
   await gotoPageUntilReady(page, manifest, {
     url: `${BASE}${PATHS.index}`,
     expectedPath: PATHS.index,
     step: 'load_index_page',
     kind: 'index',
+    attempts: 1,
   });
+}
+
+async function gotoDocumentTypePage(page: Page, manifest?: RunManifest): Promise<void> {
   await gotoPageUntilReady(page, manifest, {
     url: `${BASE}${PATHS.documentType}`,
     expectedPath: PATHS.documentType,
     step: 'load_document_type_page',
     kind: 'document_type',
+    attempts: 1,
   });
 }
 
@@ -1427,6 +1665,7 @@ async function gotoDocumentTypeDirect(page: Page, manifest?: RunManifest): Promi
     expectedPath: PATHS.documentType,
     step: 'load_document_type_page_direct',
     kind: 'document_type',
+    attempts: 1,
   });
 }
 
@@ -1829,7 +2068,8 @@ async function initializeSearchSession(
   if (strategy === 'direct_document_type') {
     await gotoDocumentTypeDirect(page, manifest);
   } else {
-    await gotoDocumentType(page, manifest);
+    await gotoIndexPage(page, manifest);
+    await gotoDocumentTypePage(page, manifest);
   }
   state.profile = { ...SEARCH_PROFILE };
 }
@@ -1847,34 +2087,93 @@ async function createAcrisContext(options?: { headed?: boolean }) {
   });
 }
 
+async function createBootstrapPage(
+  handle: Awaited<ReturnType<typeof createAcrisContext>>,
+  manifest: RunManifest,
+  options?: { onStageEvent?: (event: NYCAcrisStageEvent) => void },
+): Promise<Page> {
+  const page = await runNYCAcrisStage(
+    manifest,
+    {
+      step: 'bootstrap_create_page',
+      timeoutMs: NYC_ACRIS_BOOTSTRAP_NEW_PAGE_TIMEOUT_MS,
+      onStageEvent: options?.onStageEvent,
+    },
+    () => handle.context.newPage(),
+  );
+  page.setDefaultTimeout(45000);
+  return page;
+}
+
+async function initializeBootstrapSearchSession(
+  page: Page,
+  state: SearchState,
+  manifest: RunManifest,
+  strategy: ProbeBootstrapStrategy,
+  options?: { onStageEvent?: (event: NYCAcrisStageEvent) => void },
+): Promise<void> {
+  await runNYCAcrisStage(
+    manifest,
+    {
+      step: strategy === 'direct_document_type' ? 'bootstrap_load_document_type_direct' : 'bootstrap_load_index_page',
+      timeoutMs: NYC_ACRIS_BOOTSTRAP_NAVIGATION_TIMEOUT_MS,
+      onStageEvent: options?.onStageEvent,
+      startDetail: `strategy=${strategy}`,
+    },
+    async () => {
+      if (strategy === 'direct_document_type') {
+        await gotoDocumentTypeDirect(page, manifest);
+      } else {
+        await gotoIndexPage(page, manifest);
+      }
+    },
+    () => `strategy=${strategy}`,
+  );
+
+  if (strategy !== 'direct_document_type') {
+    await runNYCAcrisStage(
+      manifest,
+      {
+        step: 'bootstrap_load_document_type_page',
+        timeoutMs: NYC_ACRIS_BOOTSTRAP_NAVIGATION_TIMEOUT_MS,
+        onStageEvent: options?.onStageEvent,
+        startDetail: `strategy=${strategy}`,
+      },
+      () => gotoDocumentTypePage(page, manifest),
+      () => `strategy=${strategy}`,
+    );
+  }
+
+  state.profile = { ...SEARCH_PROFILE };
+}
 async function openBootstrapPage(
   handle: Awaited<ReturnType<typeof createAcrisContext>>,
   state: SearchState,
   manifest: RunManifest,
   strategy: ProbeBootstrapStrategy = 'index_then_document_type',
+  options?: { onStageEvent?: (event: NYCAcrisStageEvent) => void },
 ): Promise<Page> {
-  const page = await handle.context.newPage();
-  page.setDefaultTimeout(45000);
-  await initializeSearchSession(page, state, manifest, strategy);
+  const page = await createBootstrapPage(handle, manifest, options);
+  await initializeBootstrapSearchSession(page, state, manifest, strategy, options);
   return page;
 }
 
 async function bootstrapSearchSession(
   state: SearchState,
   manifest: RunManifest,
-  options?: { headed?: boolean },
+  options?: { headed?: boolean; onStageEvent?: (event: NYCAcrisStageEvent) => void },
 ): Promise<BootstrapSessionResult> {
   let handle = await createAcrisContext({ headed: options?.headed });
   manifest.transportMode = handle.mode;
+  manifest.transportDiagnostics = handle.diagnostics;
   await hardenContext(handle.context, manifest);
 
   let recoveryAction: ProbeRecoveryAction = 'none';
   let bootstrapStrategy: ProbeBootstrapStrategy = 'index_then_document_type';
-  let page = await handle.context.newPage();
-  page.setDefaultTimeout(45000);
+  let page = await createBootstrapPage(handle, manifest, options);
 
   try {
-    await initializeSearchSession(page, state, manifest, bootstrapStrategy);
+    await initializeBootstrapSearchSession(page, state, manifest, bootstrapStrategy, options);
     return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
   } catch (initialErr: unknown) {
     const initialDiagnostic = getLatestNavigationDiagnostic(manifest);
@@ -1890,7 +2189,7 @@ async function bootstrapSearchSession(
     recoveryAction = 'retry_new_page';
 
     try {
-      page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
+      page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
       return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
     } catch (pageRetryErr: unknown) {
       const pageRetryDiagnostic = getLatestNavigationDiagnostic(manifest);
@@ -1910,10 +2209,11 @@ async function bootstrapSearchSession(
 
       handle = await createAcrisContext({ headed: options?.headed });
       manifest.transportMode = handle.mode;
+      manifest.transportDiagnostics = handle.diagnostics;
       await hardenContext(handle.context, manifest);
       recoveryAction = 'retry_fresh_context';
       try {
-        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
+        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
         return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
       } catch (freshContextErr: unknown) {
         const freshContextDiagnostic = getLatestNavigationDiagnostic(manifest);
@@ -1928,11 +2228,12 @@ async function bootstrapSearchSession(
 
         handle = await createAcrisContext({ headed: options?.headed });
         manifest.transportMode = handle.mode;
+        manifest.transportDiagnostics = handle.diagnostics;
         await hardenContext(handle.context, manifest);
         bootstrapStrategy = 'direct_document_type';
 
         try {
-          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy);
+          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
           return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
         } catch (directFallbackErr: unknown) {
           await handle.close().catch(() => {});
@@ -1971,33 +2272,66 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
 
     try {
       throwIfSessionBudgetExceeded(startedAtMs);
-      const bootstrap = await bootstrapSearchSession(state, manifest, { headed: options.headed });
+      const bootstrap = await runNYCAcrisStage(
+        manifest,
+        {
+          step: 'bootstrap_search_session',
+          timeoutMs: NYC_ACRIS_VALIDATION_BOOTSTRAP_TIMEOUT_MS,
+          onStageEvent: options.onStageEvent,
+        },
+        () => bootstrapSearchSession(state, manifest, { headed: options.headed, onStageEvent: options.onStageEvent }),
+        (result) =>
+          `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,
+      );
       handle = bootstrap.handle;
       page = bootstrap.page;
-      manifest.validationSteps?.push({ step: 'open_document_type', ok: true });
 
       throwIfSessionBudgetExceeded(startedAtMs);
-      await loadResultPage(page, 1, state, manifest);
+      await runNYCAcrisStage(
+        manifest,
+        {
+          step: 'load_result_page_1',
+          timeoutMs: NYC_ACRIS_VALIDATION_RESULT_PAGE_TIMEOUT_MS,
+          onStageEvent: options.onStageEvent,
+        },
+        () => loadResultPage(page!, 1, state, manifest),
+      );
       manifest.resultPagesVisited = 1;
-      manifest.validationSteps?.push({ step: 'load_result_page', ok: true });
 
-      const rows = await extractResultRows(page);
+      const rows = await runNYCAcrisStage(
+        manifest,
+        {
+          step: 'extract_result_rows',
+          timeoutMs: NYC_ACRIS_VALIDATION_EXTRACT_ROWS_TIMEOUT_MS,
+          onStageEvent: options.onStageEvent,
+        },
+        () => extractResultRows(page!),
+        (result) => `rows=${result.length}`,
+      );
       if (rows.length === 0) {
         throw new Error('No ACRIS rows found during live selector validation');
       }
 
       manifest.docIds = rows.map((row) => row.docId);
-      manifest.validationSteps?.push({ step: 'extract_result_rows', ok: true, detail: `rows=${rows.length}` });
 
       const targetRows = rows.slice(0, Math.min(options.max_documents ?? 2, rows.length));
       for (let index = 0; index < targetRows.length; index++) {
         throwIfSessionBudgetExceeded(startedAtMs);
         const row = targetRows[index];
         manifest.attemptedDocs = index + 1;
-        const artifact = await extractViewerArtifactInSession(page, state, row.docId, manifest);
+        const artifact = await runNYCAcrisStage(
+          manifest,
+          {
+            step: `viewer_roundtrip_${row.docId}`,
+            timeoutMs: NYC_ACRIS_VALIDATION_VIEWER_TIMEOUT_MS,
+            onStageEvent: options.onStageEvent,
+            startDetail: `doc_id=${row.docId}`,
+          },
+          () => extractViewerArtifactInSession(page!, state, row.docId, manifest),
+          (result) => `doc_id=${result.docId} image_count=${result.imageUrls.length} total_pages=${result.totalPages ?? 1}`,
+        );
         manifest.documents.push(artifact);
         manifest.completedDocs = manifest.documents.length;
-        manifest.validationSteps?.push({ step: `viewer_roundtrip_${row.docId}`, ok: true });
 
         if (index < targetRows.length - 1) {
           await waitForDocDelay();
@@ -2006,8 +2340,15 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
 
       if (MAX_RESULT_PAGES > 1) {
         throwIfSessionBudgetExceeded(startedAtMs);
-        await loadResultPage(page, 1, state, manifest);
-        manifest.validationSteps?.push({ step: 'reload_result_page_after_viewer', ok: true });
+        await runNYCAcrisStage(
+          manifest,
+          {
+            step: 'reload_result_page_after_viewer',
+            timeoutMs: NYC_ACRIS_VALIDATION_RELOAD_TIMEOUT_MS,
+            onStageEvent: options.onStageEvent,
+          },
+          () => loadResultPage(page!, 1, state, manifest),
+        );
       }
 
       manifest.finishedAt = nowIso();
@@ -2019,7 +2360,6 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
       manifest.finishedAt = nowIso();
       manifest.failureClass = classifyNYCAcrisFailure(message);
       manifest.failures.push(message);
-      manifest.validationSteps?.push({ step: 'validation_failed', ok: false, detail: message });
       manifest.sessionDurationMs = Date.now() - startedAtMs;
       if (page) {
         await captureValidationEvidence(page, 'acris-validation-failure');
@@ -2272,7 +2612,7 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
   });
 }
 
-export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
+export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Promise<ProbeResult> {
   return nycAcrisLimiter.schedule(async () => {
     const manifest: RunManifest = {
       startedAt: nowIso(),
@@ -2284,6 +2624,7 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
       failures: [],
       network: [],
       navigationDiagnostics: [],
+      validationSteps: [],
     };
     const state: SearchState = {
       pageNum: 1,
@@ -2293,7 +2634,17 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
     let page: Page | null = null;
 
     try {
-      const bootstrap = await bootstrapSearchSession(state, manifest);
+      const bootstrap = await runNYCAcrisStage(
+        manifest,
+        {
+          step: 'probe_bootstrap_search_session',
+          timeoutMs: NYC_ACRIS_PROBE_BOOTSTRAP_TIMEOUT_MS,
+          onStageEvent: options.onStageEvent,
+        },
+        () => bootstrapSearchSession(state, manifest, { headed: options.headed, onStageEvent: options.onStageEvent }),
+        (result) =>
+          `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,
+      );
       handle = bootstrap.handle;
       page = bootstrap.page;
       const diagnostic = bootstrap.diagnostic;
@@ -2304,9 +2655,11 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
         diagnostic,
         recoveryAction: bootstrap.recoveryAction,
         bootstrapStrategy: bootstrap.bootstrapStrategy,
+        steps: manifest.validationSteps,
       };
     } catch (err: unknown) {
       const message = sanitizeErrorMessage(err);
+      manifest.failures.push(message);
       const diagnostic = getLatestNavigationDiagnostic(manifest);
       return {
         ok: false,
@@ -2316,6 +2669,7 @@ export async function probeNYCAcrisConnectivity(): Promise<ProbeResult> {
         failureClass: classifyNYCAcrisFailure(message),
         recoveryAction: inferBootstrapRecoveryAction(manifest),
         bootstrapStrategy: inferBootstrapStrategyFromDiagnostic(diagnostic),
+        steps: manifest.validationSteps,
       };
     } finally {
       await page?.close().catch(() => {});
