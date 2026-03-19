@@ -183,6 +183,7 @@ interface RunManifest {
   warnings: string[];
   failures: string[];
   network: NetworkEvent[];
+  bootstrapTrace?: string[];
   navigationDiagnostics?: PageReadyDiagnostic[];
   transportDiagnostics?: TransportDiagnostic[];
   validationSteps?: ValidationStep[];
@@ -243,6 +244,9 @@ interface ProbeResult {
   recoveryAction: ProbeRecoveryAction;
   bootstrapStrategy: ProbeBootstrapStrategy;
   steps?: ValidationStep[];
+  bootstrapTrace?: string[];
+  failures?: string[];
+  warnings?: string[];
 }
 
 export interface ProbeOptions {
@@ -1008,6 +1012,48 @@ function getLatestValidationStep(
   return undefined;
 }
 
+function hasOnlyBootstrapPageCreationTrace(manifest?: RunManifest): boolean {
+  const trace = manifest?.bootstrapTrace ?? [];
+  return (
+    trace.length > 0 &&
+    trace.every(
+      (entry) =>
+        entry.startsWith('bootstrap_page_created url=about:blank') ||
+        entry.startsWith('framenavigated url=about:blank'),
+    )
+  );
+}
+
+function isDeadBootstrapPageDiagnostic(diagnostic?: PageReadyDiagnostic): boolean {
+  if (!diagnostic) return false;
+  return (
+    diagnostic.finalUrl === 'about:blank' &&
+    diagnostic.reason === 'unexpected_url' &&
+    diagnostic.readyState === 'unavailable' &&
+    diagnostic.hasToken === false &&
+    diagnostic.hasShellMarker === false &&
+    diagnostic.hasResultMarker === false &&
+    diagnostic.hasViewerIframe === false
+  );
+}
+
+function isDeadBootstrapPage(manifest?: RunManifest, diagnostic?: PageReadyDiagnostic, message?: string): boolean {
+  const traceOnlyBlankPageCreation = hasOnlyBootstrapPageCreationTrace(manifest);
+  const blankTimeoutWithoutDiagnostic =
+    !diagnostic &&
+    traceOnlyBlankPageCreation &&
+    /timed out after|page not ready|unexpected_url|about:blank/i.test(message ?? '');
+
+  return (
+    blankTimeoutWithoutDiagnostic ||
+    (
+      isDeadBootstrapPageDiagnostic(diagnostic) &&
+      traceOnlyBlankPageCreation &&
+      /timed out after|page not ready|unexpected_url|about:blank/i.test(message ?? '')
+    )
+  );
+}
+
 function describeRecentManifestContext(manifest?: RunManifest): string | undefined {
   const parts: string[] = [];
   const latestTransportDiagnostic = getLatestTransportDiagnostic(manifest);
@@ -1031,6 +1077,10 @@ function describeRecentManifestContext(manifest?: RunManifest): string | undefin
   const latestDiagnostic = getLatestNavigationDiagnostic(manifest);
   if (latestDiagnostic) {
     parts.push(`latest_navigation=${formatDiagnostic(latestDiagnostic)}`);
+  }
+  const latestBootstrapTrace = manifest?.bootstrapTrace?.[manifest.bootstrapTrace.length - 1];
+  if (latestBootstrapTrace) {
+    parts.push(`latest_bootstrap_trace=${latestBootstrapTrace}`);
   }
   const latestFailure = manifest?.failures?.[manifest.failures.length - 1];
   if (latestFailure) {
@@ -2010,6 +2060,51 @@ async function hardenContext(context: BrowserContext, manifest: RunManifest): Pr
   });
 }
 
+function pushBootstrapTrace(manifest: RunManifest, entry: string): void {
+  if (!manifest.bootstrapTrace) {
+    manifest.bootstrapTrace = [];
+  }
+  manifest.bootstrapTrace.push(entry);
+  if (manifest.bootstrapTrace.length > 50) {
+    manifest.bootstrapTrace.splice(0, manifest.bootstrapTrace.length - 50);
+  }
+}
+
+function attachBootstrapPageTracing(page: Page, manifest: RunManifest): void {
+  page.on('framenavigated', (frame) => {
+    if (frame !== page.mainFrame()) return;
+    pushBootstrapTrace(manifest, `framenavigated url=${frame.url() || 'about:blank'}`);
+  });
+
+  page.on('response', (response) => {
+    const request = response.request();
+    if (request.frame() !== page.mainFrame()) return;
+    const url = response.url();
+    if (!/a836-acris\.nyc\.gov/i.test(url)) return;
+    pushBootstrapTrace(manifest, `response status=${response.status()} method=${request.method()} url=${url}`);
+  });
+
+  page.on('requestfailed', (request) => {
+    if (request.frame() !== page.mainFrame()) return;
+    const url = request.url();
+    if (!/a836-acris\.nyc\.gov/i.test(url)) return;
+    pushBootstrapTrace(
+      manifest,
+      `requestfailed method=${request.method()} url=${url} error=${request.failure()?.errorText ?? 'unknown'}`
+    );
+  });
+
+  page.on('console', (message) => {
+    const text = normalizeText(message.text());
+    if (!text) return;
+    pushBootstrapTrace(manifest, `console type=${message.type()} text=${text.slice(0, 300)}`);
+  });
+
+  page.on('pageerror', (error) => {
+    pushBootstrapTrace(manifest, `pageerror error=${sanitizeErrorMessage(error).slice(0, 300)}`);
+  });
+}
+
 function toLienRecord(row: ResultRowCandidate, artifact?: ViewerArtifact): LienRecord {
   const debtorName = chooseBetterDebtorName(
     chooseBetterDebtorName(row.debtorName, artifact?.detailDebtorName),
@@ -2102,6 +2197,8 @@ async function createBootstrapPage(
     () => handle.context.newPage(),
   );
   page.setDefaultTimeout(45000);
+  attachBootstrapPageTracing(page, manifest);
+  pushBootstrapTrace(manifest, `bootstrap_page_created url=${page.url() || 'about:blank'}`);
   return page;
 }
 
@@ -2161,7 +2258,7 @@ async function openBootstrapPage(
 async function bootstrapSearchSession(
   state: SearchState,
   manifest: RunManifest,
-  options?: { headed?: boolean; onStageEvent?: (event: NYCAcrisStageEvent) => void },
+  options?: { headed?: boolean; onStageEvent?: (event: NYCAcrisStageEvent) => void; preferDirectDocumentType?: boolean },
 ): Promise<BootstrapSessionResult> {
   let handle = await createAcrisContext({ headed: options?.headed });
   manifest.transportMode = handle.mode;
@@ -2169,7 +2266,9 @@ async function bootstrapSearchSession(
   await hardenContext(handle.context, manifest);
 
   let recoveryAction: ProbeRecoveryAction = 'none';
-  let bootstrapStrategy: ProbeBootstrapStrategy = 'index_then_document_type';
+  let bootstrapStrategy: ProbeBootstrapStrategy = options?.preferDirectDocumentType
+    ? 'direct_document_type'
+    : 'index_then_document_type';
   let page = await createBootstrapPage(handle, manifest, options);
 
   try {
@@ -2178,15 +2277,43 @@ async function bootstrapSearchSession(
   } catch (initialErr: unknown) {
     const initialDiagnostic = getLatestNavigationDiagnostic(manifest);
     const initialMessage = sanitizeErrorMessage(initialErr);
+    const hardResetRequired = /goto watchdog fired/i.test(initialMessage);
+    const deadBootstrapPage = isDeadBootstrapPage(manifest, initialDiagnostic, initialMessage);
     if (!shouldRetryBootstrapDiagnostic(initialDiagnostic, initialMessage)) {
       await page.close().catch(() => {});
       await handle.close().catch(() => {});
       throw initialErr;
     }
 
-    manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel(bootstrapStrategy, 'retry_new_page')} ${initialMessage}`);
+    manifest.warnings.push(
+      `bootstrap_recovery ${buildBootstrapAttemptLabel(
+        bootstrapStrategy,
+        deadBootstrapPage || hardResetRequired ? 'retry_fresh_context' : 'retry_new_page',
+      )} ${initialMessage}`,
+    );
     await page.close().catch(() => {});
-    recoveryAction = 'retry_new_page';
+    recoveryAction = deadBootstrapPage || hardResetRequired ? 'retry_fresh_context' : 'retry_new_page';
+
+    if (deadBootstrapPage || hardResetRequired) {
+      await handle.close().catch(() => {});
+      handle = await createAcrisContext({ headed: options?.headed });
+      manifest.transportMode = handle.mode;
+      manifest.transportDiagnostics = handle.diagnostics;
+      manifest.bootstrapTrace = [];
+      await hardenContext(handle.context, manifest);
+      try {
+        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
+        return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
+      } catch (freshContextDirectErr: unknown) {
+        const freshContextDirectMessage = sanitizeErrorMessage(freshContextDirectErr);
+        const freshContextDirectDiagnostic = getLatestNavigationDiagnostic(manifest);
+        if (deadBootstrapPage && isDeadBootstrapPage(manifest, freshContextDirectDiagnostic, freshContextDirectMessage)) {
+          await handle.close().catch(() => {});
+          throw new Error('dead_bootstrap_page about:blank before first navigation');
+        }
+        throw freshContextDirectErr;
+      }
+    }
 
     try {
       page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
@@ -2279,7 +2406,11 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
           timeoutMs: NYC_ACRIS_VALIDATION_BOOTSTRAP_TIMEOUT_MS,
           onStageEvent: options.onStageEvent,
         },
-        () => bootstrapSearchSession(state, manifest, { headed: options.headed, onStageEvent: options.onStageEvent }),
+        () => bootstrapSearchSession(state, manifest, {
+          headed: options.headed,
+          onStageEvent: options.onStageEvent,
+          preferDirectDocumentType: true,
+        }),
         (result) =>
           `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,
       );
@@ -2641,7 +2772,11 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
           timeoutMs: NYC_ACRIS_PROBE_BOOTSTRAP_TIMEOUT_MS,
           onStageEvent: options.onStageEvent,
         },
-        () => bootstrapSearchSession(state, manifest, { headed: options.headed, onStageEvent: options.onStageEvent }),
+        () => bootstrapSearchSession(state, manifest, {
+          headed: options.headed,
+          onStageEvent: options.onStageEvent,
+          preferDirectDocumentType: true,
+        }),
         (result) =>
           `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,
       );
@@ -2656,6 +2791,9 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
         recoveryAction: bootstrap.recoveryAction,
         bootstrapStrategy: bootstrap.bootstrapStrategy,
         steps: manifest.validationSteps,
+        bootstrapTrace: manifest.bootstrapTrace,
+        failures: manifest.failures,
+        warnings: manifest.warnings,
       };
     } catch (err: unknown) {
       const message = sanitizeErrorMessage(err);
@@ -2670,6 +2808,9 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
         recoveryAction: inferBootstrapRecoveryAction(manifest),
         bootstrapStrategy: inferBootstrapStrategyFromDiagnostic(diagnostic),
         steps: manifest.validationSteps,
+        bootstrapTrace: manifest.bootstrapTrace,
+        failures: manifest.failures,
+        warnings: manifest.warnings,
       };
     } finally {
       await page?.close().catch(() => {});

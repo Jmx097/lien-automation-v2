@@ -41,6 +41,7 @@ async function main(): Promise<void> {
         validatedDocs: manifest.documents.length,
         failures: manifest.failures,
         warnings: manifest.warnings,
+        bootstrapTrace: manifest.bootstrapTrace,
         validationSteps: manifest.validationSteps,
       },
       null,

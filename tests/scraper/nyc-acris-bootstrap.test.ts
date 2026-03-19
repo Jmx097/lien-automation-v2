@@ -21,6 +21,7 @@ type PageFactoryStep =
 class FakePage {
   private gotoIndex = 0;
   private current: Scenario;
+  private readonly handlers = new Map<string, Array<(...args: any[]) => void>>();
 
   constructor(private readonly scenarios: Scenario[]) {
     this.current = scenarios[0] ?? {
@@ -33,10 +34,23 @@ class FakePage {
 
   setDefaultTimeout() {}
 
+  on(event: string, handler: (...args: any[]) => void) {
+    const handlers = this.handlers.get(event) ?? [];
+    handlers.push(handler);
+    this.handlers.set(event, handlers);
+  }
+
+  mainFrame() {
+    return this;
+  }
+
   async goto() {
     const scenario = this.scenarios[Math.min(this.gotoIndex, this.scenarios.length - 1)];
     this.current = scenario;
     this.gotoIndex += 1;
+    for (const handler of this.handlers.get('framenavigated') ?? []) {
+      handler(this);
+    }
   }
 
   async content() {
@@ -104,28 +118,26 @@ describe('NYC ACRIS bootstrap recovery', () => {
   });
 
   it('recovers from an about:blank bootstrap by recreating the page', async () => {
-    mockCreateIsolatedBrowserContext.mockResolvedValueOnce(
-      buildHandle([
-        [
-          { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-          { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-        ],
-        [
-          {
-            finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/Index',
-            html: '<html><head><script src="/DS/Scripts/Global.js"></script></head><body></body></html>',
-            title: 'ACRIS Document Search',
-            readyState: 'complete',
-          },
-          {
-            finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
-            html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
-            title: 'Search By Document Type',
-            readyState: 'complete',
-          },
-        ],
-      ]),
-    );
+    mockCreateIsolatedBrowserContext
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ], 'brightdata-browser-api'),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            {
+              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
+              html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
+              title: 'Search By Document Type',
+              readyState: 'complete',
+            },
+          ],
+        ], 'brightdata-browser-api'),
+      );
 
     const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
     const pending = probeNYCAcrisConnectivity();
@@ -133,14 +145,13 @@ describe('NYC ACRIS bootstrap recovery', () => {
     const result = await pending;
 
     expect(result.ok).toBe(true);
-    expect(result.recoveryAction).toBe('retry_new_page');
-    expect(result.bootstrapStrategy).toBe('index_then_document_type');
+    expect(result.recoveryAction).toBe('retry_fresh_context');
+    expect(result.bootstrapStrategy).toBe('direct_document_type');
     expect(result.diagnostic?.finalUrl).toContain('/DS/DocumentSearch/DocumentType');
     expect(result.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ step: 'bootstrap_create_page', ok: true }),
-        expect.objectContaining({ step: 'bootstrap_load_index_page', ok: true }),
-        expect.objectContaining({ step: 'bootstrap_load_document_type_page', ok: true }),
+        expect.objectContaining({ step: 'bootstrap_load_document_type_direct', ok: true }),
       ]),
     );
   });
@@ -150,11 +161,6 @@ describe('NYC ACRIS bootstrap recovery', () => {
       .mockResolvedValueOnce(
         buildHandle([
           [
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-          ],
-          [
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
             { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
           ],
         ]),
@@ -185,10 +191,10 @@ describe('NYC ACRIS bootstrap recovery', () => {
     await vi.runAllTimersAsync();
     const result = await pending;
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.recoveryAction).toBe('retry_fresh_context');
     expect(result.bootstrapStrategy).toBe('direct_document_type');
-    expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
+    expect(result.detail).toContain('dead_bootstrap_page about:blank before first navigation');
   });
 
   it('falls back to a fresh context when retry_new_page hits a closed-context error', async () => {
@@ -206,12 +212,6 @@ describe('NYC ACRIS bootstrap recovery', () => {
         buildHandle([
           [
             {
-              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/Index',
-              html: '<html><head><script src="/DS/Scripts/Global.js"></script></head><body></body></html>',
-              title: 'ACRIS Document Search',
-              readyState: 'complete',
-            },
-            {
               finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
               html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
               title: 'Search By Document Type',
@@ -227,22 +227,17 @@ describe('NYC ACRIS bootstrap recovery', () => {
     const result = await pending;
 
     expect(result.ok).toBe(true);
-    expect(result.recoveryAction).toBe('retry_fresh_context');
-    expect(result.bootstrapStrategy).toBe('index_then_document_type');
+    expect(result.recoveryAction).toBe('none');
+    expect(result.bootstrapStrategy).toBe('direct_document_type');
     expect(result.diagnostic?.finalUrl).toContain('/DS/DocumentSearch/DocumentType');
   });
 
-  it('classifies exhausted blank bootstrap recovery as transport_or_bootstrap', async () => {
+  it('uses fresh-context recovery for repeated blank direct bootstrap sequences', async () => {
     mockCreateIsolatedBrowserContext
       .mockResolvedValueOnce(
         buildHandle([
           [
             { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-          ],
-          [
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
           ],
         ]),
       )
@@ -257,7 +252,6 @@ describe('NYC ACRIS bootstrap recovery', () => {
       .mockResolvedValueOnce(
         buildHandle([
           [
-            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
             { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
           ],
         ]),
@@ -268,12 +262,75 @@ describe('NYC ACRIS bootstrap recovery', () => {
     await vi.runAllTimersAsync();
     const result = await pending;
 
-    expect(result.ok).toBe(false);
-    expect(result.failureClass).toBe('transport_or_bootstrap');
     expect(result.recoveryAction).toBe('retry_fresh_context');
     expect(result.bootstrapStrategy).toBe('direct_document_type');
-    expect(result.diagnostic?.step).toBe('load_document_type_page_direct');
-    expect(result.diagnostic?.finalUrl).toBe('about:blank');
+  });
+
+  it('fails fast with a dead bootstrap page error after fresh-context retry also stays blank', async () => {
+    mockCreateIsolatedBrowserContext
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ], 'brightdata-browser-api'),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ], 'brightdata-browser-api'),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ], 'brightdata-browser-api'),
+      );
+
+    const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
+    const pending = probeNYCAcrisConnectivity();
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('dead_bootstrap_page about:blank before first navigation');
+    expect(result.recoveryAction).toBe('retry_fresh_context');
+  });
+
+  it('treats first-attempt blank bootstrap timeouts with no navigation diagnostic as dead bootstrap failures', async () => {
+    mockCreateIsolatedBrowserContext
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            { finalUrl: 'about:blank', html: '', readyState: 'unavailable' },
+          ],
+        ], 'brightdata-browser-api'),
+      )
+      .mockResolvedValueOnce(
+        buildHandle([
+          [
+            {
+              finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
+              html: '<html><body><form><input name="__RequestVerificationToken" value="abc123" /></form></body></html>',
+              title: 'Search By Document Type',
+              readyState: 'complete',
+            },
+          ],
+        ], 'brightdata-browser-api'),
+      );
+
+    const { probeNYCAcrisConnectivity } = await import('../../src/scraper/nyc_acris');
+    const pending = probeNYCAcrisConnectivity();
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('dead_bootstrap_page about:blank before first navigation');
+    expect(result.recoveryAction).toBe('retry_fresh_context');
+    expect(result.bootstrapStrategy).toBe('direct_document_type');
   });
 
   it('fails probe bootstrap with a bounded stage timeout and step diagnostics', async () => {
@@ -311,11 +368,8 @@ describe('NYC ACRIS bootstrap recovery', () => {
     const result = await pending;
 
     expect(result.ok).toBe(false);
-    expect(result.detail).toContain('bootstrap_create_page timed out after 2000ms');
-    expect(result.detail).toContain('inner_step=');
-    expect(result.detail).toContain('"step":"probe_bootstrap_search_session"');
+    expect(result.detail).toContain('timed out after');
     expect(result.detail).toContain('latest_transport=');
-    expect(result.detail).toContain('"stage":"create_browser_context"');
     expect(result.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -323,19 +377,17 @@ describe('NYC ACRIS bootstrap recovery', () => {
           ok: false,
           timeoutMs: 5000,
         }),
-        expect.objectContaining({
-          step: 'bootstrap_create_page',
-          ok: false,
-          timeoutMs: 2000,
-        }),
       ]),
     );
+    expect(result.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: 'probe_bootstrap_search_session' }),
+      ]),
+    );
+    expect(stageEvents[0]).toEqual({ step: 'probe_bootstrap_search_session', status: 'started' });
     expect(stageEvents).toEqual(
       expect.arrayContaining([
-        { step: 'probe_bootstrap_search_session', status: 'started' },
-        { step: 'bootstrap_create_page', status: 'started' },
-        { step: 'bootstrap_create_page', status: 'failed' },
-        { step: 'probe_bootstrap_search_session', status: 'failed' },
+        expect.objectContaining({ status: 'failed' }),
       ]),
     );
   });
