@@ -264,6 +264,14 @@ describe('NYC ACRIS bootstrap recovery', () => {
 
     expect(result.recoveryAction).toBe('retry_fresh_context');
     expect(result.bootstrapStrategy).toBe('direct_document_type');
+    expect(result.bootstrapLifecycle).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: 'bootstrap_before_new_page' }),
+        expect.objectContaining({ step: 'load_document_type_page_direct_before_goto', gotoState: 'not_started' }),
+        expect.objectContaining({ step: 'load_document_type_page_direct_goto_invoked', gotoState: 'invoked' }),
+        expect.objectContaining({ step: 'bootstrap_seed_before_goto' }),
+      ]),
+    );
   });
 
   it('fails fast with a dead bootstrap page error after fresh-context retry also stays blank', async () => {

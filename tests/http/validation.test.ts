@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateScheduleRunRequest, validateScrapeRequest } from '../../src/http/validation';
+import { validateNYCAcrisDebugRequest, validateScheduleRunRequest, validateScrapeRequest } from '../../src/http/validation';
 
 describe('HTTP validation', () => {
   it('accepts a well-formed scrape request', () => {
@@ -56,5 +56,45 @@ describe('HTTP validation', () => {
     if (schedule.ok) {
       expect(schedule.value.slot).toBe('evening');
     }
+  });
+
+  it('accepts NYC bootstrap debug flags and transport override', () => {
+    const schedule = validateScheduleRunRequest({
+      site: 'nyc_acris',
+      slot: 'afternoon',
+      idempotency_key: 'nyc_acris:2026-03-10:afternoon:debug',
+      debug_bootstrap_only: true,
+      transport_mode_override: 'legacy-sbr-cdp',
+    });
+
+    expect(schedule.ok).toBe(true);
+    if (schedule.ok) {
+      expect(schedule.value.debug_bootstrap_only).toBe(true);
+      expect(schedule.value.transport_mode_override).toBe('legacy-sbr-cdp');
+    }
+
+    const debug = validateNYCAcrisDebugRequest({
+      transport_mode_override: 'brightdata-browser-api',
+    });
+    expect(debug.ok).toBe(true);
+  });
+
+  it('rejects invalid transport overrides', () => {
+    const schedule = validateScheduleRunRequest({
+      site: 'nyc_acris',
+      debug_bootstrap_only: 'yes',
+      transport_mode_override: 'bad-mode',
+    });
+    expect(schedule.ok).toBe(false);
+    if (!schedule.ok) {
+      expect(schedule.issues.map((issue) => issue.field)).toEqual(
+        expect.arrayContaining(['debug_bootstrap_only', 'transport_mode_override'])
+      );
+    }
+
+    const debug = validateNYCAcrisDebugRequest({
+      transport_mode_override: 'bad-mode',
+    });
+    expect(debug.ok).toBe(false);
   });
 });

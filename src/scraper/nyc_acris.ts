@@ -5,6 +5,7 @@ import type { BrowserContext, Page } from 'playwright';
 import { execFileSync } from 'child_process';
 import {
   createIsolatedBrowserContext,
+  resolveTransportMode,
   type BrowserTransportPurpose,
   type BrowserTransportMode,
   type TransportDiagnostic,
@@ -139,6 +140,17 @@ interface ValidationStep {
   timeoutMs?: number;
 }
 
+export interface BootstrapLifecycleEvent {
+  step: string;
+  at: string;
+  pageUrl?: string;
+  pageCount?: number;
+  pageClosed?: boolean;
+  openerPresent?: boolean;
+  gotoState?: 'not_started' | 'invoked' | 'resolved' | 'rejected' | 'watchdog_fired';
+  note?: string;
+}
+
 export interface NYCAcrisStageEvent {
   step: string;
   status: 'started' | 'succeeded' | 'failed';
@@ -187,6 +199,7 @@ interface RunManifest {
   failures: string[];
   network: NetworkEvent[];
   bootstrapTrace?: string[];
+  bootstrapLifecycle?: BootstrapLifecycleEvent[];
   navigationDiagnostics?: PageReadyDiagnostic[];
   transportDiagnostics?: TransportDiagnostic[];
   validationSteps?: ValidationStep[];
@@ -209,6 +222,7 @@ interface RunManifest {
   returnedMaxFilingDate?: string;
   upstreamMinFilingDate?: string;
   upstreamMaxFilingDate?: string;
+  transportPolicyPurpose?: BrowserTransportPurpose;
 }
 
 class NYCAcrisRangeIntegrityError extends Error {
@@ -248,8 +262,15 @@ interface ProbeResult {
   bootstrapStrategy: ProbeBootstrapStrategy;
   steps?: ValidationStep[];
   bootstrapTrace?: string[];
+  bootstrapLifecycle?: BootstrapLifecycleEvent[];
+  transportDiagnostics?: TransportDiagnostic[];
   failures?: string[];
   warnings?: string[];
+}
+
+export interface NYCAcrisBootstrapDebugArtifact extends ProbeResult {
+  requestedTransportMode: BrowserTransportMode;
+  transportPolicyPurpose: BrowserTransportPurpose;
 }
 
 export interface ProbeOptions {
@@ -1017,6 +1038,59 @@ function getLatestValidationStep(
   return undefined;
 }
 
+async function detectPageOpenerPresence(page: Page): Promise<boolean> {
+  try {
+    const opener = await page.opener();
+    return Boolean(opener);
+  } catch {
+    return false;
+  }
+}
+
+function getContextPageCount(context: BrowserContext | undefined): number | undefined {
+  if (!context) return undefined;
+  try {
+    return typeof context.pages === 'function' ? context.pages().length : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getPageContext(page: Page): BrowserContext | undefined {
+  try {
+    return typeof page.context === 'function' ? page.context() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function pushBootstrapLifecycle(
+  manifest: RunManifest | undefined,
+  page: Page | undefined,
+  step: string,
+  details: Partial<Omit<BootstrapLifecycleEvent, 'step' | 'at'>>,
+): Promise<void> {
+  if (!manifest) return;
+  if (!manifest.bootstrapLifecycle) {
+    manifest.bootstrapLifecycle = [];
+  }
+
+  const event: BootstrapLifecycleEvent = {
+    step,
+    at: nowIso(),
+    pageUrl: details.pageUrl ?? page?.url() ?? 'about:blank',
+    pageCount: details.pageCount ?? (page ? getContextPageCount(getPageContext(page) as BrowserContext) : undefined),
+    pageClosed: details.pageClosed ?? page?.isClosed?.() ?? false,
+    openerPresent: details.openerPresent ?? (page ? await detectPageOpenerPresence(page) : undefined),
+    gotoState: details.gotoState,
+    note: details.note,
+  };
+  manifest.bootstrapLifecycle.push(event);
+  if (manifest.bootstrapLifecycle.length > 50) {
+    manifest.bootstrapLifecycle.splice(0, manifest.bootstrapLifecycle.length - 50);
+  }
+}
+
 function hasOnlyBootstrapPageCreationTrace(manifest?: RunManifest): boolean {
   const trace = manifest?.bootstrapTrace ?? [];
   return (
@@ -1650,19 +1724,39 @@ async function gotoPageUntilReady(
   for (let attempt = 1; attempt <= attempts; attempt++) {
     let gotoWatchdog: NodeJS.Timeout | undefined;
     let gotoWatchdogFired = false;
+    await pushBootstrapLifecycle(manifest, page, `${options.step}_before_goto`, {
+      gotoState: 'not_started',
+      note: `attempt=${attempt} url=${options.url}`,
+    });
     try {
       const gotoPromise = page.goto(options.url, { waitUntil: 'commit', timeout: gotoTimeoutMs });
+      await pushBootstrapLifecycle(manifest, page, `${options.step}_goto_invoked`, {
+        gotoState: 'invoked',
+        note: `attempt=${attempt} url=${options.url}`,
+      });
       const watchdogPromise = new Promise<never>((_, reject) => {
         gotoWatchdog = setTimeout(() => {
           gotoWatchdogFired = true;
           manifest?.warnings.push(`goto_watchdog_fired step=${options.step} attempt=${attempt} url=${options.url}`);
+          void pushBootstrapLifecycle(manifest, page, `${options.step}_goto_watchdog`, {
+            gotoState: 'watchdog_fired',
+            note: `attempt=${attempt} url=${options.url}`,
+          });
           page.close({ runBeforeUnload: false }).catch(() => {});
           reject(new Error(`NYC ${options.step} goto watchdog fired after ${gotoTimeoutMs}ms url=${options.url}`));
         }, gotoTimeoutMs);
       });
       await Promise.race([gotoPromise, watchdogPromise]);
+      await pushBootstrapLifecycle(manifest, page, `${options.step}_goto_resolved`, {
+        gotoState: 'resolved',
+        note: `attempt=${attempt} url=${options.url}`,
+      });
     } catch (err: unknown) {
       lastError = err;
+      await pushBootstrapLifecycle(manifest, page, `${options.step}_goto_rejected`, {
+        gotoState: gotoWatchdogFired ? 'watchdog_fired' : 'rejected',
+        note: `attempt=${attempt} url=${options.url} error=${sanitizeErrorMessage(err).slice(0, 300)}`,
+      });
       if (!gotoWatchdogFired && err instanceof Error && /page\.goto: Timeout/i.test(err.message)) {
         lastError = new Error(`NYC ${options.step} goto timed out after ${gotoTimeoutMs}ms url=${options.url}`);
       }
@@ -2076,6 +2170,13 @@ function pushBootstrapTrace(manifest: RunManifest, entry: string): void {
 }
 
 function attachBootstrapPageTracing(page: Page, manifest: RunManifest): void {
+  page.on('request', (request) => {
+    if (request.frame() !== page.mainFrame()) return;
+    const url = request.url();
+    if (!/a836-acris\.nyc\.gov/i.test(url)) return;
+    pushBootstrapTrace(manifest, `request method=${request.method()} url=${url}`);
+  });
+
   page.on('framenavigated', (frame) => {
     if (frame !== page.mainFrame()) return;
     pushBootstrapTrace(manifest, `framenavigated url=${frame.url() || 'about:blank'}`);
@@ -2197,8 +2298,17 @@ async function createAcrisContext(options?: {
 async function createBootstrapPage(
   handle: Awaited<ReturnType<typeof createAcrisContext>>,
   manifest: RunManifest,
-  options?: { onStageEvent?: (event: NYCAcrisStageEvent) => void },
+  options?: {
+    onStageEvent?: (event: NYCAcrisStageEvent) => void;
+    transportPolicyPurpose?: BrowserTransportPurpose;
+  },
 ): Promise<Page> {
+  manifest.transportPolicyPurpose = options?.transportPolicyPurpose ?? manifest.transportPolicyPurpose ?? 'execution';
+  manifest.bootstrapLifecycle = [];
+  await pushBootstrapLifecycle(manifest, undefined, 'bootstrap_before_new_page', {
+    pageCount: getContextPageCount(handle.context),
+    note: `transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
+  });
   const page = await runNYCAcrisStage(
     manifest,
     {
@@ -2210,8 +2320,30 @@ async function createBootstrapPage(
   );
   page.setDefaultTimeout(45000);
   attachBootstrapPageTracing(page, manifest);
+  await pushBootstrapLifecycle(manifest, page, 'bootstrap_after_new_page', {
+    note: `transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
+  });
   pushBootstrapTrace(manifest, `bootstrap_page_created url=${page.url() || 'about:blank'}`);
   return page;
+}
+
+async function primeBootstrapPageAfterDeadBlank(page: Page, manifest?: RunManifest): Promise<void> {
+  await pushBootstrapLifecycle(manifest, page, 'bootstrap_seed_before_goto', {
+    gotoState: 'not_started',
+    note: `url=${BASE}${PATHS.index}`,
+  });
+  try {
+    await page.goto(`${BASE}${PATHS.index}`, { waitUntil: 'commit', timeout: 15000 });
+    await pushBootstrapLifecycle(manifest, page, 'bootstrap_seed_after_goto', {
+      gotoState: 'resolved',
+      note: `url=${BASE}${PATHS.index}`,
+    });
+  } catch (error: unknown) {
+    await pushBootstrapLifecycle(manifest, page, 'bootstrap_seed_failed', {
+      gotoState: 'rejected',
+      note: `url=${BASE}${PATHS.index} error=${sanitizeErrorMessage(error).slice(0, 300)}`,
+    });
+  }
 }
 
 async function initializeBootstrapSearchSession(
@@ -2260,9 +2392,16 @@ async function openBootstrapPage(
   state: SearchState,
   manifest: RunManifest,
   strategy: ProbeBootstrapStrategy = 'index_then_document_type',
-  options?: { onStageEvent?: (event: NYCAcrisStageEvent) => void },
+  options?: {
+    onStageEvent?: (event: NYCAcrisStageEvent) => void;
+    seedAfterDeadBlank?: boolean;
+    transportPolicyPurpose?: BrowserTransportPurpose;
+  },
 ): Promise<Page> {
   const page = await createBootstrapPage(handle, manifest, options);
+  if (options?.seedAfterDeadBlank) {
+    await primeBootstrapPageAfterDeadBlank(page, manifest);
+  }
   await initializeBootstrapSearchSession(page, state, manifest, strategy, options);
   return page;
 }
@@ -2276,6 +2415,7 @@ async function bootstrapSearchSession(
     preferDirectDocumentType?: boolean;
     transportPolicyPurpose?: BrowserTransportPurpose;
     transportModeOverride?: BrowserTransportMode;
+    seedAfterDeadBlank?: boolean;
   },
 ): Promise<BootstrapSessionResult> {
   let handle = await createAcrisContext({
@@ -2328,7 +2468,10 @@ async function bootstrapSearchSession(
       manifest.bootstrapTrace = [];
       await hardenContext(handle.context, manifest);
       try {
-        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
+        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, {
+          ...options,
+          seedAfterDeadBlank: true,
+        });
         return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
       } catch (freshContextDirectErr: unknown) {
         const freshContextDirectMessage = sanitizeErrorMessage(freshContextDirectErr);
@@ -2370,7 +2513,10 @@ async function bootstrapSearchSession(
       await hardenContext(handle.context, manifest);
       recoveryAction = 'retry_fresh_context';
       try {
-        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
+        page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, {
+          ...options,
+          seedAfterDeadBlank: true,
+        });
         return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
       } catch (freshContextErr: unknown) {
         const freshContextDiagnostic = getLatestNavigationDiagnostic(manifest);
@@ -2394,7 +2540,10 @@ async function bootstrapSearchSession(
         bootstrapStrategy = 'direct_document_type';
 
         try {
-          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, options);
+          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, {
+            ...options,
+            seedAfterDeadBlank: true,
+          });
           return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
         } catch (directFallbackErr: unknown) {
           await handle.close().catch(() => {});
@@ -2830,6 +2979,8 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
         bootstrapStrategy: bootstrap.bootstrapStrategy,
         steps: manifest.validationSteps,
         bootstrapTrace: manifest.bootstrapTrace,
+        bootstrapLifecycle: manifest.bootstrapLifecycle,
+        transportDiagnostics: manifest.transportDiagnostics,
         failures: manifest.failures,
         warnings: manifest.warnings,
       };
@@ -2847,6 +2998,8 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
         bootstrapStrategy: inferBootstrapStrategyFromDiagnostic(diagnostic),
         steps: manifest.validationSteps,
         bootstrapTrace: manifest.bootstrapTrace,
+        bootstrapLifecycle: manifest.bootstrapLifecycle,
+        transportDiagnostics: manifest.transportDiagnostics,
         failures: manifest.failures,
         warnings: manifest.warnings,
       };
@@ -2855,4 +3008,23 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
       await handle?.close().catch(() => {});
     }
   });
+}
+
+export async function debugNYCAcrisBootstrap(options: ProbeOptions = {}): Promise<NYCAcrisBootstrapDebugArtifact> {
+  const transportPolicyPurpose = options.transportPolicyPurpose ?? 'diagnostic';
+  const requestedTransportMode = resolveTransportMode({
+    site: 'nyc_acris',
+    purpose: transportPolicyPurpose,
+    transportModeOverride: options.transportModeOverride,
+  });
+  const result = await probeNYCAcrisConnectivity({
+    ...options,
+    transportPolicyPurpose,
+  });
+
+  return {
+    requestedTransportMode,
+    transportPolicyPurpose,
+    ...result,
+  };
 }

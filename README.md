@@ -397,6 +397,19 @@ NYC_ACRIS_PROBE_TRANSPORT_MODE=legacy-sbr-cdp npm run probe:nyc-bootstrap
 - `probe:nyc-bootstrap` runs in diagnostic mode and can force either transport explicitly.
 - Scheduled NYC runs and `npm run canary:nyc-acris` follow `NYC_ACRIS_TRANSPORT_MODE` instead; production should keep that pinned to `legacy-sbr-cdp` for now.
 
+For hosted Cloud Run diagnosis, use the authenticated bootstrap debug surface:
+
+```bash
+bash scripts/cloud/verify-cloud-run-service.sh
+NYC_DEBUG_TRANSPORT_MODE=brightdata-browser-api bash scripts/cloud/debug-nyc-acris-bootstrap.sh
+NYC_DEBUG_TRANSPORT_MODE=legacy-sbr-cdp bash scripts/cloud/debug-nyc-acris-bootstrap.sh
+```
+
+- `POST /debug/nyc-acris/bootstrap` reuses the scheduler token auth model and returns runtime git SHA plus a redacted NYC bootstrap artifact.
+- The artifact includes requested/effective transport, bootstrap trace, bootstrap lifecycle events, navigation diagnostic, transport diagnostics, warnings, and failures.
+- If hosted bootstrap succeeds on the desired transport, run `bash scripts/cloud/run-nyc-acris-prod-canary.sh` next.
+- If hosted bootstrap fails with `about:blank before first navigation`, treat it as a bootstrap/environment incident rather than a selector incident.
+
 For a capped end-to-end canary that also writes to Sheets:
 
 ```bash

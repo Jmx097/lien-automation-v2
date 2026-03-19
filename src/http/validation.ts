@@ -1,5 +1,6 @@
 import { supportedSites, type SupportedSite } from '../sites';
 import type { RetryableScheduledFailureClass, Slot } from '../scheduler';
+import type { BrowserTransportMode } from '../browser/transport';
 
 export interface ValidationIssue {
   field: string;
@@ -26,6 +27,12 @@ export interface ScheduleRunRequest {
   slot?: Slot;
   idempotency_key?: string;
   test_retry_failure_class?: RetryableScheduledFailureClass;
+  debug_bootstrap_only?: boolean;
+  transport_mode_override?: BrowserTransportMode;
+}
+
+export interface NYCAcrisDebugRequest {
+  transport_mode_override?: BrowserTransportMode;
 }
 
 const DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
@@ -34,6 +41,12 @@ const allowedRetryFailureClasses = new Set<RetryableScheduledFailureClass>([
   'viewer_roundtrip',
   'token_or_session_state',
   'sheet_export',
+]);
+const allowedTransportModes = new Set<BrowserTransportMode>([
+  'brightdata-browser-api',
+  'brightdata-proxy',
+  'legacy-sbr-cdp',
+  'local',
 ]);
 
 function getMaxRecordsBySite(): Record<SupportedSite, number> {
@@ -130,6 +143,8 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
   const slot = asTrimmedString(body.slot);
   const idempotencyKey = asTrimmedString(body.idempotency_key);
   const failureClass = asTrimmedString(body.test_retry_failure_class);
+  const transportModeOverride = asTrimmedString(body.transport_mode_override);
+  const debugBootstrapOnly = body.debug_bootstrap_only;
 
   if (site && !supportedSites.includes(site as SupportedSite)) {
     issues.push({ field: 'site', message: `site must be one of: ${supportedSites.join(', ')}` });
@@ -150,6 +165,17 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
     });
   }
 
+  if (debugBootstrapOnly != null && typeof debugBootstrapOnly !== 'boolean') {
+    issues.push({ field: 'debug_bootstrap_only', message: 'debug_bootstrap_only must be a boolean' });
+  }
+
+  if (transportModeOverride && !allowedTransportModes.has(transportModeOverride as BrowserTransportMode)) {
+    issues.push({
+      field: 'transport_mode_override',
+      message: `transport_mode_override must be one of: ${Array.from(allowedTransportModes).join(', ')}`,
+    });
+  }
+
   if (issues.length > 0) return { ok: false, issues };
 
   return {
@@ -159,6 +185,30 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
       slot: slot as Slot | undefined,
       idempotency_key: idempotencyKey,
       test_retry_failure_class: failureClass as RetryableScheduledFailureClass | undefined,
+      debug_bootstrap_only: debugBootstrapOnly === true,
+      transport_mode_override: transportModeOverride as BrowserTransportMode | undefined,
+    },
+  };
+}
+
+export function validateNYCAcrisDebugRequest(input: unknown): ValidationResult<NYCAcrisDebugRequest> {
+  const body = asObject(input);
+  const issues: ValidationIssue[] = [];
+  const transportModeOverride = asTrimmedString(body.transport_mode_override);
+
+  if (transportModeOverride && !allowedTransportModes.has(transportModeOverride as BrowserTransportMode)) {
+    issues.push({
+      field: 'transport_mode_override',
+      message: `transport_mode_override must be one of: ${Array.from(allowedTransportModes).join(', ')}`,
+    });
+  }
+
+  if (issues.length > 0) return { ok: false, issues };
+
+  return {
+    ok: true,
+    value: {
+      transport_mode_override: transportModeOverride as BrowserTransportMode | undefined,
     },
   };
 }

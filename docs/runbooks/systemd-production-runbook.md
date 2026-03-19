@@ -59,3 +59,17 @@ The script verifies:
 - timer status and next run time,
 - API health,
 - schedule readiness checks (`/schedule/health`), including required env, SQLite reachability, and sheets credential parsing.
+
+## NYC Bootstrap Verification
+
+When NYC ACRIS is failing before first navigation or returning `about:blank`, verify hosted bootstrap before retrying the full canary:
+
+```bash
+bash scripts/cloud/verify-cloud-run-service.sh
+NYC_DEBUG_TRANSPORT_MODE=brightdata-browser-api bash scripts/cloud/debug-nyc-acris-bootstrap.sh
+NYC_DEBUG_TRANSPORT_MODE=legacy-sbr-cdp bash scripts/cloud/debug-nyc-acris-bootstrap.sh
+```
+
+Interpretation:
+- If hosted debug succeeds on one transport, keep `NYC_ACRIS_TRANSPORT_MODE` pinned there and then run `bash scripts/cloud/run-nyc-acris-prod-canary.sh`.
+- If hosted debug fails on both transports with the same `about:blank before first navigation` shape, treat it as a bootstrap/environment incident, not a selector regression.

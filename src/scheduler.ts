@@ -20,13 +20,14 @@ import {
   type SiteConnectivityFailureClass,
   type SiteConnectivityState,
 } from './scheduler/connectivity';
-import { probeNYCAcrisConnectivity } from './scraper/nyc_acris';
+import { debugNYCAcrisBootstrap, probeNYCAcrisConnectivity } from './scraper/nyc_acris';
 import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
 import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import { sendNewLeadsNotification } from './notifications/email';
 import type { LienRecord, ScrapeResult, ScrapeRunQualitySummary } from './types';
 import { supportedSites, type SupportedSite } from './sites';
+import type { BrowserTransportMode } from './browser/transport';
 
 const LOOKBACK_DAYS = 7;
 const MISSED_RUN_GRACE_MINUTES = 45;
@@ -123,6 +124,7 @@ export interface ScheduledRun extends ScheduledRunRecord {
   duplicate_of?: string;
   cooldown_of?: string;
   confidence?: RunConfidenceSummary;
+  debug_artifact?: unknown;
 }
 
 export interface RunConfidenceSummary {
@@ -199,6 +201,8 @@ interface RunScheduledScrapeOptions {
   slot?: Slot;
   triggerSource?: TriggerSource;
   testFailureClass?: RetryableScheduledFailureClass;
+  debugBootstrapOnly?: boolean;
+  transportModeOverride?: BrowserTransportMode;
 }
 
 interface QualityAnomalyBaseline {
@@ -849,6 +853,26 @@ function applyFailureDiagnostics(run: ScheduledRunRecord, err: unknown): void {
   }
 }
 
+function buildNYCDebugErrorArtifact(artifact: Awaited<ReturnType<typeof debugNYCAcrisBootstrap>>): string {
+  return JSON.stringify({
+    mode: 'nyc_bootstrap_debug',
+    requestedTransportMode: artifact.requestedTransportMode,
+    transportMode: artifact.transportMode,
+    transportPolicyPurpose: artifact.transportPolicyPurpose,
+    ok: artifact.ok,
+    detail: artifact.detail,
+    failureClass: artifact.failureClass,
+    recoveryAction: artifact.recoveryAction,
+    bootstrapStrategy: artifact.bootstrapStrategy,
+    diagnostic: artifact.diagnostic,
+    bootstrapTrace: artifact.bootstrapTrace,
+    bootstrapLifecycle: artifact.bootstrapLifecycle,
+    transportDiagnostics: artifact.transportDiagnostics,
+    warnings: artifact.warnings,
+    failures: artifact.failures,
+  });
+}
+
 function shouldUseCachedNYCRows(site: SupportedSite, previousFailureClass?: string): boolean {
   return site === 'nyc_acris' && previousFailureClass === 'sheet_export';
 }
@@ -971,6 +995,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const idempotencyKey = options.idempotencyKey ?? buildDefaultIdempotencyKey(site, now, slot);
   const triggerSource = options.triggerSource ?? 'external';
   const testFailureClass = options.testFailureClass;
+  const debugBootstrapOnly = options.debugBootstrapOnly === true;
   let connectivityAtStart = await getConnectivityState(site);
 
   if (site === 'maricopa_recorder' && triggerSource === 'external') {
@@ -1095,7 +1120,13 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     finished_at: undefined,
   };
 
+  if (debugBootstrapOnly) {
+    run.partial = 1;
+    run.partial_reason = 'debug_bootstrap_only';
+  }
+
   if (
+    !debugBootstrapOnly &&
     isConnectivityManagedSite(site) &&
     triggerSource === 'external' &&
     (connectivityAtStart.status === 'blocked' || connectivityAtStart.status === 'probing')
@@ -1144,6 +1175,58 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   });
 
   try {
+    if (debugBootstrapOnly) {
+      if (site !== 'nyc_acris') {
+        throw new Error('debug_bootstrap_only is supported only for nyc_acris');
+      }
+
+      const artifact = await debugNYCAcrisBootstrap({
+        transportPolicyPurpose: 'diagnostic',
+        transportModeOverride: options.transportModeOverride,
+      });
+
+      run.error = buildNYCDebugErrorArtifact(artifact);
+      run.failure_class = artifact.ok ? undefined : (artifact.failureClass ?? 'transport_or_bootstrap');
+      run.finished_at = new Date().toISOString();
+      run.status = artifact.ok ? 'success' : 'error';
+      await getStore().updateRun(run);
+
+      if (artifact.ok) {
+        await applyConnectivitySuccess(site, 'probe');
+        log({
+          stage: 'scheduled_run_debug_complete',
+          site,
+          run_id: runId,
+          idempotency_key: idempotencyKey,
+          requested_transport_mode: artifact.requestedTransportMode,
+          transport_mode: artifact.transportMode,
+          transport_policy_purpose: artifact.transportPolicyPurpose,
+          bootstrap_strategy: artifact.bootstrapStrategy,
+          recovery_action: artifact.recoveryAction,
+          final_url: artifact.diagnostic?.finalUrl,
+        });
+      } else {
+        await applyConnectivityFailure(site, artifact.failureClass ?? 'transport_or_bootstrap', artifact.detail ?? 'nyc_debug_failed');
+        log({
+          stage: 'scheduled_run_debug_error',
+          site,
+          run_id: runId,
+          idempotency_key: idempotencyKey,
+          requested_transport_mode: artifact.requestedTransportMode,
+          transport_mode: artifact.transportMode,
+          transport_policy_purpose: artifact.transportPolicyPurpose,
+          failure_class: artifact.failureClass,
+          final_url: artifact.diagnostic?.finalUrl,
+          error: artifact.detail,
+        });
+      }
+
+      return {
+        ...run,
+        debug_artifact: artifact,
+      };
+    }
+
     if (skipScrape) {
       run.status = 'success';
       run.finished_at = new Date().toISOString();

@@ -11,6 +11,7 @@ const mockFetch = vi.fn();
 const mockProbeMaricopaRecorderConnectivity = vi.fn();
 const mockGetMaricopaPersistedStateReadiness = vi.fn();
 const mockProbeNYCAcrisConnectivity = vi.fn();
+const mockDebugNYCAcrisBootstrap = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
@@ -36,6 +37,7 @@ vi.mock('../../src/scraper/maricopa_recorder', () => ({
 
 vi.mock('../../src/scraper/nyc_acris', () => ({
   probeNYCAcrisConnectivity: mockProbeNYCAcrisConnectivity,
+  debugNYCAcrisBootstrap: mockDebugNYCAcrisBootstrap,
 }));
 
 vi.mock('../../src/scraper/maricopa_artifacts', () => ({
@@ -137,6 +139,7 @@ describe('runScheduledScrape', () => {
     mockProbeCASOSResultCount.mockReset();
     mockProbeMaricopaRecorderConnectivity.mockReset();
     mockProbeNYCAcrisConnectivity.mockReset();
+    mockDebugNYCAcrisBootstrap.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockResolvedValue({
       artifactRetrievalEnabled: false,
@@ -252,6 +255,53 @@ describe('runScheduledScrape', () => {
     expect(history[0].requested_date_start).toBe('03/06/2026');
     expect(history[0].requested_date_end).toBe('03/13/2026');
     expect(history[0].partial_reason).toBe('quarantined_failed_rows');
+  });
+
+  it('supports NYC bootstrap-only debug runs without writing sheets', async () => {
+    mockDebugNYCAcrisBootstrap.mockResolvedValueOnce({
+      requestedTransportMode: 'legacy-sbr-cdp',
+      transportPolicyPurpose: 'diagnostic',
+      transportMode: 'legacy-sbr-cdp',
+      ok: false,
+      detail: 'dead_bootstrap_page about:blank before first navigation',
+      failureClass: 'transport_or_bootstrap',
+      recoveryAction: 'retry_fresh_context',
+      bootstrapStrategy: 'direct_document_type',
+      diagnostic: {
+        finalUrl: 'about:blank',
+      },
+      bootstrapTrace: ['bootstrap_page_created url=about:blank'],
+      bootstrapLifecycle: [{ step: 'bootstrap_before_new_page', at: new Date().toISOString() }],
+      transportDiagnostics: [{ stage: 'create_browser_context', status: 'succeeded' }],
+      failures: ['dead_bootstrap_page about:blank before first navigation'],
+      warnings: ['bootstrap_recovery strategy=direct_document_type recovery=retry_fresh_context'],
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-19:afternoon:debug',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+      debugBootstrapOnly: true,
+      transportModeOverride: 'legacy-sbr-cdp',
+    });
+
+    expect(mockDebugNYCAcrisBootstrap).toHaveBeenCalledWith({
+      transportPolicyPurpose: 'diagnostic',
+      transportModeOverride: 'legacy-sbr-cdp',
+    });
+    expect(mockPushToSheetsForTab).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(result.partial_reason).toBe('debug_bootstrap_only');
+    expect(result.debug_artifact).toEqual(
+      expect.objectContaining({
+        requestedTransportMode: 'legacy-sbr-cdp',
+        transportMode: 'legacy-sbr-cdp',
+        ok: false,
+      }),
+    );
+    expect(result.error).toContain('"mode":"nyc_bootstrap_debug"');
   });
 
   it('sends a new leads notification when Master gains new rows', async () => {

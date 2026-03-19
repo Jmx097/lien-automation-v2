@@ -1,5 +1,6 @@
 import express from "express";
 import { scrapers } from "./scraper/index";
+import { debugNYCAcrisBootstrap } from "./scraper/nyc_acris";
 import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
@@ -16,7 +17,8 @@ import {
 } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
 import { ensureDatabaseReady } from "./db/init";
-import { validateScheduleRunRequest, validateScrapeRequest, type ValidationIssue } from "./http/validation";
+import { validateNYCAcrisDebugRequest, validateScheduleRunRequest, validateScrapeRequest, type ValidationIssue } from "./http/validation";
+import { isSchedulerRequestAuthorized } from "./http/scheduler-auth";
 
 dotenv.config();
 
@@ -251,12 +253,7 @@ app.post("/schedule/run", async (req, res) => {
       return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
     }
 
-    const authHeader = req.headers.authorization;
-    const schedulerTokenHeader = req.headers['x-scheduler-token'];
-    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
-    const suppliedToken = bearerToken ?? (Array.isArray(schedulerTokenHeader) ? schedulerTokenHeader[0] : schedulerTokenHeader);
-
-    if (suppliedToken !== configuredToken) {
+    if (!isSchedulerRequestAuthorized(req, configuredToken)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -278,8 +275,38 @@ app.post("/schedule/run", async (req, res) => {
       idempotencyKey,
       triggerSource: 'external',
       testFailureClass,
+      debugBootstrapOnly: validation.value.debug_bootstrap_only,
+      transportModeOverride: validation.value.transport_mode_override,
     });
     return res.json(result);
+  } catch (err: any) {
+    return res.status(errorStatusFor(err)).json({ error: err.message });
+  }
+});
+
+app.post("/debug/nyc-acris/bootstrap", async (req, res) => {
+  try {
+    const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
+    if (!configuredToken) {
+      return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
+    }
+
+    if (!isSchedulerRequestAuthorized(req, configuredToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const validation = validateNYCAcrisDebugRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+
+    const artifact = await debugNYCAcrisBootstrap({
+      transportPolicyPurpose: 'diagnostic',
+      transportModeOverride: validation.value.transport_mode_override,
+    });
+
+    return res.status(artifact.ok ? 200 : 503).json({
+      runtime: runtimeVersion,
+      artifact,
+    });
   } catch (err: any) {
     return res.status(errorStatusFor(err)).json({ error: err.message });
   }
