@@ -200,7 +200,10 @@ export async function runNYCAcrisCanary(deps?: Partial<SharedCanaryDeps>): Promi
 
 export async function validateNYCAcrisLive(): Promise<NYCAcrisValidationSummary> {
   const maxDocuments = Number(process.env.ACRIS_VALIDATION_MAX_DOCS ?? '2');
-  const manifest = await validateNYCAcrisSelectors({ max_documents: maxDocuments });
+  const manifest = await validateNYCAcrisSelectors({
+    max_documents: maxDocuments,
+    transportPolicyPurpose: 'diagnostic',
+  });
 
   return {
     transport_mode: manifest.transportMode,

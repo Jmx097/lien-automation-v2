@@ -19,17 +19,23 @@ function logStageEvent(event: {
 }
 
 async function main(): Promise<void> {
-  if (resolveTransportMode() !== 'brightdata-browser-api') {
+  const requestedTransportMode = resolveTransportMode({
+    site: 'nyc_acris',
+    purpose: 'diagnostic',
+  });
+
+  if (requestedTransportMode !== 'brightdata-browser-api') {
     throw new Error('NYC live selector validation requires BRIGHTDATA_BROWSER_WS Browser API transport');
   }
 
   const maxDocuments = Number(process.env.ACRIS_VALIDATION_MAX_DOCS ?? '2');
   console.error(
-    `[${new Date().toISOString()}] nyc_validation starting transport=brightdata-browser-api max_documents=${maxDocuments}`
+    `[${new Date().toISOString()}] nyc_validation starting transport=${requestedTransportMode} max_documents=${maxDocuments}`
   );
   const manifest = await validateNYCAcrisSelectors({
     max_documents: maxDocuments,
     onStageEvent: logStageEvent,
+    transportPolicyPurpose: 'diagnostic',
   });
 
   console.log(

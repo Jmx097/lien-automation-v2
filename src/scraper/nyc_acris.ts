@@ -5,6 +5,7 @@ import type { BrowserContext, Page } from 'playwright';
 import { execFileSync } from 'child_process';
 import {
   createIsolatedBrowserContext,
+  type BrowserTransportPurpose,
   type BrowserTransportMode,
   type TransportDiagnostic,
 } from '../browser/transport';
@@ -77,6 +78,8 @@ export interface ValidationOptions {
   headed?: boolean;
   connectivity_status_at_start?: SiteConnectivityStatus;
   onStageEvent?: (event: NYCAcrisStageEvent) => void;
+  transportPolicyPurpose?: BrowserTransportPurpose;
+  transportModeOverride?: BrowserTransportMode;
 }
 
 interface SearchState {
@@ -252,6 +255,8 @@ interface ProbeResult {
 export interface ProbeOptions {
   headed?: boolean;
   onStageEvent?: (event: NYCAcrisStageEvent) => void;
+  transportPolicyPurpose?: BrowserTransportPurpose;
+  transportModeOverride?: BrowserTransportMode;
 }
 
 interface OcrExtraction {
@@ -2176,8 +2181,15 @@ async function captureValidationEvidence(page: Page, name: string): Promise<void
   await fs.writeFile(path.join(OUT_DIR, `${sanitized}.html`), html, 'utf8').catch(() => null);
 }
 
-async function createAcrisContext(options?: { headed?: boolean }) {
+async function createAcrisContext(options?: {
+  headed?: boolean;
+  transportPolicyPurpose?: BrowserTransportPurpose;
+  transportModeOverride?: BrowserTransportMode;
+}) {
   return createIsolatedBrowserContext({
+    site: 'nyc_acris',
+    purpose: options?.transportPolicyPurpose ?? 'execution',
+    transportModeOverride: options?.transportModeOverride,
     headless: options?.headed ? false : undefined,
   });
 }
@@ -2258,9 +2270,19 @@ async function openBootstrapPage(
 async function bootstrapSearchSession(
   state: SearchState,
   manifest: RunManifest,
-  options?: { headed?: boolean; onStageEvent?: (event: NYCAcrisStageEvent) => void; preferDirectDocumentType?: boolean },
+  options?: {
+    headed?: boolean;
+    onStageEvent?: (event: NYCAcrisStageEvent) => void;
+    preferDirectDocumentType?: boolean;
+    transportPolicyPurpose?: BrowserTransportPurpose;
+    transportModeOverride?: BrowserTransportMode;
+  },
 ): Promise<BootstrapSessionResult> {
-  let handle = await createAcrisContext({ headed: options?.headed });
+  let handle = await createAcrisContext({
+    headed: options?.headed,
+    transportPolicyPurpose: options?.transportPolicyPurpose,
+    transportModeOverride: options?.transportModeOverride,
+  });
   manifest.transportMode = handle.mode;
   manifest.transportDiagnostics = handle.diagnostics;
   await hardenContext(handle.context, manifest);
@@ -2296,7 +2318,11 @@ async function bootstrapSearchSession(
 
     if (deadBootstrapPage || hardResetRequired) {
       await handle.close().catch(() => {});
-      handle = await createAcrisContext({ headed: options?.headed });
+      handle = await createAcrisContext({
+        headed: options?.headed,
+        transportPolicyPurpose: options?.transportPolicyPurpose,
+        transportModeOverride: options?.transportModeOverride,
+      });
       manifest.transportMode = handle.mode;
       manifest.transportDiagnostics = handle.diagnostics;
       manifest.bootstrapTrace = [];
@@ -2334,7 +2360,11 @@ async function bootstrapSearchSession(
       await page.close().catch(() => {});
       await handle.close().catch(() => {});
 
-      handle = await createAcrisContext({ headed: options?.headed });
+      handle = await createAcrisContext({
+        headed: options?.headed,
+        transportPolicyPurpose: options?.transportPolicyPurpose,
+        transportModeOverride: options?.transportModeOverride,
+      });
       manifest.transportMode = handle.mode;
       manifest.transportDiagnostics = handle.diagnostics;
       await hardenContext(handle.context, manifest);
@@ -2353,7 +2383,11 @@ async function bootstrapSearchSession(
         manifest.warnings.push(`bootstrap_recovery ${buildBootstrapAttemptLabel('direct_document_type', 'retry_fresh_context')} ${freshContextMessage}`);
         await handle.close().catch(() => {});
 
-        handle = await createAcrisContext({ headed: options?.headed });
+        handle = await createAcrisContext({
+          headed: options?.headed,
+          transportPolicyPurpose: options?.transportPolicyPurpose,
+          transportModeOverride: options?.transportModeOverride,
+        });
         manifest.transportMode = handle.mode;
         manifest.transportDiagnostics = handle.diagnostics;
         await hardenContext(handle.context, manifest);
@@ -2410,6 +2444,8 @@ export async function validateNYCAcrisSelectors(options: ValidationOptions = {})
           headed: options.headed,
           onStageEvent: options.onStageEvent,
           preferDirectDocumentType: true,
+          transportPolicyPurpose: options.transportPolicyPurpose ?? 'diagnostic',
+          transportModeOverride: options.transportModeOverride,
         }),
         (result) =>
           `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,
@@ -2776,6 +2812,8 @@ export async function probeNYCAcrisConnectivity(options: ProbeOptions = {}): Pro
           headed: options.headed,
           onStageEvent: options.onStageEvent,
           preferDirectDocumentType: true,
+          transportPolicyPurpose: options.transportPolicyPurpose ?? 'execution',
+          transportModeOverride: options.transportModeOverride,
         }),
         (result) =>
           `recovery_action=${result.recoveryAction} bootstrap_strategy=${result.bootstrapStrategy} final_url=${result.diagnostic?.finalUrl ?? 'unknown'}`,

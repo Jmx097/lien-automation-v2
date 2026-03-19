@@ -6,6 +6,7 @@ This repository supports **one production startup path**: `systemd`.
 
 1. **API/Job runner**: `lien-automation-api.service`
    - Runs the Express API (`npm start`) and executes scheduled jobs when `/schedule/run` is called.
+   - For NYC ACRIS production reliability, set `NYC_ACRIS_TRANSPORT_MODE=legacy-sbr-cdp` in the service environment until Browser API is revalidated.
 2. **Orchestration dependency**: `lien-automation-schedule.timer`
    - Fires at **07:30** and **19:30** America/New_York.
    - Triggers `lien-automation-schedule.service`, which calls the API schedule endpoint.

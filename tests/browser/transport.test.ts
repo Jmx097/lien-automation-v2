@@ -9,6 +9,7 @@ describe('resolveTransportMode', () => {
     delete process.env.BRIGHTDATA_BROWSER_WS;
     delete process.env.BRIGHTDATA_PROXY_SERVER;
     delete process.env.SBR_CDP_URL;
+    delete process.env.NYC_ACRIS_TRANSPORT_MODE;
   });
 
   afterEach(() => {
@@ -38,6 +39,39 @@ describe('resolveTransportMode', () => {
     const { resolveTransportMode } = await import('../../src/browser/transport');
     expect(resolveTransportMode()).toBe('legacy-sbr-cdp');
   });
+
+  it('pins NYC execution to legacy sbr cdp when available', async () => {
+    process.env.BRIGHTDATA_BROWSER_WS = 'wss://example-browser';
+    process.env.SBR_CDP_URL = 'wss://legacy.example';
+
+    const { resolveTransportMode } = await import('../../src/browser/transport');
+    expect(resolveTransportMode({ site: 'nyc_acris', purpose: 'execution' })).toBe('legacy-sbr-cdp');
+  });
+
+  it('keeps diagnostic NYC resolution on global precedence for Browser API comparisons', async () => {
+    process.env.BRIGHTDATA_BROWSER_WS = 'wss://example-browser';
+    process.env.SBR_CDP_URL = 'wss://legacy.example';
+
+    const { resolveTransportMode } = await import('../../src/browser/transport');
+    expect(resolveTransportMode({ site: 'nyc_acris', purpose: 'diagnostic' })).toBe('brightdata-browser-api');
+  });
+
+  it('honors a valid NYC transport override env var', async () => {
+    process.env.BRIGHTDATA_BROWSER_WS = 'wss://example-browser';
+    process.env.NYC_ACRIS_TRANSPORT_MODE = 'legacy-sbr-cdp';
+
+    const { resolveTransportMode } = await import('../../src/browser/transport');
+    expect(resolveTransportMode({ site: 'nyc_acris', purpose: 'execution' })).toBe('legacy-sbr-cdp');
+  });
+
+  it('falls back safely when the NYC transport override env var is invalid', async () => {
+    process.env.BRIGHTDATA_BROWSER_WS = 'wss://example-browser';
+    process.env.SBR_CDP_URL = 'wss://legacy.example';
+    process.env.NYC_ACRIS_TRANSPORT_MODE = 'totally-invalid';
+
+    const { resolveTransportMode } = await import('../../src/browser/transport');
+    expect(resolveTransportMode({ site: 'nyc_acris', purpose: 'diagnostic' })).toBe('brightdata-browser-api');
+  });
 });
 
 describe('createIsolatedBrowserContext', () => {
@@ -51,6 +85,7 @@ describe('createIsolatedBrowserContext', () => {
     process.env = { ...originalEnv };
     delete process.env.BRIGHTDATA_PROXY_SERVER;
     delete process.env.SBR_CDP_URL;
+    delete process.env.NYC_ACRIS_TRANSPORT_MODE;
     process.env.BRIGHTDATA_BROWSER_WS = 'wss://browser.example';
     process.env.BRIGHTDATA_BROWSER_WS_CONNECT_TIMEOUT_MS = '1234';
     process.env.BRIGHTDATA_BROWSER_WS_CONNECT_RETRIES = '1';
@@ -187,5 +222,28 @@ describe('createIsolatedBrowserContext', () => {
       attempt: 1,
       timeout_ms: 1234,
     }));
+  });
+
+  it('uses NYC execution policy in createIsolatedBrowserContext when both Browser API and legacy are configured', async () => {
+    delete process.env.BRIGHTDATA_BROWSER_WS_CONNECT_TIMEOUT_MS;
+    delete process.env.BRIGHTDATA_BROWSER_WS_CONNECT_RETRIES;
+    process.env.SBR_CDP_URL = 'wss://legacy.example';
+
+    const context = { close: vi.fn().mockResolvedValue(undefined) };
+    const browser = { newContext: vi.fn().mockResolvedValue(context), close: vi.fn().mockResolvedValue(undefined) };
+    const connectOverCDP = vi.fn().mockResolvedValue(browser);
+
+    vi.doMock('playwright', () => ({
+      chromium: {
+        connectOverCDP,
+        launch: vi.fn(),
+      },
+    }));
+
+    const { createIsolatedBrowserContext } = await import('../../src/browser/transport');
+    const handle = await createIsolatedBrowserContext({ site: 'nyc_acris', purpose: 'execution' });
+
+    expect(handle.mode).toBe('legacy-sbr-cdp');
+    expect(connectOverCDP).toHaveBeenCalledWith(expect.stringContaining('wss://legacy.example'), expect.objectContaining({ timeout: 45000 }));
   });
 });

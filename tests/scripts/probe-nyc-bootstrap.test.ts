@@ -19,15 +19,18 @@ vi.mock('dotenv', () => ({
 
 describe('probe-nyc-bootstrap script', () => {
   const originalConsoleLog = console.log;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    process.env = { ...originalEnv };
     mockResolveTransportMode.mockReturnValue('brightdata-browser-api');
   });
 
   afterEach(() => {
     console.log = originalConsoleLog;
+    process.env = { ...originalEnv };
   });
 
   it('prints a compact bootstrap probe payload with transport and trace fields', async () => {
@@ -85,5 +88,48 @@ describe('probe-nyc-bootstrap script', () => {
       failures: ['dead_bootstrap_page about:blank before first navigation'],
       warnings: ['bootstrap_recovery strategy=direct_document_type recovery=retry_fresh_context'],
     });
+    expect(mockResolveTransportMode).toHaveBeenCalledWith({
+      site: 'nyc_acris',
+      purpose: 'diagnostic',
+      transportModeOverride: undefined,
+    });
+    expect(mockProbeNYCAcrisConnectivity).toHaveBeenCalledWith({
+      transportPolicyPurpose: 'diagnostic',
+      transportModeOverride: undefined,
+    });
+  });
+
+  it('honors an explicit probe transport override without changing production defaults', async () => {
+    process.env.NYC_ACRIS_PROBE_TRANSPORT_MODE = 'legacy-sbr-cdp';
+    mockResolveTransportMode.mockReturnValue('legacy-sbr-cdp');
+    mockProbeNYCAcrisConnectivity.mockResolvedValueOnce({
+      ok: true,
+      transportMode: 'legacy-sbr-cdp',
+      recoveryAction: 'none',
+      bootstrapStrategy: 'direct_document_type',
+    });
+
+    const logSpy = vi.fn();
+    console.log = logSpy;
+
+    const { main } = await import('../../scripts/probe-nyc-bootstrap');
+    await main();
+
+    expect(mockResolveTransportMode).toHaveBeenCalledWith({
+      site: 'nyc_acris',
+      purpose: 'diagnostic',
+      transportModeOverride: 'legacy-sbr-cdp',
+    });
+    expect(mockProbeNYCAcrisConnectivity).toHaveBeenCalledWith({
+      transportPolicyPurpose: 'diagnostic',
+      transportModeOverride: 'legacy-sbr-cdp',
+    });
+    expect(JSON.parse(logSpy.mock.calls[0][0])).toEqual(
+      expect.objectContaining({
+        requestedTransportMode: 'legacy-sbr-cdp',
+        transportMode: 'legacy-sbr-cdp',
+        ok: true,
+      }),
+    );
   });
 });

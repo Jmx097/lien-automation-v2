@@ -20,6 +20,7 @@ docker push "${IMAGE_URI}"
 export SBR_CDP_URL='wss://<bright-data-cdp-url>'
 export SHEETS_KEY='{"type":"service_account",...}'
 export SHEET_ID='<google-sheet-id>'
+export NYC_ACRIS_TRANSPORT_MODE='legacy-sbr-cdp'
 
 export JOB_NAME='lien-scraper-job'
 export JOB_LOOKBACK_DAYS='7'
@@ -28,7 +29,7 @@ export JOB_MAX_RECORDS='25'
 bash scripts/cloud/deploy-cloud-run-job.sh
 ```
 
-The deployment sets all required vars: `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`.
+The deployment sets all required vars: `SBR_CDP_URL`, `SHEETS_KEY`, `SHEET_ID`, `NYC_ACRIS_TRANSPORT_MODE`.
 
 ## 3) Create two Cloud Scheduler jobs (timezone explicit)
 

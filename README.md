@@ -151,6 +151,7 @@ Important optional environment variables:
 - `SCHEDULE_ALERT_WEBHOOK_URL` enables missed-run, connectivity, and quality-anomaly alerts from the scheduler.
 - `DATABASE_URL` enables the Postgres-backed scheduler store. When unset, the scheduler store remains on local SQLite.
 - In hosted Cloud Run, the first-pass secret migration now expects `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` to be supplied via Secret Manager-backed env vars while keeping the same runtime variable names.
+- `NYC_ACRIS_TRANSPORT_MODE` selects the NYC production transport. Supported values: `legacy-sbr-cdp`, `brightdata-browser-api`, `brightdata-proxy`, `local`. Default production recommendation: `legacy-sbr-cdp`.
 - `SCHEDULE_RUN_MAX_ATTEMPTS` controls the scheduler-level retry budget for one logical scheduled run. Default: `3`.
 - `SCHEDULE_RUN_BASE_DELAY_MS` sets the initial retry backoff between retryable scheduled-run attempts. Default: `1000`.
 - `SCHEDULE_RUN_MAX_DELAY_MS` caps the scheduler retry backoff. Default: `10000`.
@@ -169,6 +170,7 @@ Important optional environment variables:
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_MORNING_RUN_HOUR`, `SCHEDULE_CA_SOS_MORNING_RUN_MINUTE`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_CA_SOS_EVENING_RUN_HOUR`, `SCHEDULE_CA_SOS_EVENING_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
+- `NYC_ACRIS_TRANSPORT_MODE`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
 - `TESSERACT_PATH`, `PDFTOPPM_PATH`, `REQUIRE_OCR_TOOLS`
@@ -262,10 +264,11 @@ These settings reduce overhead while keeping scraper behavior and output unchang
 - Human-like delays are implemented between actions to mimic natural browsing patterns.
 - Supported sites are `ca_sos`, `nyc_acris`, and `maricopa_recorder`.
 - NYC ACRIS uses a session-preserving browser flow with hidden-form submits, fresh anti-forgery tokens, and viewer extraction via `iframe[name="mainframe"]`.
+- NYC execution can use a site-specific transport policy. Production should pin `NYC_ACRIS_TRANSPORT_MODE=legacy-sbr-cdp` until Browser API proves stable in hosted runs again.
 - Maricopa Recorder uses the site’s public JSON endpoints for search/detail. It clamps future `date_end` values to the latest searchable date returned by `publicapi.recorder.maricopa.gov/documents/index`.
 - Maricopa currently exposes names and recording metadata through the observed public API, but not debtor address or amount fields. Those remain blank/low-confidence until a public artifact/detail endpoint is confirmed.
 - Maricopa may return Cloudflare challenge/interstitial pages. The scraper detects these and raises a Maricopa-specific retryable failure instead of treating the body as valid JSON.
-- The scraper supports Bright Data Browser API first, direct proxy mode second, and legacy `SBR_CDP_URL` as a compatibility fallback.
+- The scraper still supports Bright Data Browser API, direct proxy mode, and legacy `SBR_CDP_URL`, but NYC production execution now prefers the site-specific transport policy over the global Browser API-first order.
 
 ## Test Commands
 
@@ -383,6 +386,16 @@ npm run validate:nyc-acris-live
 - Requires `BRIGHTDATA_BROWSER_WS`.
 - Runs a single uninterrupted NYC session through results, viewer iframe extraction, and return-to-results checks.
 - Writes a redacted validation manifest under `out/acris/`.
+
+For explicit bootstrap transport comparisons without changing production defaults:
+
+```bash
+NYC_ACRIS_PROBE_TRANSPORT_MODE=brightdata-browser-api npm run probe:nyc-bootstrap
+NYC_ACRIS_PROBE_TRANSPORT_MODE=legacy-sbr-cdp npm run probe:nyc-bootstrap
+```
+
+- `probe:nyc-bootstrap` runs in diagnostic mode and can force either transport explicitly.
+- Scheduled NYC runs and `npm run canary:nyc-acris` follow `NYC_ACRIS_TRANSPORT_MODE` instead; production should keep that pinned to `legacy-sbr-cdp` for now.
 
 For a capped end-to-end canary that also writes to Sheets:
 

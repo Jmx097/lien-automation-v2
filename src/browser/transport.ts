@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type BrowserContextOptions, type LaunchOptions } from 'playwright';
 import crypto from 'crypto';
+import type { SupportedSite } from '../sites';
 import { log } from '../utils/logger';
 import { redactSecret, sanitizeErrorMessage } from '../utils/redaction';
 
@@ -20,6 +21,17 @@ export interface BrowserContextHandle {
 export interface CreateBrowserContextOptions {
   contextOptions?: BrowserContextOptions;
   headless?: boolean;
+  site?: SupportedSite;
+  purpose?: BrowserTransportPurpose;
+  transportModeOverride?: BrowserTransportMode;
+}
+
+export type BrowserTransportPurpose = 'execution' | 'diagnostic';
+
+export interface ResolveTransportModeOptions {
+  site?: SupportedSite;
+  purpose?: BrowserTransportPurpose;
+  transportModeOverride?: BrowserTransportMode;
 }
 
 export interface TransportDiagnostic {
@@ -58,11 +70,60 @@ function getProxyOptions(): LaunchOptions['proxy'] | undefined {
   };
 }
 
-export function resolveTransportMode(): BrowserTransportMode {
+const SITE_TRANSPORT_MODE_ENV_KEYS: Partial<Record<SupportedSite, string[]>> = {
+  nyc_acris: ['NYC_ACRIS_TRANSPORT_MODE'],
+};
+
+const VALID_TRANSPORT_MODES = new Set<BrowserTransportMode>([
+  'brightdata-browser-api',
+  'brightdata-proxy',
+  'legacy-sbr-cdp',
+  'local',
+]);
+
+function getEnvTransportModeOverride(site?: SupportedSite): BrowserTransportMode | undefined {
+  if (!site) return undefined;
+
+  const sitePrefix = site.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  const envKeys = [`${sitePrefix}_TRANSPORT_MODE`, ...(SITE_TRANSPORT_MODE_ENV_KEYS[site] ?? [])];
+
+  for (const envKey of envKeys) {
+    const rawValue = process.env[envKey]?.trim();
+    if (!rawValue) continue;
+    if (VALID_TRANSPORT_MODES.has(rawValue as BrowserTransportMode)) {
+      return rawValue as BrowserTransportMode;
+    }
+
+    log({
+      stage: 'browser_transport_invalid_site_override',
+      site,
+      env_key: envKey,
+      requested_mode: rawValue,
+    });
+  }
+
+  return undefined;
+}
+
+function resolveGlobalTransportMode(): BrowserTransportMode {
   if (process.env.BRIGHTDATA_BROWSER_WS?.trim()) return 'brightdata-browser-api';
   if (process.env.BRIGHTDATA_PROXY_SERVER?.trim()) return 'brightdata-proxy';
   if (process.env.SBR_CDP_URL?.trim()) return 'legacy-sbr-cdp';
   return 'local';
+}
+
+export function resolveTransportMode(options: ResolveTransportModeOptions = {}): BrowserTransportMode {
+  const override = options.transportModeOverride;
+  if (override) return override;
+
+  const configuredOverride = getEnvTransportModeOverride(options.site);
+  if (configuredOverride) return configuredOverride;
+
+  if (options.site === 'nyc_acris' && (options.purpose ?? 'execution') === 'execution' && process.env.SBR_CDP_URL?.trim()) {
+    return 'legacy-sbr-cdp';
+  }
+
+  return resolveGlobalTransportMode();
 }
 
 function getCDPConnectTimeoutMs(mode: Extract<BrowserTransportMode, 'brightdata-browser-api' | 'legacy-sbr-cdp'>): number {
@@ -248,7 +309,7 @@ async function connectOverCDPWithRetry(
 }
 
 export async function createIsolatedBrowserContext(options: CreateBrowserContextOptions = {}): Promise<BrowserContextHandle> {
-  const mode = resolveTransportMode();
+  const mode = resolveTransportMode(options);
   const diagnostics: TransportDiagnostic[] = [];
   const contextOptions: BrowserContextOptions = {
     acceptDownloads: true,
