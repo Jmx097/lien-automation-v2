@@ -302,6 +302,50 @@ describe('runScheduledScrape', () => {
       }),
     );
     expect(result.error).toContain('"mode":"nyc_bootstrap_debug"');
+    expect(connectivityState.size).toBe(0);
+  });
+
+  it('keeps NYC connectivity state unchanged for successful bootstrap-only debug runs', async () => {
+    connectivityState.set('nyc_acris', {
+      site: 'nyc_acris',
+      status: 'blocked',
+      consecutive_failures: 2,
+      blocked_until: '2026-03-20T00:00:00.000Z',
+      last_failure_reason: 'transport_or_bootstrap',
+      updated_at: '2026-03-19T00:00:00.000Z',
+    });
+
+    mockDebugNYCAcrisBootstrap.mockResolvedValueOnce({
+      requestedTransportMode: 'legacy-sbr-cdp',
+      transportPolicyPurpose: 'diagnostic',
+      transportMode: 'legacy-sbr-cdp',
+      ok: true,
+      detail: 'loaded NYC bootstrap session',
+      recoveryAction: 'retry_fresh_context',
+      bootstrapStrategy: 'direct_document_type',
+      diagnostic: {
+        finalUrl: 'https://a836-acris.nyc.gov/DS/DocumentSearch/DocumentType',
+      },
+      bootstrapTrace: ['bootstrap_page_created url=about:blank'],
+      bootstrapLifecycle: [{ step: 'bootstrap_before_new_page', at: new Date().toISOString() }],
+      transportDiagnostics: [{ stage: 'create_browser_context', status: 'succeeded' }],
+      failures: [],
+      warnings: [],
+    });
+
+    const priorState = connectivityState.get('nyc_acris');
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-19:afternoon:debug-success',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+      debugBootstrapOnly: true,
+      transportModeOverride: 'legacy-sbr-cdp',
+    });
+
+    expect(result.status).toBe('success');
+    expect(connectivityState.get('nyc_acris')).toEqual(priorState);
   });
 
   it('sends a new leads notification when Master gains new rows', async () => {

@@ -192,6 +192,7 @@ interface RunManifest {
   startedAt: string;
   finishedAt?: string;
   transportMode: BrowserTransportMode;
+  bootstrapAttemptCount?: number;
   resultPagesVisited: number;
   docIds: string[];
   documents: ViewerArtifact[];
@@ -2304,10 +2305,11 @@ async function createBootstrapPage(
   },
 ): Promise<Page> {
   manifest.transportPolicyPurpose = options?.transportPolicyPurpose ?? manifest.transportPolicyPurpose ?? 'execution';
-  manifest.bootstrapLifecycle = [];
+  manifest.bootstrapAttemptCount = (manifest.bootstrapAttemptCount ?? 0) + 1;
+  const bootstrapAttempt = manifest.bootstrapAttemptCount;
   await pushBootstrapLifecycle(manifest, undefined, 'bootstrap_before_new_page', {
     pageCount: getContextPageCount(handle.context),
-    note: `transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
+    note: `attempt=${bootstrapAttempt} transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
   });
   const page = await runNYCAcrisStage(
     manifest,
@@ -2321,7 +2323,7 @@ async function createBootstrapPage(
   page.setDefaultTimeout(45000);
   attachBootstrapPageTracing(page, manifest);
   await pushBootstrapLifecycle(manifest, page, 'bootstrap_after_new_page', {
-    note: `transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
+    note: `attempt=${bootstrapAttempt} transport_mode=${handle.mode} purpose=${manifest.transportPolicyPurpose}`,
   });
   pushBootstrapTrace(manifest, `bootstrap_page_created url=${page.url() || 'about:blank'}`);
   return page;

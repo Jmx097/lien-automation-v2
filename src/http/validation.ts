@@ -140,6 +140,7 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
   const body = asObject(input);
   const issues: ValidationIssue[] = [];
   const site = asTrimmedString(body.site);
+  const resolvedSite = site as SupportedSite | undefined;
   const slot = asTrimmedString(body.slot);
   const idempotencyKey = asTrimmedString(body.idempotency_key);
   const failureClass = asTrimmedString(body.test_retry_failure_class);
@@ -176,12 +177,26 @@ export function validateScheduleRunRequest(input: unknown): ValidationResult<Sch
     });
   }
 
+  if (debugBootstrapOnly === true && resolvedSite !== 'nyc_acris') {
+    issues.push({
+      field: 'debug_bootstrap_only',
+      message: 'debug_bootstrap_only is supported only when site is nyc_acris',
+    });
+  }
+
+  if (transportModeOverride && !(debugBootstrapOnly === true && resolvedSite === 'nyc_acris')) {
+    issues.push({
+      field: 'transport_mode_override',
+      message: 'transport_mode_override is supported only for nyc_acris bootstrap debug runs',
+    });
+  }
+
   if (issues.length > 0) return { ok: false, issues };
 
   return {
     ok: true,
     value: {
-      site: site as SupportedSite | undefined,
+      site: resolvedSite,
       slot: slot as Slot | undefined,
       idempotency_key: idempotencyKey,
       test_retry_failure_class: failureClass as RetryableScheduledFailureClass | undefined,

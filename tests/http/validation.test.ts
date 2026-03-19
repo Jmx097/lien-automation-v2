@@ -79,6 +79,39 @@ describe('HTTP validation', () => {
     expect(debug.ok).toBe(true);
   });
 
+  it('rejects NYC bootstrap debug flags outside nyc_acris schedule runs', () => {
+    const missingSite = validateScheduleRunRequest({
+      debug_bootstrap_only: true,
+    });
+    expect(missingSite.ok).toBe(false);
+    if (!missingSite.ok) {
+      expect(missingSite.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'debug_bootstrap_only',
+            message: 'debug_bootstrap_only is supported only when site is nyc_acris',
+          }),
+        ]),
+      );
+    }
+
+    const wrongSite = validateScheduleRunRequest({
+      site: 'ca_sos',
+      debug_bootstrap_only: true,
+    });
+    expect(wrongSite.ok).toBe(false);
+    if (!wrongSite.ok) {
+      expect(wrongSite.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'debug_bootstrap_only',
+            message: 'debug_bootstrap_only is supported only when site is nyc_acris',
+          }),
+        ]),
+      );
+    }
+  });
+
   it('rejects invalid transport overrides', () => {
     const schedule = validateScheduleRunRequest({
       site: 'nyc_acris',
@@ -96,5 +129,23 @@ describe('HTTP validation', () => {
       transport_mode_override: 'bad-mode',
     });
     expect(debug.ok).toBe(false);
+  });
+
+  it('rejects transport overrides outside NYC bootstrap debug runs', () => {
+    const schedule = validateScheduleRunRequest({
+      site: 'nyc_acris',
+      transport_mode_override: 'legacy-sbr-cdp',
+    });
+    expect(schedule.ok).toBe(false);
+    if (!schedule.ok) {
+      expect(schedule.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'transport_mode_override',
+            message: 'transport_mode_override is supported only for nyc_acris bootstrap debug runs',
+          }),
+        ]),
+      );
+    }
   });
 });

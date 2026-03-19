@@ -1192,7 +1192,6 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       await getStore().updateRun(run);
 
       if (artifact.ok) {
-        await applyConnectivitySuccess(site, 'probe');
         log({
           stage: 'scheduled_run_debug_complete',
           site,
@@ -1206,7 +1205,6 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           final_url: artifact.diagnostic?.finalUrl,
         });
       } else {
-        await applyConnectivityFailure(site, artifact.failureClass ?? 'transport_or_bootstrap', artifact.detail ?? 'nyc_debug_failed');
         log({
           stage: 'scheduled_run_debug_error',
           site,
