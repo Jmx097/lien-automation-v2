@@ -129,10 +129,15 @@ jobs:
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
         run: |
           SECRET_REF="$(printf '%s' "${SCHEDULE_RUN_TOKEN_SECRET_REF}" | tr -d '\r' | awk '{$1=$1; print}')"
-          if [[ "${SECRET_REF}" == projects/*/secrets/*/versions/* ]]; then
-            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_REF}")"
-          elif [[ "${SECRET_REF}" == projects/*/secrets/* ]]; then
-            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_REF}/versions/latest")"
+          if [[ "${SECRET_REF}" =~ ^projects/([^/]+)/secrets/([^/]+)/versions/([^/]+)$ ]]; then
+            SECRET_PROJECT="${BASH_REMATCH[1]}"
+            SECRET_NAME="${BASH_REMATCH[2]}"
+            SECRET_VERSION="${BASH_REMATCH[3]}"
+            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_VERSION}" --secret "${SECRET_NAME}" --project "${SECRET_PROJECT}")"
+          elif [[ "${SECRET_REF}" =~ ^projects/([^/]+)/secrets/([^/]+)$ ]]; then
+            SECRET_PROJECT="${BASH_REMATCH[1]}"
+            SECRET_NAME="${BASH_REMATCH[2]}"
+            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access latest --secret "${SECRET_NAME}" --project "${SECRET_PROJECT}")"
           else
             export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access latest --secret "${SECRET_REF}" --project "${GCP_PROJECT_ID}")"
           fi
