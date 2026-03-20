@@ -128,7 +128,19 @@ jobs:
           API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
         run: |
-          export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access latest --secret "${SCHEDULE_RUN_TOKEN_SECRET_REF}" --project "${GCP_PROJECT_ID}")"
+          SECRET_REF="${SCHEDULE_RUN_TOKEN_SECRET_REF}"
+          if [[ "${SECRET_REF}" == projects/*/secrets/*/versions/* ]]; then
+            SECRET_NAME="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/([^/]+)/versions/[^/]+$#\1#')"
+            SECRET_VERSION="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/[^/]+/versions/([^/]+)$#\1#')"
+          elif [[ "${SECRET_REF}" == projects/*/secrets/* ]]; then
+            SECRET_NAME="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/([^/]+)$#\1#')"
+            SECRET_VERSION="latest"
+          else
+            SECRET_NAME="${SECRET_REF}"
+            SECRET_VERSION="latest"
+          fi
+
+          export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_VERSION}" --secret "${SECRET_NAME}" --project "${GCP_PROJECT_ID}")"
           bash scripts/cloud/create-scheduler-jobs.sh
 
       - name: Verify Cloud Scheduler jobs
