@@ -116,3 +116,22 @@ jobs:
           EXPECTED_GIT_SHA: ${{ github.sha }}
           EXPECTED_SCHEDULER_STORE: postgres
         run: bash scripts/cloud/verify-cloud-run-service.sh
+
+      - name: Resolve deployed service URL
+        id: service-url
+        run: |
+          SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --format='value(status.url)')"
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Reconcile Cloud Scheduler jobs
+        env:
+          API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+          SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
+        run: |
+          export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access latest --secret "${SCHEDULE_RUN_TOKEN_SECRET_REF}" --project "${GCP_PROJECT_ID}")"
+          bash scripts/cloud/create-scheduler-jobs.sh
+
+      - name: Verify Cloud Scheduler jobs
+        env:
+          API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+        run: bash scripts/cloud/verify-cloud-scheduler-jobs.sh

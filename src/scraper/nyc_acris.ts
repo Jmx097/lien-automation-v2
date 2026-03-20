@@ -2482,6 +2482,31 @@ async function bootstrapSearchSession(
           await handle.close().catch(() => {});
           throw new Error('dead_bootstrap_page about:blank before first navigation');
         }
+        if (
+          bootstrapStrategy !== 'direct_document_type' &&
+          shouldRetryBootstrapDiagnostic(freshContextDirectDiagnostic, freshContextDirectMessage)
+        ) {
+          manifest.warnings.push(
+            `bootstrap_recovery ${buildBootstrapAttemptLabel('direct_document_type', 'retry_fresh_context')} ${freshContextDirectMessage}`,
+          );
+          await handle.close().catch(() => {});
+
+          handle = await createAcrisContext({
+            headed: options?.headed,
+            transportPolicyPurpose: options?.transportPolicyPurpose,
+            transportModeOverride: options?.transportModeOverride,
+          });
+          manifest.transportMode = handle.mode;
+          manifest.transportDiagnostics = handle.diagnostics;
+          await hardenContext(handle.context, manifest);
+          bootstrapStrategy = 'direct_document_type';
+
+          page = await openBootstrapPage(handle, state, manifest, bootstrapStrategy, {
+            ...options,
+            seedAfterDeadBlank: true,
+          });
+          return { handle, page, recoveryAction, bootstrapStrategy, diagnostic: getLatestNavigationDiagnostic(manifest) };
+        }
         throw freshContextDirectErr;
       }
     }

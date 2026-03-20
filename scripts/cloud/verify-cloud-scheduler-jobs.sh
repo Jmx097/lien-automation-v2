@@ -19,6 +19,35 @@ set -euo pipefail
 : "${NYC_EVENING_JOB_NAME:=${JOB_NAME}-nyc-acris-evening}"
 
 RUN_URI="${API_BASE_URL%/}/schedule/run"
+EXPECTED_JOB_COUNT=9
+
+EXPECTED_JOBS=(
+  "${CA_MORNING_JOB_NAME}"
+  "${CA_AFTERNOON_JOB_NAME}"
+  "${CA_EVENING_JOB_NAME}"
+  "${MARICOPA_MORNING_JOB_NAME}"
+  "${MARICOPA_AFTERNOON_JOB_NAME}"
+  "${MARICOPA_EVENING_JOB_NAME}"
+  "${NYC_MORNING_JOB_NAME}"
+  "${NYC_AFTERNOON_JOB_NAME}"
+  "${NYC_EVENING_JOB_NAME}"
+)
+
+listed_jobs_json="$(gcloud scheduler jobs list --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
+actual_job_count="$(printf '%s' "${listed_jobs_json}" | node -e "const fs=require('fs'); const jobs=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write(String(Array.isArray(jobs) ? jobs.length : 0));")"
+
+if [[ "${actual_job_count}" != "${EXPECTED_JOB_COUNT}" ]]; then
+  echo "Expected ${EXPECTED_JOB_COUNT} scheduler jobs in ${GCP_REGION}, found ${actual_job_count}" >&2
+  printf '%s\n' "${listed_jobs_json}" >&2
+  exit 1
+fi
+
+for expected_job in "${EXPECTED_JOBS[@]}"; do
+  if ! printf '%s' "${listed_jobs_json}" | node -e "const fs=require('fs'); const expected=process.argv[1]; const jobs=JSON.parse(fs.readFileSync(0,'utf8')); const found=Array.isArray(jobs) && jobs.some((job) => String(job.name ?? '').endsWith('/' + expected)); process.exit(found ? 0 : 1);" "${expected_job}"; then
+    echo "Missing expected scheduler job: ${expected_job}" >&2
+    exit 1
+  fi
+done
 
 verify_job() {
   local name="$1"

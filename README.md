@@ -522,8 +522,12 @@ Verification helpers:
 
 ```bash
 bash scripts/cloud/verify-cloud-run-service.sh
+bash scripts/cloud/create-scheduler-jobs.sh
 bash scripts/cloud/verify-cloud-scheduler-jobs.sh
 ```
+
+- `create-scheduler-jobs.sh` is the production reconciliation path for Cloud Scheduler and should be run after Cloud Run deploys or any schedule-setting change.
+- `verify-cloud-scheduler-jobs.sh` now expects exactly 9 scheduler jobs in the target region: 3 weekday Mountain-time jobs per site.
 
 ### Runtime safeguards
 
