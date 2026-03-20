@@ -129,18 +129,14 @@ jobs:
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
         run: |
           SECRET_REF="$(printf '%s' "${SCHEDULE_RUN_TOKEN_SECRET_REF}" | tr -d '\r' | awk '{$1=$1; print}')"
-          IFS='/' read -r SECRET_SCOPE SECRET_PROJECT_KIND SECRET_COLLECTION SECRET_NAME SECRET_VERSION_KIND SECRET_VERSION SECRET_EXTRA <<< "${SECRET_REF}"
-
-          if [[ "${SECRET_SCOPE}" == "projects" && "${SECRET_COLLECTION}" == "secrets" && "${SECRET_VERSION_KIND}" == "versions" && -n "${SECRET_NAME}" && -n "${SECRET_VERSION}" && -z "${SECRET_EXTRA:-}" ]]; then
-            :
-          elif [[ "${SECRET_SCOPE}" == "projects" && "${SECRET_COLLECTION}" == "secrets" && -n "${SECRET_NAME}" && -z "${SECRET_VERSION_KIND:-}" ]]; then
-            SECRET_VERSION="latest"
+          if [[ "${SECRET_REF}" == projects/*/secrets/*/versions/* ]]; then
+            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_REF}")"
+          elif [[ "${SECRET_REF}" == projects/*/secrets/* ]]; then
+            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_REF}/versions/latest")"
           else
-            SECRET_NAME="${SECRET_REF}"
-            SECRET_VERSION="latest"
+            export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access latest --secret "${SECRET_REF}" --project "${GCP_PROJECT_ID}")"
           fi
 
-          export SCHEDULE_RUN_TOKEN="$(gcloud secrets versions access "${SECRET_VERSION}" --secret "${SECRET_NAME}" --project "${GCP_PROJECT_ID}")"
           bash scripts/cloud/create-scheduler-jobs.sh
 
       - name: Verify Cloud Scheduler jobs
