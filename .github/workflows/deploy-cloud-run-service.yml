@@ -128,12 +128,12 @@ jobs:
           API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
         run: |
-          SECRET_REF="${SCHEDULE_RUN_TOKEN_SECRET_REF}"
-          if [[ "${SECRET_REF}" == projects/*/secrets/*/versions/* ]]; then
-            SECRET_NAME="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/([^/]+)/versions/[^/]+$#\1#')"
-            SECRET_VERSION="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/[^/]+/versions/([^/]+)$#\1#')"
-          elif [[ "${SECRET_REF}" == projects/*/secrets/* ]]; then
-            SECRET_NAME="$(printf '%s' "${SECRET_REF}" | sed -E 's#^projects/[^/]+/secrets/([^/]+)$#\1#')"
+          SECRET_REF="$(printf '%s' "${SCHEDULE_RUN_TOKEN_SECRET_REF}" | tr -d '\r' | awk '{$1=$1; print}')"
+          IFS='/' read -r SECRET_SCOPE SECRET_PROJECT_KIND SECRET_COLLECTION SECRET_NAME SECRET_VERSION_KIND SECRET_VERSION SECRET_EXTRA <<< "${SECRET_REF}"
+
+          if [[ "${SECRET_SCOPE}" == "projects" && "${SECRET_COLLECTION}" == "secrets" && "${SECRET_VERSION_KIND}" == "versions" && -n "${SECRET_NAME}" && -n "${SECRET_VERSION}" && -z "${SECRET_EXTRA:-}" ]]; then
+            :
+          elif [[ "${SECRET_SCOPE}" == "projects" && "${SECRET_COLLECTION}" == "secrets" && -n "${SECRET_NAME}" && -z "${SECRET_VERSION_KIND:-}" ]]; then
             SECRET_VERSION="latest"
           else
             SECRET_NAME="${SECRET_REF}"
