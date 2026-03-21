@@ -58,10 +58,15 @@ function resolveSecretRef(rawSecretRef, defaultProject) {
     secretVersion,
     sourceKind,
     segmentCount: normalizedRef.split('/').filter(Boolean).length,
+    positionalVersionRef: Boolean(versionRefMatch),
   };
 }
 
 function buildAccessCommandArgs(resolved) {
+  if (resolved.positionalVersionRef) {
+    return ['secrets', 'versions', 'access', resolved.normalizedRef];
+  }
+
   return [
     'secrets',
     'versions',

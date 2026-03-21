@@ -60,7 +60,14 @@ describe('resolve-secret-ref', () => {
       secretVersion: '5',
       sourceKind: 'version-ref',
       segmentCount: 6,
+      positionalVersionRef: true,
     });
+    expect(buildAccessCommandArgs(resolved)).toEqual([
+      'secrets',
+      'versions',
+      'access',
+      'projects/demo-project/secrets/scheduler-token/versions/5',
+    ]);
   });
 
   it('normalizes a secretmanager.googleapis.com ref', () => {
@@ -76,6 +83,7 @@ describe('resolve-secret-ref', () => {
       secretVersion: 'latest',
       sourceKind: 'version-ref',
       segmentCount: 6,
+      positionalVersionRef: true,
     });
   });
 });
