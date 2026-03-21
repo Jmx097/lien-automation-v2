@@ -20,6 +20,16 @@ function normalizeSecretRef(rawSecretRef) {
     .replace(/^\/+/, '');
 }
 
+function extractVersionResource(normalizedRef) {
+  const match = normalizedRef.match(/(projects\/[^/\s]+\/secrets\/[^/\s]+\/versions\/[^/\s"'`]+)/);
+  return match ? match[1] : null;
+}
+
+function extractSecretResource(normalizedRef) {
+  const match = normalizedRef.match(/(projects\/[^/\s]+\/secrets\/[^/\s"'`]+)/);
+  return match ? match[1] : null;
+}
+
 function resolveSecretRef(rawSecretRef, defaultProject) {
   const normalizedRef = normalizeSecretRef(rawSecretRef);
 
@@ -27,23 +37,28 @@ function resolveSecretRef(rawSecretRef, defaultProject) {
     throw new Error('SCHEDULE_RUN_TOKEN_SECRET_REF is empty');
   }
 
-  const versionRefMatch = normalizedRef.match(
+  const extractedVersionRef = extractVersionResource(normalizedRef);
+  const extractedSecretRef = extractedVersionRef || extractSecretResource(normalizedRef);
+  const versionRefMatch = extractedVersionRef?.match(
     /^projects\/([^/]+)\/secrets\/([^/]+)\/versions\/([^/]+)$/
   );
-  const secretRefMatch = normalizedRef.match(/^projects\/([^/]+)\/secrets\/([^/]+)$/);
+  const secretRefMatch = extractedSecretRef?.match(/^projects\/([^/]+)\/secrets\/([^/]+)$/);
 
   let secretProject;
   let secretName;
   let secretVersion;
   let sourceKind;
+  let accessRef = normalizedRef;
 
   if (versionRefMatch) {
     [, secretProject, secretName, secretVersion] = versionRefMatch;
     sourceKind = 'version-ref';
+    accessRef = extractedVersionRef;
   } else if (secretRefMatch) {
     [, secretProject, secretName] = secretRefMatch;
     secretVersion = 'latest';
     sourceKind = 'secret-ref';
+    accessRef = extractedSecretRef;
   } else {
     secretProject = String(defaultProject ?? '').trim();
     secretName = normalizedRef;
@@ -52,19 +67,20 @@ function resolveSecretRef(rawSecretRef, defaultProject) {
   }
 
   return {
+    accessRef,
     normalizedRef,
     secretProject,
     secretName,
     secretVersion,
     sourceKind,
-    segmentCount: normalizedRef.split('/').filter(Boolean).length,
+    segmentCount: accessRef.split('/').filter(Boolean).length,
     positionalVersionRef: Boolean(versionRefMatch),
   };
 }
 
 function buildAccessCommandArgs(resolved) {
   if (resolved.positionalVersionRef) {
-    return ['secrets', 'versions', 'access', resolved.normalizedRef];
+    return ['secrets', 'versions', 'access', resolved.accessRef];
   }
 
   return [
@@ -94,6 +110,8 @@ if (require.main === module) {
 
 module.exports = {
   buildAccessCommandArgs,
+  extractSecretResource,
+  extractVersionResource,
   normalizeSecretRef,
   resolveSecretRef,
   resolveToken,

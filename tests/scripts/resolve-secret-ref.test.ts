@@ -54,6 +54,7 @@ describe('resolve-secret-ref', () => {
     );
 
     expect(resolved).toMatchObject({
+      accessRef: 'projects/demo-project/secrets/scheduler-token/versions/5',
       normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/5',
       secretProject: 'demo-project',
       secretName: 'scheduler-token',
@@ -85,5 +86,56 @@ describe('resolve-secret-ref', () => {
       segmentCount: 6,
       positionalVersionRef: true,
     });
+  });
+
+  it('extracts a version resource from a wrapped ref string', () => {
+    const resolved = resolveSecretRef(
+      'resource=projects/demo-project/secrets/scheduler-token/versions/latest',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      accessRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      normalizedRef: 'resource=projects/demo-project/secrets/scheduler-token/versions/latest',
+      secretProject: 'demo-project',
+      secretName: 'scheduler-token',
+      secretVersion: 'latest',
+      sourceKind: 'version-ref',
+      segmentCount: 6,
+      positionalVersionRef: true,
+    });
+    expect(buildAccessCommandArgs(resolved)).toEqual([
+      'secrets',
+      'versions',
+      'access',
+      'projects/demo-project/secrets/scheduler-token/versions/latest',
+    ]);
+  });
+
+  it('extracts a secret resource from a wrapped ref string', () => {
+    const resolved = resolveSecretRef(
+      'name=projects/demo-project/secrets/scheduler-token',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      accessRef: 'projects/demo-project/secrets/scheduler-token',
+      normalizedRef: 'name=projects/demo-project/secrets/scheduler-token',
+      secretProject: 'demo-project',
+      secretName: 'scheduler-token',
+      secretVersion: 'latest',
+      sourceKind: 'secret-ref',
+      segmentCount: 4,
+    });
+    expect(buildAccessCommandArgs(resolved)).toEqual([
+      'secrets',
+      'versions',
+      'access',
+      'latest',
+      '--secret',
+      'scheduler-token',
+      '--project',
+      'demo-project',
+    ]);
   });
 });
