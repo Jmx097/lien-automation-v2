@@ -6,18 +6,6 @@ set -euo pipefail
 : "${JOB_NAME:=lien-scraper-schedule-run}"
 : "${API_BASE_URL:?Set API_BASE_URL, e.g. https://your-service-url}"
 : "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
-: "${SCHEDULE_CA_SOS_TIMEZONE:=America/Denver}"
-: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Denver}"
-: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/Denver}"
-: "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
-: "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
-: "${CA_EVENING_JOB_NAME:=${JOB_NAME}-ca-sos-evening}"
-: "${MARICOPA_MORNING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-morning}"
-: "${MARICOPA_AFTERNOON_JOB_NAME:=${JOB_NAME}-maricopa-recorder-afternoon}"
-: "${MARICOPA_EVENING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-evening}"
-: "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
-: "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
-: "${NYC_EVENING_JOB_NAME:=${JOB_NAME}-nyc-acris-evening}"
 
 # Retry policy requirements.
 : "${RETRY_COUNT:=3}"
@@ -26,6 +14,7 @@ set -euo pipefail
 : "${MAX_BACKOFF:=300s}"
 
 RUN_URI="${API_BASE_URL%/}/schedule/run"
+JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
 
 create_or_update_job () {
   local name="$1"
@@ -64,17 +53,12 @@ create_or_update_job () {
   fi
 }
 
-# Weekday runs for each site. CA keeps a 3-hour lead so it finishes by 10:00 / 14:00 / 22:00 Mountain time.
-create_or_update_job "${CA_MORNING_JOB_NAME}" "0 7 * * 1-5" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-create_or_update_job "${CA_AFTERNOON_JOB_NAME}" "0 11 * * 1-5" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-create_or_update_job "${CA_EVENING_JOB_NAME}" "0 19 * * 1-5" '{"site":"ca_sos","slot":"evening"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-create_or_update_job "${MARICOPA_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"maricopa_recorder","slot":"morning"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-create_or_update_job "${MARICOPA_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"maricopa_recorder","slot":"afternoon"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-create_or_update_job "${MARICOPA_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"maricopa_recorder","slot":"evening"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-create_or_update_job "${NYC_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
-create_or_update_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
-create_or_update_job "${NYC_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"nyc_acris","slot":"evening"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+while IFS=$'\t' read -r name schedule time_zone body; do
+  create_or_update_job "${name}" "${schedule}" "${body}" "${time_zone}"
+done < <(
+  printf '%s' "${JOB_SPECS_JSON}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, JSON.stringify(spec.body)].join('\t') + '\n'); }"
+)
 
-echo "Scheduler jobs upserted for ${RUN_URI} (weekday Mountain schedule, finish-by 10:00/14:00/22:00; CA trigger lead 3 hours)."
+echo "Scheduler jobs upserted for ${RUN_URI} using derived job specs from scheduler environment."
 
 

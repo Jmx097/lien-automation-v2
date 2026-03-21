@@ -5,49 +5,29 @@ set -euo pipefail
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
-: "${SCHEDULE_CA_SOS_TIMEZONE:=America/Denver}"
-: "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE:=America/Denver}"
-: "${SCHEDULE_NYC_ACRIS_TIMEZONE:=America/Denver}"
-: "${CA_MORNING_JOB_NAME:=${JOB_NAME}-ca-sos-morning}"
-: "${CA_AFTERNOON_JOB_NAME:=${JOB_NAME}-ca-sos-afternoon}"
-: "${CA_EVENING_JOB_NAME:=${JOB_NAME}-ca-sos-evening}"
-: "${MARICOPA_MORNING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-morning}"
-: "${MARICOPA_AFTERNOON_JOB_NAME:=${JOB_NAME}-maricopa-recorder-afternoon}"
-: "${MARICOPA_EVENING_JOB_NAME:=${JOB_NAME}-maricopa-recorder-evening}"
-: "${NYC_MORNING_JOB_NAME:=${JOB_NAME}-nyc-acris-morning}"
-: "${NYC_AFTERNOON_JOB_NAME:=${JOB_NAME}-nyc-acris-afternoon}"
-: "${NYC_EVENING_JOB_NAME:=${JOB_NAME}-nyc-acris-evening}"
 
 RUN_URI="${API_BASE_URL%/}/schedule/run"
-EXPECTED_JOB_COUNT=9
-
-EXPECTED_JOBS=(
-  "${CA_MORNING_JOB_NAME}"
-  "${CA_AFTERNOON_JOB_NAME}"
-  "${CA_EVENING_JOB_NAME}"
-  "${MARICOPA_MORNING_JOB_NAME}"
-  "${MARICOPA_AFTERNOON_JOB_NAME}"
-  "${MARICOPA_EVENING_JOB_NAME}"
-  "${NYC_MORNING_JOB_NAME}"
-  "${NYC_AFTERNOON_JOB_NAME}"
-  "${NYC_EVENING_JOB_NAME}"
-)
+JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
 
 listed_jobs_json="$(gcloud scheduler jobs list --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
-actual_job_count="$(printf '%s' "${listed_jobs_json}" | node -e "const fs=require('fs'); const jobs=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write(String(Array.isArray(jobs) ? jobs.length : 0));")"
+managed_job_summary="$(
+  printf '%s' "${listed_jobs_json}" | node -e "const fs=require('fs'); const jobs=JSON.parse(fs.readFileSync(0,'utf8')); const specs=JSON.parse(process.argv[1]); const expectedNames=new Set((specs.specs ?? []).map((spec) => spec.jobName)); const prefix=`${specs.jobPrefix}-`; const names=(Array.isArray(jobs) ? jobs : []).map((job) => String(job.name ?? '').split('/').pop() ?? '').filter(Boolean); const missing=[...expectedNames].filter((name) => !names.includes(name)); const unexpected=names.filter((name) => name.startsWith(prefix) && !expectedNames.has(name)); process.stdout.write(JSON.stringify({ expectedCount: expectedNames.size, managedCount: names.filter((name) => name.startsWith(prefix)).length, missing, unexpected }));" "${JOB_SPECS_JSON}"
+)"
 
-if [[ "${actual_job_count}" != "${EXPECTED_JOB_COUNT}" ]]; then
-  echo "Expected ${EXPECTED_JOB_COUNT} scheduler jobs in ${GCP_REGION}, found ${actual_job_count}" >&2
-  printf '%s\n' "${listed_jobs_json}" >&2
+missing_jobs="$(printf '%s' "${managed_job_summary}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write((payload.missing ?? []).join('\n'))")"
+unexpected_jobs="$(printf '%s' "${managed_job_summary}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); process.stdout.write((payload.unexpected ?? []).join('\n'))")"
+
+if [[ -n "${missing_jobs}" ]]; then
+  echo "Missing expected scheduler jobs:" >&2
+  printf '%s\n' "${missing_jobs}" >&2
   exit 1
 fi
 
-for expected_job in "${EXPECTED_JOBS[@]}"; do
-  if ! printf '%s' "${listed_jobs_json}" | node -e "const fs=require('fs'); const expected=process.argv[1]; const jobs=JSON.parse(fs.readFileSync(0,'utf8')); const found=Array.isArray(jobs) && jobs.some((job) => String(job.name ?? '').endsWith('/' + expected)); process.exit(found ? 0 : 1);" "${expected_job}"; then
-    echo "Missing expected scheduler job: ${expected_job}" >&2
-    exit 1
-  fi
-done
+if [[ -n "${unexpected_jobs}" ]]; then
+  echo "Found unexpected managed scheduler jobs for prefix ${JOB_NAME}:" >&2
+  printf '%s\n' "${unexpected_jobs}" >&2
+  exit 1
+fi
 
 verify_job() {
   local name="$1"
@@ -74,14 +54,10 @@ verify_job() {
   [[ "${bodies_match}" == "true" ]] || { echo "${name}: expected body ${expected_body}, got ${actual_body}" >&2; exit 1; }
 }
 
-verify_job "${CA_MORNING_JOB_NAME}" "0 7 * * 1-5" '{"site":"ca_sos","slot":"morning"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-verify_job "${CA_AFTERNOON_JOB_NAME}" "0 11 * * 1-5" '{"site":"ca_sos","slot":"afternoon"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-verify_job "${CA_EVENING_JOB_NAME}" "0 19 * * 1-5" '{"site":"ca_sos","slot":"evening"}' "${SCHEDULE_CA_SOS_TIMEZONE}"
-verify_job "${MARICOPA_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"maricopa_recorder","slot":"morning"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-verify_job "${MARICOPA_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"maricopa_recorder","slot":"afternoon"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-verify_job "${MARICOPA_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"maricopa_recorder","slot":"evening"}' "${SCHEDULE_MARICOPA_RECORDER_TIMEZONE}"
-verify_job "${NYC_MORNING_JOB_NAME}" "0 10 * * 1-5" '{"site":"nyc_acris","slot":"morning"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
-verify_job "${NYC_AFTERNOON_JOB_NAME}" "0 14 * * 1-5" '{"site":"nyc_acris","slot":"afternoon"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
-verify_job "${NYC_EVENING_JOB_NAME}" "0 22 * * 1-5" '{"site":"nyc_acris","slot":"evening"}' "${SCHEDULE_NYC_ACRIS_TIMEZONE}"
+while IFS=$'\t' read -r name schedule time_zone body; do
+  verify_job "${name}" "${schedule}" "${body}" "${time_zone}"
+done < <(
+  printf '%s' "${JOB_SPECS_JSON}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, JSON.stringify(spec.body)].join('\t') + '\n'); }"
+)
 
 echo "Cloud Scheduler jobs verified for ${RUN_URI}"

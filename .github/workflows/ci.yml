@@ -25,3 +25,12 @@ jobs:
 
       - name: Type check
         run: npm run test:types
+
+      - name: Validate workflow YAML
+        run: npm run test:workflow-syntax
+
+      - name: Validate cloud shell scripts
+        run: npm run test:cloud-shell
+
+      - name: Test cloud helper scripts
+        run: npm run test:cloud
