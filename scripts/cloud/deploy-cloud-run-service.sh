@@ -184,10 +184,6 @@ if [[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]]; then
   DEPLOY_ARGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE_CONNECTION_NAME}")
 fi
 
-if [[ "${#REMOVE_ENV_VARS[@]}" -gt 0 ]]; then
-  DEPLOY_ARGS+=(--remove-env-vars="$(IFS=,; echo "${REMOVE_ENV_VARS[*]}")")
-fi
-
 if [[ "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
   DEPLOY_ARGS+=(--remove-secrets="$(IFS=,; echo "${REMOVE_SECRETS[*]}")")
 fi
