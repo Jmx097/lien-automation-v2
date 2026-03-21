@@ -184,10 +184,6 @@ if [[ -n "${CLOUDSQL_INSTANCE_CONNECTION_NAME}" ]]; then
   DEPLOY_ARGS+=(--add-cloudsql-instances="${CLOUDSQL_INSTANCE_CONNECTION_NAME}")
 fi
 
-if [[ "${#REMOVE_SECRETS[@]}" -gt 0 ]]; then
-  DEPLOY_ARGS+=(--remove-secrets="$(IFS=,; echo "${REMOVE_SECRETS[*]}")")
-fi
-
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "Dry run: Cloud Run deploy arguments validated for ${SERVICE_NAME}"
   printf '%s\n' \
