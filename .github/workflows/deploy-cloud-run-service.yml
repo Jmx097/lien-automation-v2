@@ -123,14 +123,23 @@ jobs:
           SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --format='value(status.url)')"
           echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Reconcile Cloud Scheduler jobs
+      - name: Validate scheduler token secret ref
         env:
-          API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+          SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
+        run: node scripts/cloud/resolve-secret-ref.js --validate-only
+
+      - name: Resolve scheduler token
+        env:
           SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
         run: |
           SCHEDULE_RUN_TOKEN="$(node scripts/cloud/resolve-secret-ref.js)"
-          export SCHEDULE_RUN_TOKEN
+          echo "::add-mask::${SCHEDULE_RUN_TOKEN}"
+          echo "SCHEDULE_RUN_TOKEN=${SCHEDULE_RUN_TOKEN}" >> "$GITHUB_ENV"
 
+      - name: Reconcile Cloud Scheduler jobs
+        env:
+          API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+        run: |
           bash scripts/cloud/create-scheduler-jobs.sh
 
       - name: Verify Cloud Scheduler jobs

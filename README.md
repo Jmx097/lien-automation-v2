@@ -551,6 +551,12 @@ bash scripts/cloud/verify-cloud-scheduler-jobs.sh
 
 - Local development still uses plain env vars directly; Secret Manager is only part of the hosted Cloud Run deploy path.
 - `scripts/cloud/deploy-cloud-run-service.sh` now expects Secret Manager refs for `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL`, and injects them with `--set-secrets`.
+- For GitHub Actions `*_SECRET_REF` values, prefer storing the bare Secret Manager secret name such as `scheduler-run-token`. Canonical supported formats are:
+  - bare secret name: `scheduler-run-token`
+  - secret resource: `projects/<project>/secrets/<name>`
+  - version resource: `projects/<project>/secrets/<name>/versions/<version>`
+- Avoid storing encoded or wrapped variants (for example escaped slashes, percent-encoded paths, or JSON blobs) in GitHub secrets. The deploy workflow now validates `SCHEDULE_RUN_TOKEN_SECRET_REF` before scheduler reconciliation and fails fast on malformed resource-like values.
+- Recommended default: keep `SCHEDULE_RUN_TOKEN_SECRET_REF` as the bare secret name in GitHub Actions unless the secret truly lives in a different GCP project.
 - `scripts/cloud/sync-cloud-run-secrets-to-secret-manager.ps1` can bootstrap those runtime secrets from the currently deployed Cloud Run service without printing their values.
 - Use `DRY_RUN=1 bash scripts/cloud/deploy-cloud-run-service.sh` to validate the deploy argument shape without printing secret values.
 

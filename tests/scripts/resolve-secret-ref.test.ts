@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 
+const scriptPath = path.resolve(__dirname, '../../scripts/cloud/resolve-secret-ref.js');
 const {
   buildAccessCommandArgs,
   normalizeSecretRef,
   resolveSecretRef,
+  validateSecretRef,
 } = require('../../scripts/cloud/resolve-secret-ref.js');
 
 describe('resolve-secret-ref', () => {
@@ -88,54 +92,110 @@ describe('resolve-secret-ref', () => {
     });
   });
 
-  it('extracts a version resource from a wrapped ref string', () => {
+  it('normalizes escaped slash refs', () => {
     const resolved = resolveSecretRef(
-      'resource=projects/demo-project/secrets/scheduler-token/versions/latest',
+      'projects\\/demo-project\\/secrets\\/scheduler-token\\/versions\\/latest',
       'ignored-project'
     );
 
     expect(resolved).toMatchObject({
-      accessRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
-      normalizedRef: 'resource=projects/demo-project/secrets/scheduler-token/versions/latest',
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
       secretProject: 'demo-project',
       secretName: 'scheduler-token',
       secretVersion: 'latest',
-      sourceKind: 'version-ref',
-      segmentCount: 6,
-      positionalVersionRef: true,
     });
-    expect(buildAccessCommandArgs(resolved)).toEqual([
-      'secrets',
-      'versions',
-      'access',
-      'projects/demo-project/secrets/scheduler-token/versions/latest',
-    ]);
   });
 
-  it('extracts a secret resource from a wrapped ref string', () => {
+  it('normalizes percent-encoded slash refs', () => {
     const resolved = resolveSecretRef(
-      'name=projects/demo-project/secrets/scheduler-token',
+      'projects%2Fdemo-project%2Fsecrets%2Fscheduler-token%2Fversions%2Flatest',
       'ignored-project'
     );
 
     expect(resolved).toMatchObject({
-      accessRef: 'projects/demo-project/secrets/scheduler-token',
-      normalizedRef: 'name=projects/demo-project/secrets/scheduler-token',
-      secretProject: 'demo-project',
-      secretName: 'scheduler-token',
-      secretVersion: 'latest',
-      sourceKind: 'secret-ref',
-      segmentCount: 4,
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
     });
-    expect(buildAccessCommandArgs(resolved)).toEqual([
-      'secrets',
-      'versions',
-      'access',
-      'latest',
-      '--secret',
-      'scheduler-token',
-      '--project',
-      'demo-project',
-    ]);
+  });
+
+  it('extracts refs from JSON-wrapped strings', () => {
+    const resolved = resolveSecretRef(
+      '{"secretRef":"projects/demo-project/secrets/scheduler-token/versions/latest"}',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
+      secretProject: 'demo-project',
+    });
+  });
+
+  it('fails malformed resource-like refs instead of falling back to bare-secret', () => {
+    expect(() =>
+      resolveSecretRef('resource=projects_demo_project_secrets_scheduler-token_versions_latest', 'project-123')
+    ).toThrow(/Malformed secret ref/);
+  });
+
+  it('fails malformed project resource refs with safe diagnostics', () => {
+    expect(() =>
+      resolveSecretRef('projects/demo-project/secrets/scheduler-token/versions', 'project-123')
+    ).toThrow(/accepted_formats/);
+  });
+
+  it('returns validation metadata without exposing the secret ref', () => {
+    expect(validateSecretRef('scheduler-token', 'project-123')).toEqual({
+      source_kind: 'bare-secret',
+      normalized_ref_segments: 1,
+      positional_version_ref: false,
+      uses_default_project: true,
+      accepted_formats: [
+        '<secret-name>',
+        'projects/<project>/secrets/<name>',
+        'projects/<project>/secrets/<name>/versions/<version>',
+      ],
+    });
+  });
+
+  it('supports validate-only mode for valid refs', () => {
+    const output = execFileSync(
+      'node',
+      [scriptPath, '--validate-only'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          SCHEDULE_RUN_TOKEN_SECRET_REF: 'scheduler-token',
+          GCP_PROJECT_ID: 'project-123',
+        },
+      }
+    ).trim();
+
+    expect(JSON.parse(output)).toEqual({
+      source_kind: 'bare-secret',
+      normalized_ref_segments: 1,
+      positional_version_ref: false,
+      uses_default_project: true,
+      accepted_formats: [
+        '<secret-name>',
+        'projects/<project>/secrets/<name>',
+        'projects/<project>/secrets/<name>/versions/<version>',
+      ],
+    });
+    expect(output).not.toContain('scheduler-token');
+  });
+
+  it('fails validate-only mode for malformed refs', () => {
+    expect(() =>
+      execFileSync('node', [scriptPath, '--validate-only'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          SCHEDULE_RUN_TOKEN_SECRET_REF: 'projects/demo-project/secrets/scheduler-token/versions',
+          GCP_PROJECT_ID: 'project-123',
+        },
+      })
+    ).toThrow(/Malformed secret ref/);
   });
 });
