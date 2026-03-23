@@ -74,7 +74,6 @@ This diagnosis evaluates whether the current scheduler implementation can sustai
 
 - If the question is “can the current workspace support 3x/day pulls?” -> **Yes, structurally yes for all three sites**.
 - If the question is “is 95% end-to-end accuracy guaranteed today?” -> **Not explicitly guaranteed**; only parts are encoded (notably 95% amount coverage), and true SLA-level enforcement still needs a unified accuracy contract.
-
 ## Repeatable re-analysis command
 
 Use the new CLI analyzer to compute a fresh per-site score from persisted scheduler history:
