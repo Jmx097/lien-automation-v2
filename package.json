@@ -37,8 +37,7 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",
     "start:job": "node dist/src/job-entrypoint.js",
-    "dev:job": "ts-node src/job-entrypoint.ts",
-    "analyze:tri-site-strength": "ts-node scripts/analyze-tri-site-strength.ts"
+    "dev:job": "ts-node src/job-entrypoint.ts"
   },
   "keywords": [],
   "author": "",

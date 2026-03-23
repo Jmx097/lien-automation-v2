@@ -80,7 +80,7 @@ This diagnosis evaluates whether the current scheduler implementation can sustai
 Use the new CLI analyzer to compute a fresh per-site score from persisted scheduler history:
 
 ```bash
-npm run analyze:tri-site-strength
+npx ts-node scripts/analyze-tri-site-strength.ts
 ```
 
 Optional tuning:
