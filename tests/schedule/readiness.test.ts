@@ -161,7 +161,10 @@ describe('schedule readiness with scheduler store backends', () => {
     }));
     expect(report.maricopa).toEqual(expect.objectContaining({
       artifact_retrieval_enabled: false,
+      enrichment_mode: 'api_only',
+      production_ready_for_enriched_runs: false,
       refresh_required: false,
+      production_detail: expect.stringContaining('api_only mode'),
     }));
   });
 
@@ -210,8 +213,11 @@ describe('schedule readiness with scheduler store backends', () => {
     );
     expect(report.maricopa).toEqual(expect.objectContaining({
       artifact_retrieval_enabled: true,
+      enrichment_mode: 'artifact_enriched',
+      production_ready_for_enriched_runs: false,
       refresh_required: true,
       refresh_reason: 'session_missing_or_stale',
+      production_detail: expect.stringContaining('not production-ready'),
     }));
   });
 });

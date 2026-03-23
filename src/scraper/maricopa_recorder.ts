@@ -750,6 +750,7 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Sc
   const dateStartIso = toMaricopaIsoDate(options.date_start);
   const dateEndIso = toMaricopaIsoDate(options.date_end);
   const latestSearchableIso = await fetchLatestMaricopaSearchableDate();
+  const persistedState = await getMaricopaPersistedStateReadiness();
   const resolvedRange = clampMaricopaDateRange(dateStartIso, dateEndIso, latestSearchableIso);
   const maxRecords = Math.max(
     1,
@@ -766,6 +767,8 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Sc
     latest_searchable_date: latestSearchableIso,
     max_records: maxRecords,
     artifact_retrieval_enabled: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED,
+    enrichment_mode: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED ? 'artifact_enriched' : 'api_only',
+    artifact_readiness_not_met: persistedState.refreshRequired,
   });
 
   if (resolvedRange.clamped) {
@@ -844,6 +847,9 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Sc
     truncation_detected: collected.truncationDetected,
     truncation_reason: collected.truncationReason,
     latest_searchable_date: latestSearchableIso,
+    artifact_fetch_coverage_pct: records.length > 0 ? (enrichedRecords / records.length) * 100 : 0,
+    enrichment_mode: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED ? 'artifact_enriched' : 'api_only',
+    artifact_readiness_not_met: persistedState.refreshRequired,
   });
 
   return attachScrapeQualitySummary(records, {
@@ -863,5 +869,8 @@ export async function scrapeMaricopaRecorder(options: ScrapeOptions): Promise<Sc
     enriched_records: enrichedRecords,
     partial_records: incompleteRecords,
     artifact_retrieval_enabled: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED,
+    artifact_fetch_coverage_pct: records.length > 0 ? (enrichedRecords / records.length) * 100 : 0,
+    enrichment_mode: MARICOPA_ARTIFACT_RETRIEVAL_ENABLED ? 'artifact_enriched' : 'api_only',
+    artifact_readiness_not_met: persistedState.refreshRequired,
   });
 }

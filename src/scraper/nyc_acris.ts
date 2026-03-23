@@ -2127,6 +2127,42 @@ async function extractViewerArtifactInSession(page: Page, state: SearchState, do
   return artifact;
 }
 
+function shouldRebuildNYCAcrisSessionForError(error: unknown): boolean {
+  const failureClass = classifyNYCAcrisFailure(sanitizeErrorMessage(error));
+  return (
+    failureClass === 'viewer_roundtrip' ||
+    failureClass === 'transport_or_bootstrap' ||
+    failureClass === 'token_or_session_state'
+  );
+}
+
+async function rebuildSessionAndRetryViewerArtifact(options: {
+  handle: Awaited<ReturnType<typeof createAcrisContext>> | null;
+  page: Page | null;
+  state: SearchState;
+  docId: string;
+  manifest: RunManifest;
+}): Promise<{ handle: Awaited<ReturnType<typeof createAcrisContext>>; page: Page; artifact: ViewerArtifact }> {
+  options.manifest.warnings.push(`viewer_session_rebuild_retry doc_id=${options.docId} page=${options.state.pageNum}`);
+  await options.page?.close().catch(() => {});
+  await options.handle?.close().catch(() => {});
+  const bootstrap = await bootstrapSearchSession(options.state, options.manifest);
+  try {
+    await loadResultPage(bootstrap.page, options.state.pageNum || 1, options.state, options.manifest);
+    const artifact = await extractViewerArtifactInSession(bootstrap.page, options.state, options.docId, options.manifest);
+
+    return {
+      handle: bootstrap.handle,
+      page: bootstrap.page,
+      artifact,
+    };
+  } catch (error) {
+    await bootstrap.page.close().catch(() => {});
+    await bootstrap.handle.close().catch(() => {});
+    throw error;
+  }
+}
+
 async function hardenContext(context: BrowserContext, manifest: RunManifest): Promise<void> {
   context.on('request', (request) => {
     const url = request.url();
@@ -2859,7 +2895,24 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
         checkpoint,
         pageNum: state.pageNum,
         stopRequested: options.stop_requested,
-        extractArtifact: (row) => extractViewerArtifactInSession(page!, state, row.docId, manifest),
+        extractArtifact: async (row) => {
+          try {
+            return await extractViewerArtifactInSession(page!, state, row.docId, manifest);
+          } catch (error) {
+            if (!shouldRebuildNYCAcrisSessionForError(error)) throw error;
+
+            const rebuilt = await rebuildSessionAndRetryViewerArtifact({
+              handle,
+              page,
+              state,
+              docId: row.docId,
+              manifest,
+            });
+            handle = rebuilt.handle;
+            page = rebuilt.page;
+            return rebuilt.artifact;
+          }
+        },
         saveCheckpoint: async (nextCheckpoint) => {
           manifest.checkpoint = {
             pageNum: nextCheckpoint.pageNum,
@@ -2946,6 +2999,26 @@ export async function scrapeNYCAcris(options: ScrapeOptions): Promise<ScrapeResu
       manifest.failureClass = classifyNYCAcrisFailure(message);
       manifest.failures.push(message);
       manifest.sessionDurationMs = Date.now() - startedAtMs;
+      (err as Record<string, unknown>).debugArtifact = {
+        transportMode: manifest.transportMode,
+        failureClass: manifest.failureClass,
+        requestedDateStart: manifest.requestedDateStart,
+        requestedDateEnd: manifest.requestedDateEnd,
+        discoveredCount: manifest.discoveredCount,
+        returnedCount: manifest.returnedCount,
+        filteredOutCount: manifest.filteredOutCount,
+        upstreamMinFilingDate: manifest.upstreamMinFilingDate,
+        upstreamMaxFilingDate: manifest.upstreamMaxFilingDate,
+        resultPagesVisited: manifest.resultPagesVisited,
+        attemptedDocs: manifest.attemptedDocs,
+        completedDocs: manifest.completedDocs,
+        warnings: unique(manifest.warnings),
+        failures: unique(manifest.failures),
+        bootstrapTrace: manifest.bootstrapTrace,
+        bootstrapLifecycle: manifest.bootstrapLifecycle,
+        navigationDiagnostics: manifest.navigationDiagnostics?.slice(-5),
+        transportDiagnostics: manifest.transportDiagnostics,
+      };
       await writeManifest(manifest, `run-failed-${Date.now()}.json`).catch(() => null);
       throw err;
     } finally {

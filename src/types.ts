@@ -41,6 +41,10 @@ export interface ScrapeRunQualitySummary {
   upstream_min_filing_date?: string;
   upstream_max_filing_date?: string;
   artifact_retrieval_enabled?: boolean;
+  artifact_fetch_coverage_pct?: number;
+  enrichment_mode?: 'api_only' | 'artifact_enriched';
+  artifact_readiness_not_met?: boolean;
+  debug_artifact?: unknown;
 }
 
 export type ScrapeResult = LienRecord[] & {

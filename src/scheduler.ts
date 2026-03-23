@@ -151,6 +151,9 @@ export interface RunConfidenceSummary {
     current_run_conflict_row_count: number;
     retained_prior_review_row_count: number;
     filtered_out_count: number;
+    artifact_fetch_coverage_pct: number;
+    artifact_readiness_not_met: number;
+    enrichment_mode: string;
     enriched_record_count: number;
     partial_record_count: number;
     new_master_row_count: number;
@@ -390,6 +393,9 @@ function computeQualityMetrics(
   const discoveredCount = qualitySummary?.discovered_count ?? effectiveMaxRecords;
   const returnedCount = qualitySummary?.returned_count ?? records.length;
   const rowFailPct = discoveredCount > 0 ? ((discoveredCount - returnedCount) / discoveredCount) * 100 : 0;
+  const artifactFetchCoveragePct = records.length > 0
+    ? ((qualitySummary?.enriched_records ?? 0) / records.length) * 100
+    : 0;
 
   return {
     amountFound,
@@ -411,6 +417,10 @@ function computeQualityMetrics(
     upstreamMinFilingDate: qualitySummary?.upstream_min_filing_date,
     upstreamMaxFilingDate: qualitySummary?.upstream_max_filing_date,
     artifactRetrievalEnabled: qualitySummary?.artifact_retrieval_enabled === true ? 1 : 0,
+    artifactFetchCoveragePct,
+    enrichmentMode: qualitySummary?.enrichment_mode ?? 'artifact_enriched',
+    artifactReadinessNotMet: qualitySummary?.artifact_readiness_not_met === true ? 1 : 0,
+    debugArtifact: qualitySummary?.debug_artifact,
     enrichedRecordCount: qualitySummary?.enriched_records ?? 0,
     partialRecordCount: qualitySummary?.partial_records ?? 0,
   };
@@ -425,8 +435,91 @@ function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function parseJsonObject(value?: string): Record<string, number> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, entry]) => [key, typeof entry === 'number' ? entry : Number(entry ?? 0)])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function normalizeReviewReasonCounts(value?: string): Record<string, number> {
+  const counts = parseJsonObject(value);
+  return {
+    low_confidence: counts.low_confidence ?? 0,
+    conflict_ambiguous: counts.conflict_ambiguous ?? 0,
+    duplicate_or_existing:
+      (counts.duplicate_or_existing ?? 0) +
+      (counts.duplicate_against_current_run ?? 0) +
+      (counts.duplicate_against_retained_review ?? 0),
+    partial_run: counts.partial_run ?? 0,
+  };
+}
+
+function normalizeReviewReasonCountsFromObject(value?: Record<string, unknown>): Record<string, number> {
+  return normalizeReviewReasonCounts(value ? JSON.stringify(value) : undefined);
+}
+
+function parseDebugArtifact(value?: string): unknown {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function shouldPersistFailureDebugArtifact(site: SupportedSite, failureClass?: string): boolean {
+  return site === 'nyc_acris' && Boolean(
+    failureClass &&
+    ['range_result_integrity', 'transport_or_bootstrap', 'viewer_roundtrip'].includes(failureClass)
+  );
+}
+
+function buildNYCScheduledFailureDebugArtifact(run: ScheduledRunRecord, err: unknown): Record<string, unknown> | undefined {
+  if (!shouldPersistFailureDebugArtifact(run.site, run.failure_class)) return undefined;
+
+  const context = err as {
+    requestedStart?: string;
+    requestedEnd?: string;
+    upstreamMin?: string;
+    upstreamMax?: string;
+    returnedRowCount?: number;
+    debugArtifact?: unknown;
+  };
+  const existing = context.debugArtifact;
+  if (existing && typeof existing === 'object') {
+    return {
+      ...(existing as Record<string, unknown>),
+      failure_class: run.failure_class,
+      requested_date_start: run.requested_date_start,
+      requested_date_end: run.requested_date_end,
+      upstream_min_filing_date: run.upstream_min_filing_date,
+      upstream_max_filing_date: run.upstream_max_filing_date,
+      filtered_out_count: run.filtered_out_count,
+      partial_reason: run.partial_reason,
+    };
+  }
+
+  return {
+    failure_class: run.failure_class,
+    requested_date_start: context.requestedStart ?? run.requested_date_start,
+    requested_date_end: context.requestedEnd ?? run.requested_date_end,
+    upstream_min_filing_date: context.upstreamMin ?? run.upstream_min_filing_date,
+    upstream_max_filing_date: context.upstreamMax ?? run.upstream_max_filing_date,
+    filtered_out_count: context.returnedRowCount ?? run.filtered_out_count,
+    partial_reason: run.partial_reason,
+    error: String((err as any)?.message ?? err ?? ''),
+  };
+}
+
 function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   const reasons: string[] = [];
+  const normalizedReviewReasons = normalizeReviewReasonCounts(run.review_reason_counts_json);
   const sourcePublishConfirmed = Boolean(
     run.records_scraped === 0 ||
     (
@@ -455,12 +548,32 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   if ((run.anomaly_detected ?? 0) > 0) reasons.push('quality_anomaly_detected');
   if (!uploadedRowsMatchScrapedRows) reasons.push('row_upload_mismatch');
   if (run.records_scraped > 0 && !masterSyncConfirmed) reasons.push('master_tab_missing');
+  if (run.failure_class === 'range_result_integrity') reasons.push('range_result_integrity');
   if (run.records_scraped > 0 && run.amount_coverage_pct < getAmountMinCoveragePct()) reasons.push('amount_coverage_below_target');
   if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
-  if ((run.current_run_quarantined_row_count ?? 0) > run.records_scraped && run.records_scraped > 0) reasons.push('quarantine_exceeds_scraped_rows');
-  if ((run.current_run_conflict_row_count ?? 0) > 0) reasons.push('review_conflicts_present');
+  if (((run.current_run_quarantined_row_count ?? 0) + (run.current_run_conflict_row_count ?? 0)) > run.records_scraped && run.records_scraped > 0) {
+    reasons.push('quarantine_exceeds_scraped_rows');
+  }
+  if ((run.current_run_conflict_row_count ?? 0) > 0 || normalizedReviewReasons.conflict_ambiguous > 0) {
+    reasons.push('conflict_ambiguous');
+  }
+  if (normalizedReviewReasons.duplicate_or_existing > 0) reasons.push('duplicate_or_existing');
+  if (normalizedReviewReasons.low_confidence > 0 && (run.current_run_quarantined_row_count ?? 0) > 0) {
+    reasons.push('low_confidence_extraction_review');
+  }
   if (run.site === 'maricopa_recorder' && (run.artifact_retrieval_enabled ?? 0) === 0 && run.records_scraped > 0) {
     reasons.push('artifact_retrieval_disabled');
+  }
+  if (run.site === 'maricopa_recorder' && (run.artifact_readiness_not_met ?? 0) === 1) {
+    reasons.push('artifact_readiness_not_met');
+  }
+  if (
+    run.site === 'maricopa_recorder' &&
+    run.records_scraped > 0 &&
+    (run.artifact_retrieval_enabled ?? 0) === 1 &&
+    (run.artifact_fetch_coverage_pct ?? 0) < Number(process.env.MARICOPA_ARTIFACT_FETCH_COVERAGE_TARGET_PCT ?? '80')
+  ) {
+    reasons.push('artifact_fetch_coverage_below_target');
   }
 
   let status: RunConfidenceSummary['status'] = 'high';
@@ -472,10 +585,14 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
       'master_tab_missing',
       'retry_budget_exhausted',
       'master_publish_fallback_active',
+      'range_result_integrity',
     ].includes(reason))
   ) {
     status = 'low';
   } else if (reasons.length > 0) {
+    status = 'medium';
+  }
+  if (run.site === 'maricopa_recorder' && (run.artifact_retrieval_enabled ?? 0) === 0 && status === 'high') {
     status = 'medium';
   }
 
@@ -503,6 +620,9 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
       current_run_conflict_row_count: run.current_run_conflict_row_count ?? 0,
       retained_prior_review_row_count: run.retained_prior_review_row_count ?? 0,
       filtered_out_count: run.filtered_out_count ?? 0,
+      artifact_fetch_coverage_pct: run.artifact_fetch_coverage_pct ?? 0,
+      artifact_readiness_not_met: run.artifact_readiness_not_met ?? 0,
+      enrichment_mode: run.enrichment_mode ?? '',
       enriched_record_count: run.enriched_record_count ?? 0,
       partial_record_count: run.partial_record_count ?? 0,
       new_master_row_count: run.new_master_row_count ?? 0,
@@ -851,6 +971,7 @@ function applyFailureDiagnostics(run: ScheduledRunRecord, err: unknown): void {
     run.discovered_count = errorWithContext.returnedRowCount;
     run.returned_count = 0;
   }
+  run.partial_reason = run.partial_reason ?? 'rows_filtered_outside_requested_range';
 }
 
 function buildNYCDebugErrorArtifact(artifact: Awaited<ReturnType<typeof debugNYCAcrisBootstrap>>): string {
@@ -1109,6 +1230,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     upstream_max_filing_date: undefined,
     partial_reason: undefined,
     artifact_retrieval_enabled: 0,
+    artifact_fetch_coverage_pct: 0,
+    enrichment_mode: undefined,
+    artifact_readiness_not_met: 0,
     enriched_record_count: 0,
     partial_record_count: 0,
     new_master_row_count: 0,
@@ -1117,6 +1241,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     lead_alert_delivered: 0,
     master_fallback_used: 0,
     anomaly_detected: 0,
+    debug_artifact_json: undefined,
     finished_at: undefined,
   };
 
@@ -1369,8 +1494,13 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.current_run_quarantined_row_count = quality.quarantinedCount + (masterSync?.current_run_quarantined_row_count ?? 0);
         run.current_run_conflict_row_count = masterSync?.current_run_conflict_row_count ?? 0;
         run.retained_prior_review_row_count = masterSync?.retained_prior_review_row_count ?? 0;
-        run.review_reason_counts_json = JSON.stringify(masterSync?.review_summary?.review_reason_counts ?? {});
+        run.review_reason_counts_json = JSON.stringify(
+          normalizeReviewReasonCountsFromObject(masterSync?.review_summary?.review_reason_counts as Record<string, unknown> | undefined)
+        );
         run.artifact_retrieval_enabled = quality.artifactRetrievalEnabled;
+        run.artifact_fetch_coverage_pct = quality.artifactFetchCoveragePct;
+        run.enrichment_mode = quality.enrichmentMode;
+        run.artifact_readiness_not_met = quality.artifactReadinessNotMet;
         run.enriched_record_count = quality.enrichedRecordCount;
         run.partial_record_count = quality.partialRecordCount;
         run.new_master_row_count = masterSync?.new_master_row_count ?? 0;
@@ -1379,6 +1509,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.lead_alert_delivered = leadAlertResult.delivered ? 1 : 0;
         run.master_fallback_used = masterSync?.fallback_used ? 1 : 0;
         run.anomaly_detected = 0;
+        run.debug_artifact_json = undefined;
 
         const anomaly = await evaluateQualityAnomaly(site, run);
         run.anomaly_detected = anomaly ? 1 : 0;
@@ -1478,6 +1609,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           current_run_conflict_row_count: run.current_run_conflict_row_count,
           retained_prior_review_row_count: run.retained_prior_review_row_count,
           artifact_retrieval_enabled: run.artifact_retrieval_enabled,
+          artifact_fetch_coverage_pct: run.artifact_fetch_coverage_pct,
+          enrichment_mode: run.enrichment_mode,
+          artifact_readiness_not_met: run.artifact_readiness_not_met,
           enriched_record_count: run.enriched_record_count,
           partial_record_count: run.partial_record_count,
           retried: run.retried,
@@ -1499,6 +1633,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.error = errorMessage;
         run.failure_class = failureClass;
         applyFailureDiagnostics(run, err);
+        const failureDebugArtifact = buildNYCScheduledFailureDebugArtifact(run, err);
+        run.debug_artifact_json = failureDebugArtifact ? JSON.stringify(failureDebugArtifact) : undefined;
         previousFailureClass = failureClass;
 
         await applyConnectivityFailure(site, failureClass, errorMessage);
@@ -1557,6 +1693,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     run.failure_class = failureClass;
     run.finished_at = new Date().toISOString();
     run.retry_exhausted = 1;
+    const failureDebugArtifact = buildNYCScheduledFailureDebugArtifact(run, err);
+    run.debug_artifact_json = failureDebugArtifact ? JSON.stringify(failureDebugArtifact) : undefined;
     await getStore().updateRun(run);
     await applyConnectivityFailure(site, failureClass, run.error);
     log({ stage: 'scheduled_run_error', site, run_id: runId, idempotency_key: idempotencyKey, error: run.error });
@@ -1569,6 +1707,7 @@ export async function getRunHistory(limit = 50): Promise<ScheduledRun[]> {
   const runs = await getStore().getRunHistory(limit);
   return runs.map((run) => ({
     ...run,
+    debug_artifact: parseDebugArtifact(run.debug_artifact_json),
     confidence: buildRunConfidence(run),
   }));
 }

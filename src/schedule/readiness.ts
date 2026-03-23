@@ -30,6 +30,8 @@ export interface ScheduleReadinessReport {
   }>;
   maricopa: {
     artifact_retrieval_enabled: boolean;
+    enrichment_mode: 'api_only' | 'artifact_enriched';
+    production_ready_for_enriched_runs: boolean;
     session_present: boolean;
     session_fresh: boolean;
     session_captured_at?: string;
@@ -38,6 +40,7 @@ export interface ScheduleReadinessReport {
     refresh_required: boolean;
     refresh_reason?: string;
     detail: string;
+    production_detail: string;
     last_success_at?: string;
     next_allowed_run_at?: string;
     last_failure_reason?: string;
@@ -263,6 +266,8 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
     site_connectivity,
     maricopa: {
       artifact_retrieval_enabled: maricopaPersistedState.artifactRetrievalEnabled,
+      enrichment_mode: maricopaPersistedState.artifactRetrievalEnabled ? 'artifact_enriched' : 'api_only',
+      production_ready_for_enriched_runs: maricopaPersistedState.artifactRetrievalEnabled && !maricopaPersistedState.refreshRequired,
       session_present: maricopaPersistedState.sessionPresent,
       session_fresh: maricopaPersistedState.sessionFresh,
       session_captured_at: maricopaPersistedState.sessionCapturedAt,
@@ -271,6 +276,13 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       refresh_required: maricopaPersistedState.refreshRequired,
       refresh_reason: maricopaPersistedState.refreshReason,
       detail: maricopaPersistedState.detail,
+      production_detail: maricopaPersistedState.artifactRetrievalEnabled
+        ? (
+          maricopaPersistedState.refreshRequired
+            ? `Artifact enrichment is configured but not production-ready: ${maricopaPersistedState.detail}`
+            : 'Artifact enrichment is configured and production-ready for scheduled runs.'
+        )
+        : 'Artifact enrichment is disabled; Maricopa can run in api_only mode but is not production-ready for high-confidence enriched output.',
       last_success_at: maricopaConnectivity.last_success_at,
       next_allowed_run_at: maricopaConnectivity.next_allowed_run_at,
       last_failure_reason: maricopaConnectivity.last_failure_reason,

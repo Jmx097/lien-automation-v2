@@ -49,6 +49,9 @@ export interface ScheduledRunRecord {
   upstream_max_filing_date?: string;
   partial_reason?: string;
   artifact_retrieval_enabled?: number;
+  artifact_fetch_coverage_pct?: number;
+  enrichment_mode?: string;
+  artifact_readiness_not_met?: number;
   enriched_record_count?: number;
   partial_record_count?: number;
   new_master_row_count?: number;
@@ -57,6 +60,7 @@ export interface ScheduledRunRecord {
   lead_alert_delivered?: number;
   master_fallback_used?: number;
   anomaly_detected?: number;
+  debug_artifact_json?: string;
 }
 
 export type SchedulerAlertType = 'missed_run' | 'quality_anomaly';
@@ -189,6 +193,9 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     upstream_max_filing_date: row.upstream_max_filing_date == null ? undefined : String(row.upstream_max_filing_date),
     partial_reason: row.partial_reason == null ? undefined : String(row.partial_reason),
     artifact_retrieval_enabled: toNumber(row.artifact_retrieval_enabled || 0),
+    artifact_fetch_coverage_pct: toNumber(row.artifact_fetch_coverage_pct || 0),
+    enrichment_mode: row.enrichment_mode == null ? undefined : String(row.enrichment_mode),
+    artifact_readiness_not_met: toNumber(row.artifact_readiness_not_met || 0),
     enriched_record_count: toNumber(row.enriched_record_count || 0),
     partial_record_count: toNumber(row.partial_record_count || 0),
     new_master_row_count: toNumber(row.new_master_row_count || 0),
@@ -197,6 +204,7 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     lead_alert_delivered: toNumber(row.lead_alert_delivered || 0),
     master_fallback_used: toNumber(row.master_fallback_used || 0),
     anomaly_detected: toNumber(row.anomaly_detected || 0),
+    debug_artifact_json: row.debug_artifact_json == null ? undefined : String(row.debug_artifact_json),
   };
 }
 
@@ -336,6 +344,9 @@ function createCommonSchemaSql(): string[] {
         upstream_max_filing_date TEXT,
         partial_reason TEXT,
         artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+        artifact_fetch_coverage_pct REAL NOT NULL DEFAULT 0,
+        enrichment_mode TEXT,
+        artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0,
         enriched_record_count INTEGER NOT NULL DEFAULT 0,
         partial_record_count INTEGER NOT NULL DEFAULT 0,
         new_master_row_count INTEGER NOT NULL DEFAULT 0,
@@ -344,6 +355,7 @@ function createCommonSchemaSql(): string[] {
         lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
         master_fallback_used INTEGER NOT NULL DEFAULT 0,
         anomaly_detected INTEGER NOT NULL DEFAULT 0,
+        debug_artifact_json TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -633,6 +645,15 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'artifact_retrieval_enabled')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'artifact_fetch_coverage_pct')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN artifact_fetch_coverage_pct REAL NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'enrichment_mode')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN enrichment_mode TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'artifact_readiness_not_met')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0").run();
+    }
     if (!scheduledRunColumns.some((column) => column.name === 'enriched_record_count')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN enriched_record_count INTEGER NOT NULL DEFAULT 0").run();
     }
@@ -656,6 +677,9 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     }
     if (!scheduledRunColumns.some((column) => column.name === 'anomaly_detected')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN anomaly_detected INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'debug_artifact_json')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN debug_artifact_json TEXT").run();
     }
   }
 
@@ -705,6 +729,9 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
       ['partial_reason', run.partial_reason ?? null],
       ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['artifact_fetch_coverage_pct', run.artifact_fetch_coverage_pct ?? 0],
+      ['enrichment_mode', run.enrichment_mode ?? null],
+      ['artifact_readiness_not_met', run.artifact_readiness_not_met ?? 0],
       ['enriched_record_count', run.enriched_record_count ?? 0],
       ['partial_record_count', run.partial_record_count ?? 0],
       ['new_master_row_count', run.new_master_row_count ?? 0],
@@ -713,6 +740,7 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
+      ['debug_artifact_json', run.debug_artifact_json ?? null],
     ];
     const columns = entries.map(([column]) => column);
     const values = entries.map(([, value]) => value);
@@ -762,6 +790,9 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
       ['partial_reason', run.partial_reason ?? null],
       ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['artifact_fetch_coverage_pct', run.artifact_fetch_coverage_pct ?? 0],
+      ['enrichment_mode', run.enrichment_mode ?? null],
+      ['artifact_readiness_not_met', run.artifact_readiness_not_met ?? 0],
       ['enriched_record_count', run.enriched_record_count ?? 0],
       ['partial_record_count', run.partial_record_count ?? 0],
       ['new_master_row_count', run.new_master_row_count ?? 0],
@@ -770,6 +801,7 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
+      ['debug_artifact_json', run.debug_artifact_json ?? null],
     ];
     const assignments = entries.map(([column]) => `${column} = ?`).join(', ');
     const values = entries.map(([, value]) => value);
@@ -1030,6 +1062,9 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
             upstream_max_filing_date TEXT,
             partial_reason TEXT,
             artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+            artifact_fetch_coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+            enrichment_mode TEXT,
+            artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0,
             enriched_record_count INTEGER NOT NULL DEFAULT 0,
             partial_record_count INTEGER NOT NULL DEFAULT 0,
             new_master_row_count INTEGER NOT NULL DEFAULT 0,
@@ -1038,6 +1073,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
             lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
             master_fallback_used INTEGER NOT NULL DEFAULT 0,
             anomaly_detected INTEGER NOT NULL DEFAULT 0,
+            debug_artifact_json TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
@@ -1065,6 +1101,9 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS upstream_max_filing_date TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS partial_reason TEXT');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS artifact_fetch_coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS enrichment_mode TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS enriched_record_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS partial_record_count INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS new_master_row_count INTEGER NOT NULL DEFAULT 0');
@@ -1073,6 +1112,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS lead_alert_delivered INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS master_fallback_used INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS anomaly_detected INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS debug_artifact_json TEXT');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at DESC)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_site_started_at ON scheduled_runs(site, started_at DESC)');
@@ -1218,6 +1258,9 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
       ['partial_reason', run.partial_reason ?? null],
       ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['artifact_fetch_coverage_pct', run.artifact_fetch_coverage_pct ?? 0],
+      ['enrichment_mode', run.enrichment_mode ?? null],
+      ['artifact_readiness_not_met', run.artifact_readiness_not_met ?? 0],
       ['enriched_record_count', run.enriched_record_count ?? 0],
       ['partial_record_count', run.partial_record_count ?? 0],
       ['new_master_row_count', run.new_master_row_count ?? 0],
@@ -1226,6 +1269,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
+      ['debug_artifact_json', run.debug_artifact_json ?? null],
     ];
     const columns = entries.map(([column]) => column);
     const values = entries.map(([, value]) => value);
@@ -1277,6 +1321,9 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['upstream_max_filing_date', run.upstream_max_filing_date ?? null],
       ['partial_reason', run.partial_reason ?? null],
       ['artifact_retrieval_enabled', run.artifact_retrieval_enabled ?? 0],
+      ['artifact_fetch_coverage_pct', run.artifact_fetch_coverage_pct ?? 0],
+      ['enrichment_mode', run.enrichment_mode ?? null],
+      ['artifact_readiness_not_met', run.artifact_readiness_not_met ?? 0],
       ['enriched_record_count', run.enriched_record_count ?? 0],
       ['partial_record_count', run.partial_record_count ?? 0],
       ['new_master_row_count', run.new_master_row_count ?? 0],
@@ -1285,6 +1332,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['lead_alert_delivered', run.lead_alert_delivered ?? 0],
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
+      ['debug_artifact_json', run.debug_artifact_json ?? null],
     ];
     const assignments = entries.map(([column], index) => `${column} = $${index + 1}`).join(', ');
     const values = entries.map(([, value]) => value);

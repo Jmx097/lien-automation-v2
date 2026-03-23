@@ -894,6 +894,17 @@ describe('runScheduledScrape', () => {
     expect(history[0].requested_date_end).toBe('03/15/2026');
     expect(history[0].upstream_min_filing_date).toBe('03/04/2026');
     expect(history[0].upstream_max_filing_date).toBe('03/06/2026');
+    expect(history[0].partial_reason).toBe('rows_filtered_outside_requested_range');
+    expect(history[0].debug_artifact).toEqual(expect.objectContaining({
+      failure_class: 'range_result_integrity',
+      requested_date_start: '03/08/2026',
+      requested_date_end: '03/15/2026',
+      upstream_min_filing_date: '03/04/2026',
+      upstream_max_filing_date: '03/06/2026',
+      filtered_out_count: 10,
+    }));
+    expect(history[0].confidence?.status).toBe('low');
+    expect(history[0].confidence?.reasons).toContain('range_result_integrity');
   });
 
   it('marks retry exhaustion after repeated transient failures', async () => {
@@ -1135,6 +1146,8 @@ describe('runScheduledScrape', () => {
         enriched_records: 0,
         partial_records: 1,
         artifact_retrieval_enabled: false,
+        enrichment_mode: 'api_only',
+        artifact_readiness_not_met: false,
       },
     });
     mockScraper.mockResolvedValueOnce(records);
@@ -1173,9 +1186,131 @@ describe('runScheduledScrape', () => {
 
     const history = await getRunHistory(1);
     expect(history[0].artifact_retrieval_enabled).toBe(0);
+    expect(history[0].artifact_fetch_coverage_pct).toBe(0);
+    expect(history[0].enrichment_mode).toBe('api_only');
+    expect(history[0].artifact_readiness_not_met).toBe(0);
     expect(history[0].enriched_record_count).toBe(0);
     expect(history[0].partial_record_count).toBe(1);
     expect(history[0].confidence?.reasons).toContain('artifact_retrieval_disabled');
+    expect(history[0].confidence?.status).toBe('medium');
+  });
+
+  it('tracks normalized review reason buckets without forcing low confidence for conflicts alone', async () => {
+    mockProbeCASOSResultCount.mockResolvedValueOnce(1);
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 0,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 1,
+      retained_prior_review_row_count: 12,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 0,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {
+          conflict_ambiguous: 1,
+          duplicate_against_current_run: 3,
+          partial_run: 0,
+          low_confidence: 0,
+        },
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 1,
+        retained_prior_review_row_count: 12,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-12:afternoon:review-buckets',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].review_reason_counts_json).toBe(JSON.stringify({
+      low_confidence: 0,
+      conflict_ambiguous: 1,
+      duplicate_or_existing: 3,
+      partial_run: 0,
+    }));
+    expect(history[0].confidence?.reasons).toContain('conflict_ambiguous');
+    expect(history[0].confidence?.reasons).toContain('duplicate_or_existing');
+    expect(history[0].confidence?.status).toBe('medium');
+  });
+
+  it('flags Maricopa artifact readiness and fetch coverage when enrichment is enabled but incomplete', async () => {
+    const records = [{ filing_number: '1', amount: null, amount_reason: 'ok' }, { filing_number: '2', amount: '200', amount_reason: 'ok' }];
+    Object.assign(records, {
+      quality_summary: {
+        requested_date_start: '03/06/2026',
+        requested_date_end: '03/13/2026',
+        discovered_count: 2,
+        returned_count: 2,
+        quarantined_count: 0,
+        partial_run: true,
+        partial_reason: 'artifact_or_ocr_incomplete',
+        enriched_records: 1,
+        partial_records: 1,
+        artifact_retrieval_enabled: true,
+        artifact_fetch_coverage_pct: 50,
+        enrichment_mode: 'artifact_enriched',
+        artifact_readiness_not_met: true,
+      },
+    });
+    mockScraper.mockResolvedValueOnce(records);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 1,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 1,
+      current_run_quarantined_row_count: 1,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 1,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 1,
+        quarantined_row_count: 1,
+        purged_review_row_count: 0,
+        review_reason_counts: { partial_run: 1, low_confidence: 1 },
+        current_run_quarantined_row_count: 1,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'maricopa_recorder',
+      idempotencyKey: 'maricopa_recorder:2026-03-11:artifact-coverage',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    const history = await getRunHistory(1);
+    expect(history[0].artifact_retrieval_enabled).toBe(1);
+    expect(history[0].artifact_fetch_coverage_pct).toBe(50);
+    expect(history[0].enrichment_mode).toBe('artifact_enriched');
+    expect(history[0].artifact_readiness_not_met).toBe(1);
+    expect(history[0].confidence?.reasons).toEqual(expect.arrayContaining([
+      'artifact_readiness_not_met',
+      'artifact_fetch_coverage_below_target',
+    ]));
+    expect(history[0].confidence?.status).toBe('medium');
   });
 
   it('continues successfully when anomaly webhook delivery fails', async () => {
