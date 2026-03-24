@@ -13,3 +13,11 @@ data/db/
 *.bak-*
 
 env-vars.yaml
+
+# Security + local artifact hygiene
+*.har
+*.cmd
+tmp_*.cmd
+data/
+!data/.gitkeep
+

@@ -1,4 +1,4 @@
-// DOM-only helper for smoke/unit tests (e.g. src/tests/selector-smoke.ts).
+// DOM-only helper for smoke/unit tests (e.g. tests/selector-smoke.test.ts).
 // Do not import this module in production Playwright scrapers.
 const normalize = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
 
