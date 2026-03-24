@@ -5,6 +5,7 @@ import path from 'node:path';
 const scriptPath = path.resolve(__dirname, '../../scripts/cloud/resolve-secret-ref.js');
 const {
   buildAccessCommandArgs,
+  formatCloudRunSecretRef,
   normalizeSecretRef,
   resolveSecretRef,
   validateSecretRef,
@@ -272,6 +273,28 @@ describe('resolve-secret-ref', () => {
         'projects/<project>/secrets/<name>/versions/<version>',
       ],
     });
+  });
+
+  it('formats a bare secret name for Cloud Run env injection', () => {
+    expect(formatCloudRunSecretRef('scheduler-token', 'project-123')).toBe('scheduler-token:latest');
+  });
+
+  it('formats a secret resource ref for Cloud Run env injection', () => {
+    expect(formatCloudRunSecretRef('projects/project-123/secrets/scheduler-token', 'project-123')).toBe(
+      'scheduler-token:latest'
+    );
+  });
+
+  it('formats a version resource ref for Cloud Run env injection', () => {
+    expect(
+      formatCloudRunSecretRef('projects/project-123/secrets/scheduler-token/versions/5', 'project-123')
+    ).toBe('scheduler-token:5');
+  });
+
+  it('rejects cross-project refs for Cloud Run env injection', () => {
+    expect(() =>
+      formatCloudRunSecretRef('projects/other-project/secrets/scheduler-token/versions/latest', 'project-123')
+    ).toThrow(/Cross-project secret refs are not supported/);
   });
 
   it('supports validate-only mode for valid refs', () => {

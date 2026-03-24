@@ -226,6 +226,19 @@ function buildAccessCommandArgs(resolved) {
   ];
 }
 
+function formatCloudRunSecretRef(rawSecretRef, defaultProject = process.env.GCP_PROJECT_ID) {
+  const resolved = resolveSecretRef(rawSecretRef, defaultProject);
+  const deployProject = String(defaultProject ?? '').trim();
+
+  if (deployProject && resolved.secretProject && resolved.secretProject !== deployProject) {
+    throw new Error(
+      `Cross-project secret refs are not supported for Cloud Run env secret injection. secret_project=${resolved.secretProject}; deploy_project=${deployProject}`
+    );
+  }
+
+  return `${resolved.secretName}:${resolved.secretVersion}`;
+}
+
 function validateSecretRef(rawSecretRef = process.env.SCHEDULE_RUN_TOKEN_SECRET_REF, defaultProject = process.env.GCP_PROJECT_ID) {
   const resolved = resolveSecretRef(rawSecretRef, defaultProject);
   return {
@@ -270,6 +283,7 @@ module.exports = {
   collectJsonStringCandidates,
   createAmbiguousJsonRefError,
   buildSafeDiagnostics,
+  formatCloudRunSecretRef,
   isRecognizedJsonPath,
   createMalformedRefError,
   explainSecretRef,

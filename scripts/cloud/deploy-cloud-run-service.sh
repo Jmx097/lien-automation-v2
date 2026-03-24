@@ -79,6 +79,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
+format_cloud_run_secret_ref() {
+  local raw_ref="$1"
+
+  RAW_SECRET_REF="${raw_ref}" node <<'EOF'
+const { formatCloudRunSecretRef } = require('./scripts/cloud/resolve-secret-ref.js');
+
+const rawRef = process.env.RAW_SECRET_REF ?? '';
+const project = process.env.GCP_PROJECT_ID ?? '';
+process.stdout.write(formatCloudRunSecretRef(rawRef, project));
+EOF
+}
+
+DATABASE_URL_SECRET_SPEC="$(format_cloud_run_secret_ref "${DATABASE_URL_SECRET_REF}")"
+SCHEDULE_RUN_TOKEN_SECRET_SPEC="$(format_cloud_run_secret_ref "${SCHEDULE_RUN_TOKEN_SECRET_REF}")"
+SHEETS_KEY_SECRET_SPEC="$(format_cloud_run_secret_ref "${SHEETS_KEY_SECRET_REF}")"
+SBR_CDP_URL_SECRET_SPEC="$(format_cloud_run_secret_ref "${SBR_CDP_URL_SECRET_REF}")"
+
 cat > "${ENV_VARS_FILE}" <<EOF
 BRIGHTDATA_PROXY_SERVER: '${BRIGHTDATA_PROXY_SERVER}'
 BRIGHTDATA_PROXY_USERNAME: '${BRIGHTDATA_PROXY_USERNAME}'
@@ -143,12 +160,12 @@ if [[ -z "${BRIGHTDATA_BROWSER_WS_SECRET_REF}" ]]; then
   mv "${ENV_VARS_FILE}.tmp" "${ENV_VARS_FILE}"
 fi
 
-SECRET_ENVS="DATABASE_URL=${DATABASE_URL_SECRET_REF},SCHEDULE_RUN_TOKEN=${SCHEDULE_RUN_TOKEN_SECRET_REF},SHEETS_KEY=${SHEETS_KEY_SECRET_REF},SBR_CDP_URL=${SBR_CDP_URL_SECRET_REF}"
+SECRET_ENVS="DATABASE_URL=${DATABASE_URL_SECRET_SPEC},SCHEDULE_RUN_TOKEN=${SCHEDULE_RUN_TOKEN_SECRET_SPEC},SHEETS_KEY=${SHEETS_KEY_SECRET_SPEC},SBR_CDP_URL=${SBR_CDP_URL_SECRET_SPEC}"
 if [[ -n "${BRIGHTDATA_BROWSER_WS_SECRET_REF}" ]]; then
-  SECRET_ENVS+=",BRIGHTDATA_BROWSER_WS=${BRIGHTDATA_BROWSER_WS_SECRET_REF}"
+  SECRET_ENVS+=",BRIGHTDATA_BROWSER_WS=$(format_cloud_run_secret_ref "${BRIGHTDATA_BROWSER_WS_SECRET_REF}")"
 fi
 if [[ -n "${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}" ]]; then
-  SECRET_ENVS+=",LEAD_ALERT_WEBHOOK_URL=${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}"
+  SECRET_ENVS+=",LEAD_ALERT_WEBHOOK_URL=$(format_cloud_run_secret_ref "${LEAD_ALERT_WEBHOOK_URL_SECRET_REF}")"
 fi
 
 REMOVE_ENV_VARS=(
