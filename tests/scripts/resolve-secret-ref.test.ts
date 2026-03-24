@@ -75,6 +75,34 @@ describe('resolve-secret-ref', () => {
     ]);
   });
 
+
+  it('resolves a version collection resource ref to latest', () => {
+    const resolved = resolveSecretRef(
+      'projects/demo-project/secrets/scheduler-token/versions',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions',
+      secretProject: 'demo-project',
+      secretName: 'scheduler-token',
+      secretVersion: 'latest',
+      sourceKind: 'version-collection-ref',
+      segmentCount: 5,
+      positionalVersionRef: false,
+    });
+    expect(buildAccessCommandArgs(resolved)).toEqual([
+      'secrets',
+      'versions',
+      'access',
+      'latest',
+      '--secret',
+      'scheduler-token',
+      '--project',
+      'demo-project',
+    ]);
+  });
+
   it('normalizes a secretmanager.googleapis.com ref', () => {
     const resolved = resolveSecretRef(
       'https://secretmanager.googleapis.com/projects/demo-project/secrets/scheduler-token/versions/latest',
@@ -89,6 +117,20 @@ describe('resolve-secret-ref', () => {
       sourceKind: 'version-ref',
       segmentCount: 6,
       positionalVersionRef: true,
+    });
+  });
+
+
+  it('normalizes trailing slash refs', () => {
+    const resolved = resolveSecretRef(
+      'projects/demo-project/secrets/scheduler-token/versions/latest/',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
+      secretVersion: 'latest',
     });
   });
 
@@ -140,7 +182,7 @@ describe('resolve-secret-ref', () => {
 
   it('fails malformed project resource refs with safe diagnostics', () => {
     expect(() =>
-      resolveSecretRef('projects/demo-project/secrets/scheduler-token/versions', 'project-123')
+      resolveSecretRef('projects/demo-project/secrets/scheduler-token/versions/not/a/version', 'project-123')
     ).toThrow(/accepted_formats/);
   });
 
@@ -192,7 +234,7 @@ describe('resolve-secret-ref', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          SCHEDULE_RUN_TOKEN_SECRET_REF: 'projects/demo-project/secrets/scheduler-token/versions',
+          SCHEDULE_RUN_TOKEN_SECRET_REF: 'projects/demo-project/secrets/scheduler-token/versions/not/a/version',
           GCP_PROJECT_ID: 'project-123',
         },
       })
