@@ -42,6 +42,11 @@ jobs:
       - name: Configure Docker auth
         run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
 
+      - name: Validate scheduler token secret ref
+        env:
+          SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
+        run: node scripts/cloud/resolve-secret-ref.js --validate-only
+
       - name: Build and push image
         env:
           IMAGE_URI: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/${{ inputs.service_name }}:${{ github.sha }}
@@ -122,11 +127,6 @@ jobs:
         run: |
           SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --format='value(status.url)')"
           echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate scheduler token secret ref
-        env:
-          SCHEDULE_RUN_TOKEN_SECRET_REF: ${{ secrets.SCHEDULE_RUN_TOKEN_SECRET_REF }}
-        run: node scripts/cloud/resolve-secret-ref.js --validate-only
 
       - name: Resolve scheduler token
         env:

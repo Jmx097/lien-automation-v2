@@ -7,6 +7,19 @@ const VERSION_RESOURCE_RE = /^projects\/([^/]+)\/secrets\/([^/]+)\/versions\/([^
 const VERSION_COLLECTION_RESOURCE_RE = /^projects\/([^/]+)\/secrets\/([^/]+)\/versions$/;
 const SIMPLE_SECRET_NAME_RE = /^[A-Za-z0-9_-]+$/;
 const RESOURCE_MARKER_RE = /(projects|secrets|versions|secretmanager\.googleapis\.com)/i;
+const JSON_SECRET_REF_KEYS = [
+  'secretRef',
+  'secret_ref',
+  'secret',
+  'secretName',
+  'secret_name',
+  'secretResource',
+  'secret_resource',
+  'resource',
+  'name',
+  'ref',
+  'value',
+];
 const ACCEPTED_FORMATS = [
   '<secret-name>',
   'projects/<project>/secrets/<name>',
@@ -39,14 +52,32 @@ function tryExtractStringFromJson(value) {
     }
 
     if (parsed && typeof parsed === 'object') {
-      for (const key of ['secretRef', 'secret_ref', 'resource', 'name', 'ref', 'value']) {
+      for (const key of JSON_SECRET_REF_KEYS) {
         if (typeof parsed[key] === 'string') {
           return parsed[key];
         }
       }
+
+      const stringEntries = Object.entries(parsed).filter(([, entryValue]) => typeof entryValue === 'string');
+      if (stringEntries.length === 1) {
+        return stringEntries[0][1];
+      }
+
+      if (stringEntries.length > 1) {
+        const prioritizedEntries = stringEntries.filter(([key]) => JSON_SECRET_REF_KEYS.includes(key));
+        if (prioritizedEntries.length === 1) {
+          return prioritizedEntries[0][1];
+        }
+
+        throw createAmbiguousJsonRefError(trimmed);
+      }
     }
-  } catch {
-    return trimmed;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return trimmed;
+    }
+
+    throw error;
   }
 
   return trimmed;
@@ -92,6 +123,15 @@ function createMalformedRefError(rawSecretRef, normalizedRef) {
   const diagnostics = buildSafeDiagnostics(rawSecretRef, normalizedRef, 'malformed');
   return new Error(
     `Malformed secret ref. Supported formats are bare secret name, secret resource, or version resource. diagnostics=${JSON.stringify(
+      diagnostics
+    )}`
+  );
+}
+
+function createAmbiguousJsonRefError(rawSecretRef) {
+  const diagnostics = buildSafeDiagnostics(rawSecretRef, '', 'ambiguous-json');
+  return new Error(
+    `Ambiguous JSON-wrapped secret ref. Provide a single secret name/resource field. diagnostics=${JSON.stringify(
       diagnostics
     )}`
   );
@@ -206,6 +246,7 @@ if (require.main === module) {
 
 module.exports = {
   buildAccessCommandArgs,
+  createAmbiguousJsonRefError,
   buildSafeDiagnostics,
   createMalformedRefError,
   explainSecretRef,

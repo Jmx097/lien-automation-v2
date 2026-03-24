@@ -555,8 +555,10 @@ bash scripts/cloud/verify-cloud-scheduler-jobs.sh
   - bare secret name: `scheduler-run-token`
   - secret resource: `projects/<project>/secrets/<name>`
   - version resource: `projects/<project>/secrets/<name>/versions/<version>`
-- Avoid storing encoded or wrapped variants (for example escaped slashes, percent-encoded paths, or JSON blobs) in GitHub secrets. The deploy workflow now validates `SCHEDULE_RUN_TOKEN_SECRET_REF` before scheduler reconciliation and fails fast on malformed resource-like values.
+- The resolver now tolerates a JSON wrapper only when it cleanly contains one secret ref or name. Ambiguous JSON payloads still fail validation.
+- Avoid storing encoded or wrapped variants (for example escaped slashes, percent-encoded paths, or arbitrary JSON blobs) in GitHub secrets. The deploy workflow now validates `SCHEDULE_RUN_TOKEN_SECRET_REF` before any build or deploy work and fails fast on malformed resource-like values.
 - Recommended default: keep `SCHEDULE_RUN_TOKEN_SECRET_REF` as the bare secret name in GitHub Actions unless the secret truly lives in a different GCP project.
+- One-time remediation for recurring deploy failures: reset the GitHub Actions secret `SCHEDULE_RUN_TOKEN_SECRET_REF` to the bare secret name if possible instead of keeping an exported wrapper payload.
 - `scripts/cloud/sync-cloud-run-secrets-to-secret-manager.ps1` can bootstrap those runtime secrets from the currently deployed Cloud Run service without printing their values.
 - Use `DRY_RUN=1 bash scripts/cloud/deploy-cloud-run-service.sh` to validate the deploy argument shape without printing secret values.
 

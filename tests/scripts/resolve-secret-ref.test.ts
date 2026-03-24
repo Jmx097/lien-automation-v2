@@ -174,6 +174,53 @@ describe('resolve-secret-ref', () => {
     });
   });
 
+  it('extracts refs from alternate JSON key names', () => {
+    const resolved = resolveSecretRef(
+      '{"secret_resource":"projects/demo-project/secrets/scheduler-token/versions/latest"}',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
+      secretProject: 'demo-project',
+    });
+  });
+
+  it('extracts a bare secret name from a single-key JSON wrapper', () => {
+    const resolved = resolveSecretRef('{"scheduler":"scheduler-token"}', 'project-123');
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'scheduler-token',
+      sourceKind: 'bare-secret',
+      secretProject: 'project-123',
+      secretName: 'scheduler-token',
+    });
+  });
+
+  it('prefers a recognized JSON secret key when other string metadata is present', () => {
+    const resolved = resolveSecretRef(
+      '{"kind":"secret-manager","secretName":"scheduler-token"}',
+      'project-123'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'scheduler-token',
+      sourceKind: 'bare-secret',
+      secretProject: 'project-123',
+      secretName: 'scheduler-token',
+    });
+  });
+
+  it('fails ambiguous JSON-wrapped refs with multiple candidate strings', () => {
+    expect(() =>
+      resolveSecretRef(
+        '{"primary":"scheduler-token","secondary":"projects/demo-project/secrets/other-token"}',
+        'project-123'
+      )
+    ).toThrow(/Ambiguous JSON-wrapped secret ref/);
+  });
+
   it('fails malformed resource-like refs instead of falling back to bare-secret', () => {
     expect(() =>
       resolveSecretRef('resource=projects_demo_project_secrets_scheduler-token_versions_latest', 'project-123')
@@ -239,5 +286,18 @@ describe('resolve-secret-ref', () => {
         },
       })
     ).toThrow(/Malformed secret ref/);
+  });
+
+  it('fails validate-only mode for ambiguous JSON refs', () => {
+    expect(() =>
+      execFileSync('node', [scriptPath, '--validate-only'], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          SCHEDULE_RUN_TOKEN_SECRET_REF: '{"primary":"scheduler-token","secondary":"other-token"}',
+          GCP_PROJECT_ID: 'project-123',
+        },
+      })
+    ).toThrow(/Ambiguous JSON-wrapped secret ref/);
   });
 });
