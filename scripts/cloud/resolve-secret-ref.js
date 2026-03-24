@@ -26,6 +26,28 @@ const ACCEPTED_FORMATS = [
   'projects/<project>/secrets/<name>/versions/<version>',
 ];
 
+function collectJsonStringCandidates(value, path = []) {
+  if (typeof value === 'string') {
+    return [{ path, value }];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => collectJsonStringCandidates(entry, [...path, String(index)]));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  return Object.entries(value).flatMap(([key, entryValue]) =>
+    collectJsonStringCandidates(entryValue, [...path, key])
+  );
+}
+
+function isRecognizedJsonPath(path) {
+  return path.some((segment) => JSON_SECRET_REF_KEYS.includes(segment));
+}
+
 function stripOuterQuotes(value) {
   let next = String(value ?? '');
 
@@ -52,23 +74,22 @@ function tryExtractStringFromJson(value) {
     }
 
     if (parsed && typeof parsed === 'object') {
-      for (const key of JSON_SECRET_REF_KEYS) {
-        if (typeof parsed[key] === 'string') {
-          return parsed[key];
-        }
+      const stringCandidates = collectJsonStringCandidates(parsed);
+      const prioritizedCandidates = stringCandidates.filter((candidate) => isRecognizedJsonPath(candidate.path));
+
+      if (prioritizedCandidates.length === 1) {
+        return prioritizedCandidates[0].value;
       }
 
-      const stringEntries = Object.entries(parsed).filter(([, entryValue]) => typeof entryValue === 'string');
-      if (stringEntries.length === 1) {
-        return stringEntries[0][1];
+      if (prioritizedCandidates.length > 1) {
+        throw createAmbiguousJsonRefError(trimmed);
       }
 
-      if (stringEntries.length > 1) {
-        const prioritizedEntries = stringEntries.filter(([key]) => JSON_SECRET_REF_KEYS.includes(key));
-        if (prioritizedEntries.length === 1) {
-          return prioritizedEntries[0][1];
-        }
+      if (stringCandidates.length === 1) {
+        return stringCandidates[0].value;
+      }
 
+      if (stringCandidates.length > 1) {
         throw createAmbiguousJsonRefError(trimmed);
       }
     }
@@ -246,8 +267,10 @@ if (require.main === module) {
 
 module.exports = {
   buildAccessCommandArgs,
+  collectJsonStringCandidates,
   createAmbiguousJsonRefError,
   buildSafeDiagnostics,
+  isRecognizedJsonPath,
   createMalformedRefError,
   explainSecretRef,
   normalizeSecretRef,

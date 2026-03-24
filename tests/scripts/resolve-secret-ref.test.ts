@@ -212,6 +212,33 @@ describe('resolve-secret-ref', () => {
     });
   });
 
+  it('extracts a nested recognized JSON secret ref', () => {
+    const resolved = resolveSecretRef(
+      '{"secret":{"name":"scheduler-token"},"kind":"secret-manager"}',
+      'project-123'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'scheduler-token',
+      sourceKind: 'bare-secret',
+      secretProject: 'project-123',
+      secretName: 'scheduler-token',
+    });
+  });
+
+  it('extracts a nested recognized JSON secret resource', () => {
+    const resolved = resolveSecretRef(
+      '{"config":{"secret_resource":"projects/demo-project/secrets/scheduler-token/versions/latest"}}',
+      'ignored-project'
+    );
+
+    expect(resolved).toMatchObject({
+      normalizedRef: 'projects/demo-project/secrets/scheduler-token/versions/latest',
+      sourceKind: 'version-ref',
+      secretProject: 'demo-project',
+    });
+  });
+
   it('fails ambiguous JSON-wrapped refs with multiple candidate strings', () => {
     expect(() =>
       resolveSecretRef(
