@@ -28,6 +28,7 @@ interface CASOSSearchResult {
   rowCount: number;
   hasNoResults: boolean;
   resultCount: number;
+  diagnostics?: CASOSResultsDiagnostics;
 }
 
 interface ScrapeCheckpoint {
@@ -41,6 +42,19 @@ interface QuarantinedCASOSRow {
   filing_date?: string;
   reason: string;
   quarantined_at: string;
+}
+
+interface CASOSResultsDiagnostics {
+  finalUrl: string;
+  title: string;
+  readyState: string;
+  resultsContainerVisible: boolean;
+  rowCount: number;
+  drawerButtonCount: number;
+  resultCountText?: string;
+  resultCount?: number | null;
+  noResultsVisible: boolean;
+  visibleErrorText?: string;
 }
 
 function humanDelay() {
@@ -126,6 +140,24 @@ function normalizeText(value?: string): string {
   return (value ?? '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function toIsoDateFromMmDdYyyy(value: string): string | null {
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  return `${match[3]}-${match[1]}-${match[2]}`;
+}
+
+function isMmDdYyyyAfter(left: string, right: string): boolean {
+  const leftIso = toIsoDateFromMmDdYyyy(left);
+  const rightIso = toIsoDateFromMmDdYyyy(right);
+  if (!leftIso || !rightIso) return false;
+  return leftIso > rightIso;
+}
+
+function appendRecordError(record: LienRecord, code: string): void {
+  const existing = normalizeText(record.error);
+  record.error = existing ? `${existing};${code}` : code;
 }
 
 function normalizeComparableText(value?: string): string {
@@ -377,6 +409,11 @@ export function parseCASOSResultsCount(text: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function parseCASOSLatestProcessedDate(text: string): string | null {
+  const match = text.match(/processed through:\s*(\d{2}\/\d{2}\/\d{4})/i);
+  return match?.[1] ?? null;
+}
+
 async function configureCASOSSearchPage(page: Page): Promise<void> {
   page.setDefaultTimeout(30000);
   page.setDefaultNavigationTimeout(60000);
@@ -389,12 +426,7 @@ async function configureCASOSSearchPage(page: Page): Promise<void> {
   });
 }
 
-async function submitCASOSSearch(page: Page, date_start: string, date_end: string): Promise<void> {
-  await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
-    waitUntil: 'networkidle',
-    timeout: 60000,
-  });
-
+async function fillCASOSSearchForm(page: Page, date_start: string, date_end: string): Promise<void> {
   const searchInput = page.getByLabel('Search by name or file number');
   await searchInput.waitFor({ state: 'visible', timeout: 60000 });
   await humanDelay();
@@ -423,52 +455,219 @@ async function submitCASOSSearch(page: Page, date_start: string, date_end: strin
   await dateEndInput.fill(date_end);
   await dateEndInput.press('Tab');
   await humanDelay();
+}
 
+async function navigateToCASOSSearch(page: Page): Promise<void> {
+  await page.goto('https://bizfileonline.sos.ca.gov/search/ucc', {
+    waitUntil: 'networkidle',
+    timeout: 60000,
+  });
+}
+
+async function resolveCASOSRequestedDateRange(
+  page: Page,
+  date_start: string,
+  date_end: string,
+): Promise<{ dateStart: string; dateEnd: string; latestProcessedDate?: string }> {
+  const processedText = normalizeText((await page.locator('text=/processed through:/i').first().textContent().catch(() => '')) ?? '');
+  const latestProcessedDate = parseCASOSLatestProcessedDate(processedText);
+  if (!latestProcessedDate) {
+    return { dateStart: date_start, dateEnd: date_end };
+  }
+
+  const clampedEnd = isMmDdYyyyAfter(date_end, latestProcessedDate) ? latestProcessedDate : date_end;
+  if (clampedEnd !== date_end) {
+    log({
+      stage: 'ca_sos_date_end_clamped',
+      requested_date_end: date_end,
+      effective_date_end: clampedEnd,
+      latest_processed_date: latestProcessedDate,
+    });
+  }
+
+  return {
+    dateStart: date_start,
+    dateEnd: clampedEnd,
+    latestProcessedDate,
+  };
+}
+
+async function submitCASOSSearch(page: Page, date_start: string, date_end: string): Promise<{ effectiveDateEnd: string; latestProcessedDate?: string }> {
+  await navigateToCASOSSearch(page);
+  const resolvedRange = await resolveCASOSRequestedDateRange(page, date_start, date_end);
+  log({
+    stage: 'ca_sos_search_submit_started',
+    date_start,
+    date_end,
+    effective_date_end: resolvedRange.dateEnd,
+    latest_processed_date: resolvedRange.latestProcessedDate,
+  });
+  await fillCASOSSearchForm(page, resolvedRange.dateStart, resolvedRange.dateEnd);
   await page.getByRole('button', { name: 'Search' }).click();
   await page.waitForLoadState('networkidle');
   await humanDelay();
+  log({
+    stage: 'ca_sos_search_submit_finished',
+    date_start,
+    date_end,
+    effective_date_end: resolvedRange.dateEnd,
+    latest_processed_date: resolvedRange.latestProcessedDate,
+  });
+  return { effectiveDateEnd: resolvedRange.dateEnd, latestProcessedDate: resolvedRange.latestProcessedDate };
 }
 
-async function waitForResultsOrNoResults(page: Page): Promise<CASOSSearchResult> {
+export async function inspectCASOSResultsState(page: Page): Promise<CASOSResultsDiagnostics> {
   const rowsLocator = page.locator('.div-table-row');
+  const rowButtons = page.locator('.interactive-cell-button');
   const resultsTextLocator = page.locator('text=/Results:\\s*\\d+/');
-  const noResultsLocator = page.locator('text=/No\\s+records\\s+found/i');
+  const noResultsLocator = page.locator('text=/No\\s+(records|results)\\s+(were\\s+)?found/i');
+  const resultsContainer = page.locator('.div-table, [role="table"], .search-results, table').first();
+  const errorLocator = page.locator('text=/Error|Something went wrong|Access denied|temporarily unavailable/i').first();
 
-  const start = Date.now();
-  const timeoutMs = 30_000;
-  let latestResultCount: number | null = null;
+  const resultCountText = normalizeText((await resultsTextLocator.first().textContent().catch(() => '')) ?? '');
+  const visibleErrorText = normalizeText((await errorLocator.textContent().catch(() => '')) ?? '');
 
-  while (Date.now() - start < timeoutMs) {
-    const rowCount = await rowsLocator.count();
+  return {
+    finalUrl: page.url(),
+    title: await page.title().catch(() => ''),
+    readyState: await page.evaluate(() => document.readyState).catch(() => 'unavailable'),
+    resultsContainerVisible: await resultsContainer.isVisible().catch(() => false),
+    rowCount: await rowsLocator.count().catch(() => 0),
+    drawerButtonCount: await rowButtons.count().catch(() => 0),
+    resultCountText: resultCountText || undefined,
+    resultCount: resultCountText ? parseCASOSResultsCount(resultCountText) : null,
+    noResultsVisible: await noResultsLocator.isVisible().catch(() => false),
+    visibleErrorText: visibleErrorText || undefined,
+  };
+}
 
-    const hasResultsText = await resultsTextLocator.isVisible({ timeout: 500 }).catch(() => false);
-    if (hasResultsText) {
-      const resultsText = (await resultsTextLocator.first().textContent().catch(() => '')) ?? '';
-      latestResultCount = parseCASOSResultsCount(resultsText);
-      if (latestResultCount === null) {
-        throw new Error(`results_count_parse_failed text=${resultsText}`);
-      }
-      if (latestResultCount === 0) {
-        return { rowCount: 0, hasNoResults: true, resultCount: 0 };
-      }
-      if (rowCount > 0) {
-        return { rowCount, hasNoResults: false, resultCount: latestResultCount };
-      }
+export function interpretCASOSResultsState(
+  state: CASOSResultsDiagnostics,
+  options: { allowContainerOnlyCount?: boolean } = {},
+): CASOSSearchResult | null {
+  if (state.noResultsVisible) {
+    return {
+      rowCount: 0,
+      hasNoResults: true,
+      resultCount: 0,
+      diagnostics: state,
+    };
+  }
+
+  if (typeof state.resultCount === 'number') {
+    if (state.resultCount === 0) {
+      return {
+        rowCount: 0,
+        hasNoResults: true,
+        resultCount: 0,
+        diagnostics: state,
+      };
     }
 
-    const hasNoResults = await noResultsLocator.isVisible({ timeout: 500 }).catch(() => false);
-    if (hasNoResults) {
-      return { rowCount: 0, hasNoResults: true, resultCount: 0 };
+    if (
+      state.rowCount > 0 ||
+      state.drawerButtonCount > 0 ||
+      (options.allowContainerOnlyCount === true && state.resultsContainerVisible)
+    ) {
+      return {
+        rowCount: Math.max(state.rowCount, state.drawerButtonCount),
+        hasNoResults: false,
+        resultCount: state.resultCount,
+        diagnostics: state,
+      };
+    }
+  }
+
+  if ((state.rowCount > 0 || state.drawerButtonCount > 0) && !state.visibleErrorText) {
+    const inferredCount = Math.max(state.rowCount, state.drawerButtonCount);
+    return {
+      rowCount: inferredCount,
+      hasNoResults: false,
+      resultCount: inferredCount,
+      diagnostics: state,
+    };
+  }
+
+  return null;
+}
+
+async function waitForResultsOrNoResults(
+  page: Page,
+  options: { allowContainerOnlyCount?: boolean } = {},
+): Promise<CASOSSearchResult> {
+  const start = Date.now();
+  const timeoutMs = 30_000;
+  let latestState: CASOSResultsDiagnostics | null = null;
+
+  while (Date.now() - start < timeoutMs) {
+    latestState = await inspectCASOSResultsState(page);
+    const interpreted = interpretCASOSResultsState(latestState, options);
+    if (interpreted) {
+      log({
+        stage: 'ca_sos_results_ready',
+        final_url: latestState.finalUrl,
+        row_count: interpreted.rowCount,
+        drawer_button_count: latestState.drawerButtonCount,
+        result_count: interpreted.resultCount,
+        no_results: interpreted.hasNoResults,
+        results_container_visible: latestState.resultsContainerVisible,
+      });
+      return interpreted;
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  log({ stage: 'results_visibility_timeout' });
-  if (latestResultCount !== null) {
-    throw new Error(`results_rows_not_visible_after_search result_count=${latestResultCount}`);
+  log({
+    stage: 'results_visibility_timeout',
+    diagnostics: latestState,
+  });
+  if (latestState?.resultCount !== null && latestState?.resultCount !== undefined) {
+    throw new Error(`results_rows_not_visible_after_search result_count=${latestState.resultCount}`);
+  }
+  if (latestState?.visibleErrorText) {
+    throw new Error(`results_not_visible_after_search error_text=${latestState.visibleErrorText}`);
   }
   throw new Error('results_not_visible_after_search');
+}
+
+async function executeCASOSSearch(
+  page: Page,
+  date_start: string,
+  date_end: string,
+  options: { allowContainerOnlyCount?: boolean } = {},
+): Promise<CASOSSearchResult> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      if (attempt === 1) {
+        await submitCASOSSearch(page, date_start, date_end);
+      } else {
+        log({ stage: 'ca_sos_search_retry_in_page', date_start, date_end, attempt });
+        await navigateToCASOSSearch(page);
+        const resolvedRange = await resolveCASOSRequestedDateRange(page, date_start, date_end);
+        await fillCASOSSearchForm(page, resolvedRange.dateStart, resolvedRange.dateEnd);
+        await page.getByRole('button', { name: 'Search' }).click();
+        await page.waitForLoadState('networkidle').catch(() => null);
+        await humanDelay();
+      }
+
+      return await waitForResultsOrNoResults(page, options);
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      log({
+        stage: 'ca_sos_search_attempt_failed',
+        date_start,
+        date_end,
+        attempt,
+        error: lastError.message,
+      });
+      if (attempt >= 2) break;
+    }
+  }
+
+  throw lastError ?? new Error('ca_sos_search_failed');
 }
 
 export async function probeCASOSResultCount(options: Pick<ScrapeOptions, 'date_start' | 'date_end'>): Promise<number> {
@@ -478,8 +677,7 @@ export async function probeCASOSResultCount(options: Pick<ScrapeOptions, 'date_s
 
   try {
     await configureCASOSSearchPage(page);
-    await submitCASOSSearch(page, options.date_start, options.date_end);
-    const results = await waitForResultsOrNoResults(page);
+    const results = await executeCASOSSearch(page, options.date_start, options.date_end, { allowContainerOnlyCount: true });
     log({
       stage: 'ca_sos_probe_complete',
       date_start: options.date_start,
@@ -543,7 +741,43 @@ async function getDetailField(page: Page, label: string): Promise<string> {
   return (await row.locator('td.value').textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
 }
 
+function buildBaseCARecord(input: {
+  fileNumber: string;
+  filingDateText: string;
+  lapseDateText: string;
+  statusText: string;
+  debtorName: string;
+  debtorAddress: string;
+  securedPartyName: string;
+  securedPartyAddress: string;
+}): LienRecord {
+  return {
+    state: 'CA',
+    source: 'ca_sos',
+    county: '',
+    ucc_type: 'Federal Tax Lien',
+    debtor_name: input.debtorName,
+    debtor_address: input.debtorAddress,
+    file_number: input.fileNumber,
+    secured_party_name: input.securedPartyName,
+    secured_party_address: input.securedPartyAddress,
+    status: input.statusText || 'Active',
+    filing_date: input.filingDateText,
+    lapse_date: input.lapseDateText || '12/31/9999',
+    document_type: 'Notice of Federal Tax Lien',
+    pdf_filename: '',
+    processed: true,
+    error: '',
+  };
+}
+
 async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecord | null> {
+  let fileNumber = '';
+  let filingDateText = '';
+  let debtorName = '';
+  let debtorAddress = '';
+  let securedPartyName = '';
+  let securedPartyAddress = '';
   try {
     log({ stage: 'detail_process_start', row: rowIndex });
 
@@ -551,8 +785,8 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
     const row = rows.nth(rowIndex);
 
     const cells = row.locator('.div-table-cell .cell');
-    const fileNumber = (await cells.nth(2).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
-    const filingDateText = (await cells.nth(5).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+    fileNumber = (await cells.nth(2).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
+    filingDateText = (await cells.nth(5).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
     const lapseDateText = (await cells.nth(6).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
     const statusText = (await cells.nth(4).textContent({ timeout: 5000 }).catch(() => ''))?.trim() ?? '';
 
@@ -562,14 +796,30 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
     await drawer.waitFor({ state: 'visible', timeout: 15000 });
     await humanDelay();
 
-    const debtorName = await getDetailField(page, 'Debtor Name');
-    const debtorAddress = await getDetailField(page, 'Debtor Address');
-    const securedPartyName = await getDetailField(page, 'Secured Party Name');
-    const securedPartyAddress = await getDetailField(page, 'Secured Party Address');
+    debtorName = await getDetailField(page, 'Debtor Name');
+    debtorAddress = await getDetailField(page, 'Debtor Address');
+    securedPartyName = await getDetailField(page, 'Secured Party Name');
+    securedPartyAddress = await getDetailField(page, 'Secured Party Address');
 
     log({ stage: 'detail_extracted_basic', file_number: fileNumber });
 
+    const record = buildBaseCARecord({
+      fileNumber,
+      filingDateText,
+      lapseDateText,
+      statusText,
+      debtorName,
+      debtorAddress,
+      securedPartyName,
+      securedPartyAddress,
+    });
+
+    if (!record.file_number || !record.filing_date || !record.debtor_name) {
+      throw new Error('detail_base_fields_missing');
+    }
+
     let pdfData: PdfExtraction = {};
+    let partialReason: string | undefined;
 
     const historyBtn = drawer.locator('button[aria-label="View History"]');
     if (await historyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
@@ -616,46 +866,51 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
               try { fs.unlinkSync(pdfPath); } catch { /* ignore cleanup errors */ }
             } else {
               log({ stage: 'detail_pdf_skipped', file_number: fileNumber, size: pdfBuffer?.length ?? 0 });
+              partialReason = partialReason ?? 'pdf_unavailable';
+              appendRecordError(record, 'pdf_unavailable');
             }
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
             log({ stage: 'detail_pdf_failed', file_number: fileNumber, error: message });
+            partialReason = partialReason ?? 'pdf_fetch_failed';
+            appendRecordError(record, 'pdf_fetch_failed');
           }
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         log({ stage: 'detail_history_failed', file_number: fileNumber, error: message });
+        partialReason = partialReason ?? 'history_modal_failed';
+        appendRecordError(record, 'history_modal_failed');
       }
 
       await dismissHistoryModal(page);
+    } else {
+      partialReason = partialReason ?? 'history_unavailable';
+      appendRecordError(record, 'history_unavailable');
     }
 
     await closeDrawer(page);
     await humanDelay();
 
-    const record: LienRecord = {
-      state: 'CA',
-      source: 'ca_sos',
-      county: '',
-      ucc_type: 'Federal Tax Lien',
-      debtor_name: debtorName,
-      debtor_address: debtorAddress,
-      file_number: fileNumber,
-      secured_party_name: securedPartyName,
-      secured_party_address: securedPartyAddress,
-      status: statusText || 'Active',
-      filing_date: filingDateText,
-      lapse_date: lapseDateText || '12/31/9999',
-      document_type: 'Notice of Federal Tax Lien',
-      pdf_filename: '',
-      processed: true,
-      error: '',
-      amount: pdfData.amount,
-      amount_confidence: pdfData.amountConfidence,
-      amount_reason: pdfData.amountReason,
-      confidence_score: resolveCARecordConfidenceScore(debtorName, debtorAddress, pdfData),
-      lead_type: pdfData.leadType,
-    };
+    record.amount = pdfData.amount;
+    record.amount_confidence = pdfData.amountConfidence;
+    record.amount_reason = pdfData.amountReason;
+    record.confidence_score = resolveCARecordConfidenceScore(debtorName, debtorAddress, pdfData);
+    record.lead_type = pdfData.leadType;
+
+    if (pdfData.amountReason && pdfData.amountReason !== 'ok') {
+      partialReason = partialReason ?? 'ocr_or_pdf_incomplete';
+      appendRecordError(record, pdfData.amountReason);
+    }
+
+    if (partialReason) {
+      log({
+        stage: 'detail_row_degraded_published',
+        file_number: fileNumber,
+        partial_reason: partialReason,
+        error: record.error,
+      });
+    }
 
     log({ stage: 'detail_mapped', file_number: record.file_number });
     return record;
@@ -666,6 +921,28 @@ async function processDetailRow(page: Page, rowIndex: number): Promise<LienRecor
 
     await dismissHistoryModal(page).catch(() => {});
     await closeDrawer(page).catch(() => {});
+
+    if (fileNumber && filingDateText && debtorName) {
+      const degradedRecord = buildBaseCARecord({
+        fileNumber,
+        filingDateText,
+        lapseDateText: '',
+        statusText: 'Active',
+        debtorName,
+        debtorAddress,
+        securedPartyName,
+        securedPartyAddress,
+      });
+      appendRecordError(degradedRecord, 'detail_enrichment_failed');
+      log({
+        stage: 'detail_row_degraded_from_catch',
+        row: rowIndex,
+        file_number: fileNumber,
+        error: degradedRecord.error,
+      });
+      return degradedRecord;
+    }
+
     return null;
   }
 }
@@ -693,6 +970,11 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Scra
   let skippedExistingRecords = 0;
   let firstChunkStart: number | null = null;
   let lastChunkStart: number | null = null;
+  let partialRecords = 0;
+  let degradedPublishedRecords = 0;
+  let historyFailureCount = 0;
+  let pdfFailureCount = 0;
+  let ocrFailureCount = 0;
   const deadlineMs = deadline_at_iso ? new Date(deadline_at_iso).getTime() : null;
   const requireOCR = process.env.REQUIRE_OCR_TOOLS !== '0';
   if (requireOCR) {
@@ -746,9 +1028,7 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Scra
 
       try {
         await configureCASOSSearchPage(page);
-        await submitCASOSSearch(page, date_start, date_end);
-
-        const resultsInfo = await waitForResultsOrNoResults(page);
+        const resultsInfo = await executeCASOSSearch(page, date_start, date_end, { allowContainerOnlyCount: false });
         chunkRowCount = resultsInfo.rowCount;
         knownRowCount = Number.isFinite(knownRowCount)
           ? Math.min(knownRowCount, resultsInfo.resultCount)
@@ -813,6 +1093,13 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Scra
           if (record) {
             consecutiveFailures = 0;
             chunkRecords.push(record);
+            if (record.error) {
+              degradedPublishedRecords += 1;
+              partialRecords += 1;
+              if (record.error.includes('history_')) historyFailureCount += 1;
+              if (record.error.includes('pdf_')) pdfFailureCount += 1;
+              if (record.error.includes('ocr_')) ocrFailureCount += 1;
+            }
           } else {
             consecutiveFailures++;
             quarantinedRows.push({
@@ -899,6 +1186,11 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Scra
     total_chunks_failed: failedChunks,
     first_chunk_start: firstChunkStart,
     last_chunk_start: lastChunkStart,
+    partial_records: partialRecords,
+    degraded_published_records: degradedPublishedRecords,
+    history_failure_count: historyFailureCount,
+    pdf_failure_count: pdfFailureCount,
+    ocr_failure_count: ocrFailureCount,
   });
 
   return attachScrapeQualitySummary(processedRecords, {
@@ -907,15 +1199,25 @@ export async function scrapeCASOS_Enhanced(options: ScrapeOptions): Promise<Scra
     discovered_count: Number.isFinite(knownRowCount) ? knownRowCount : undefined,
     returned_count: processedRecords.length,
     quarantined_count: quarantinedRows.length,
-    partial_run: quarantinedRows.length > 0 || failedChunks > 0 || nextIndex < knownRowCount,
+    partial_run: quarantinedRows.length > 0 || failedChunks > 0 || partialRecords > 0 || nextIndex < knownRowCount,
     partial_reason: quarantinedRows.length > 0
       ? 'quarantined_failed_rows'
+      : partialRecords > 0
+        ? 'degraded_rows_published'
       : failedChunks > 0
         ? 'chunk_failures_remaining'
         : nextIndex < knownRowCount
           ? 'deadline_or_stop_before_completion'
           : undefined,
     skipped_existing_count: skippedExistingRecords,
+    partial_records: partialRecords,
+    enriched_records: processedRecords.length - partialRecords,
+    debug_artifact: {
+      degraded_published_records: degradedPublishedRecords,
+      history_failure_count: historyFailureCount,
+      pdf_failure_count: pdfFailureCount,
+      ocr_failure_count: ocrFailureCount,
+    },
   });
 }
 

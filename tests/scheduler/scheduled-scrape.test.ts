@@ -640,7 +640,7 @@ describe('runScheduledScrape', () => {
     expect(mockPushToSheetsForTab).not.toHaveBeenCalled();
   });
 
-  it('keeps CA scheduled runs pinned to the fixed 75-record cap when the probe fails', async () => {
+  it('falls back to a conservative CA scheduled cap when the probe fails', async () => {
     controlState = { site: 'ca_sos', effective_max_records: 55 };
     mockProbeCASOSResultCount.mockRejectedValueOnce(new Error('probe failed'));
     mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
@@ -655,7 +655,7 @@ describe('runScheduledScrape', () => {
       triggerSource: 'manual',
     });
 
-    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 75 }));
+    expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 10 }));
   });
 
   it('defers blocked nyc scheduled runs before scraping', async () => {

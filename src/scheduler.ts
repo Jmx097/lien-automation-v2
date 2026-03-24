@@ -48,6 +48,10 @@ function getScheduleMaxRecords(): number {
   return Number(process.env.SCHEDULE_MAX_RECORDS ?? '75');
 }
 
+function getCAScheduleFallbackMaxRecords(): number {
+  return Math.max(1, Number(process.env.SCHEDULE_CA_SOS_FALLBACK_MAX_RECORDS ?? '10'));
+}
+
 function getScheduleMaxRecordsFloor(): number {
   return Number(process.env.SCHEDULE_MAX_RECORDS_FLOOR ?? '75');
 }
@@ -1171,12 +1175,13 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         skip_scrape: skipScrape,
       });
     } catch (err: any) {
-      effectiveMaxRecords = seededMaxRecords;
+      effectiveMaxRecords = Math.min(seededMaxRecords, getCAScheduleFallbackMaxRecords());
       log({
         stage: 'scheduled_run_ca_probe_failed',
         site,
         idempotency_key: idempotencyKey,
         seeded_max_records: seededMaxRecords,
+        fallback_max_records: effectiveMaxRecords,
         error: String(err?.message ?? err),
       });
     }

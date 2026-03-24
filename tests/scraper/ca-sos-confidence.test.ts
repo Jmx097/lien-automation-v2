@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCARecordConfidenceScore } from '../../src/scraper/ca_sos_enhanced';
+import { interpretCASOSResultsState, resolveCARecordConfidenceScore } from '../../src/scraper/ca_sos_enhanced';
 
 describe('resolveCARecordConfidenceScore', () => {
   it('uses OCR agreement and structured residence to produce a high-confidence score', () => {
@@ -40,5 +40,72 @@ describe('resolveCARecordConfidenceScore', () => {
     );
 
     expect(score).toBe(0.5);
+  });
+
+  it('accepts visible CA result rows even when the results banner is absent', () => {
+    const result = interpretCASOSResultsState({
+      finalUrl: 'https://bizfileonline.sos.ca.gov/search/ucc',
+      title: 'Search Results',
+      readyState: 'complete',
+      resultsContainerVisible: true,
+      rowCount: 0,
+      drawerButtonCount: 3,
+      resultCount: null,
+      noResultsVisible: false,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        hasNoResults: false,
+        rowCount: 3,
+        resultCount: 3,
+      }),
+    );
+  });
+
+  it('treats an explicit no-results state as zero results', () => {
+    const result = interpretCASOSResultsState({
+      finalUrl: 'https://bizfileonline.sos.ca.gov/search/ucc',
+      title: 'Search Results',
+      readyState: 'complete',
+      resultsContainerVisible: false,
+      rowCount: 0,
+      drawerButtonCount: 0,
+      resultCount: null,
+      noResultsVisible: true,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        hasNoResults: true,
+        rowCount: 0,
+        resultCount: 0,
+      }),
+    );
+  });
+
+  it('accepts results count text while rows are still settling into the container', () => {
+    const result = interpretCASOSResultsState(
+      {
+        finalUrl: 'https://bizfileonline.sos.ca.gov/search/ucc',
+        title: 'Search Results',
+        readyState: 'complete',
+        resultsContainerVisible: true,
+        rowCount: 0,
+        drawerButtonCount: 0,
+        resultCountText: 'Results: 18',
+        resultCount: 18,
+        noResultsVisible: false,
+      },
+      { allowContainerOnlyCount: true },
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        hasNoResults: false,
+        rowCount: 0,
+        resultCount: 18,
+      }),
+    );
   });
 });
