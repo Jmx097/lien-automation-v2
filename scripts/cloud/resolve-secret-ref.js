@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 
 const SECRET_RESOURCE_RE = /^projects\/([^/]+)\/secrets\/([^/]+)$/;
 const VERSION_RESOURCE_RE = /^projects\/([^/]+)\/secrets\/([^/]+)\/versions\/([^/]+)$/;
+const VERSION_COLLECTION_RESOURCE_RE = /^projects\/([^/]+)\/secrets\/([^/]+)\/versions$/;
 const SIMPLE_SECRET_NAME_RE = /^[A-Za-z0-9_-]+$/;
 const RESOURCE_MARKER_RE = /(projects|secrets|versions|secretmanager\.googleapis\.com)/i;
 const ACCEPTED_FORMATS = [
@@ -60,7 +61,8 @@ function normalizeSecretRef(rawSecretRef) {
     .replace(/^https:\/\/secretmanager\.googleapis\.com\//, '')
     .replace(/^\/\/secretmanager\.googleapis\.com\//, '')
     .replace(/^secretmanager\.googleapis\.com\//, '')
-    .replace(/^\/+/, '');
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
 }
 
 function containsJsonPunctuation(value) {
@@ -103,6 +105,7 @@ function resolveSecretRef(rawSecretRef, defaultProject) {
   }
 
   const versionRefMatch = normalizedRef.match(VERSION_RESOURCE_RE);
+  const versionCollectionMatch = normalizedRef.match(VERSION_COLLECTION_RESOURCE_RE);
   const secretRefMatch = normalizedRef.match(SECRET_RESOURCE_RE);
 
   let secretProject;
@@ -114,6 +117,10 @@ function resolveSecretRef(rawSecretRef, defaultProject) {
   if (versionRefMatch) {
     [, secretProject, secretName, secretVersion] = versionRefMatch;
     sourceKind = 'version-ref';
+  } else if (versionCollectionMatch) {
+    [, secretProject, secretName] = versionCollectionMatch;
+    secretVersion = 'latest';
+    sourceKind = 'version-collection-ref';
   } else if (secretRefMatch) {
     [, secretProject, secretName] = secretRefMatch;
     secretVersion = 'latest';
