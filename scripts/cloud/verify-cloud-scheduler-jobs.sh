@@ -6,7 +6,7 @@ set -euo pipefail
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
 
-RUN_URI="${API_BASE_URL%/}/schedule/run"
+API_BASE_URL_TRIMMED="${API_BASE_URL%/}"
 JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
 
 listed_jobs_json="$(gcloud scheduler jobs list --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
@@ -34,6 +34,7 @@ verify_job() {
   local expected_schedule="$2"
   local expected_body="$3"
   local expected_timezone="$4"
+  local expected_uri="$5"
 
   local description
   description="$(gcloud scheduler jobs describe "${name}" --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
@@ -49,15 +50,15 @@ verify_job() {
 
   [[ "${actual_schedule}" == "${expected_schedule}" ]] || { echo "${name}: expected schedule ${expected_schedule}, got ${actual_schedule}" >&2; exit 1; }
   [[ "${actual_timezone}" == "${expected_timezone}" ]] || { echo "${name}: expected time zone ${expected_timezone}, got ${actual_timezone}" >&2; exit 1; }
-  [[ "${actual_uri}" == "${RUN_URI}" ]] || { echo "${name}: expected URI ${RUN_URI}, got ${actual_uri}" >&2; exit 1; }
+  [[ "${actual_uri}" == "${expected_uri}" ]] || { echo "${name}: expected URI ${expected_uri}, got ${actual_uri}" >&2; exit 1; }
   [[ "${actual_method}" == "POST" ]] || { echo "${name}: expected HTTP method POST, got ${actual_method}" >&2; exit 1; }
   [[ "${bodies_match}" == "true" ]] || { echo "${name}: expected body ${expected_body}, got ${actual_body}" >&2; exit 1; }
 }
 
-while IFS=$'\t' read -r name schedule time_zone body; do
-  verify_job "${name}" "${schedule}" "${body}" "${time_zone}"
+while IFS=$'\t' read -r name schedule time_zone uri body; do
+  verify_job "${name}" "${schedule}" "${body}" "${time_zone}" "${uri}"
 done < <(
-  printf '%s' "${JOB_SPECS_JSON}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, JSON.stringify(spec.body)].join('\t') + '\n'); }"
+  printf '%s' "${JOB_SPECS_JSON}" | API_BASE_URL="${API_BASE_URL_TRIMMED}" node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); const base=(process.env.API_BASE_URL ?? '').replace(/\/$/, ''); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, `${base}${spec.path ?? '/schedule/run'}`, JSON.stringify(spec.body ?? {})].join('\t') + '\n'); }"
 )
 
-echo "Cloud Scheduler jobs verified for ${RUN_URI}"
+echo "Cloud Scheduler jobs verified for ${API_BASE_URL_TRIMMED}"
