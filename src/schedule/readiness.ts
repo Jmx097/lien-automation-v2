@@ -196,6 +196,37 @@ function checkOCRReady(): ReadinessCheck {
   };
 }
 
+function checkSiteComplianceHealthy(siteCompliance: Record<SupportedSite, SiteComplianceSummary>): ReadinessCheck {
+  const failingSites = Object.entries(siteCompliance)
+    .filter(([, summary]) =>
+      summary.rolling_sla_status === 'breached' ||
+      (summary.observed_run_count > 0 && !summary.previous_business_day_slots_ok)
+    )
+    .map(([site, summary]) =>
+      `${site}: rolling=${summary.rolling_sla_status} previous_day_slots=${summary.previous_business_day_slot_success_count}/${summary.previous_business_day_expected_slots}`,
+    );
+
+  if (failingSites.length > 0) {
+    return {
+      name: 'site_compliance_healthy',
+      ok: false,
+      detail: failingSites.join('; '),
+    };
+  }
+
+  const warmingSites = Object.entries(siteCompliance)
+    .filter(([, summary]) => summary.rolling_sla_status === 'insufficient_data')
+    .map(([site]) => site);
+
+  return {
+    name: 'site_compliance_healthy',
+    ok: true,
+    detail: warmingSites.length > 0
+      ? `Insufficient rolling scheduler history for: ${warmingSites.join(', ')}`
+      : 'All sites meet rolling SLA and previous-business-day cadence targets.',
+  };
+}
+
 export async function getScheduleReadinessReport(): Promise<ScheduleReadinessReport> {
   const storeReadiness = await getSchedulerStoreReadiness();
   const dbCheck: ReadinessCheck = storeReadiness.ok
@@ -213,7 +244,16 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
   const targetAccess = credentialsCheck.ok
     ? await checkSpreadsheetAccess(mergedConfig.target_spreadsheet_id)
     : { ok: false, detail: 'Skipped because downstream credentials are not loaded.' };
-  const checks = [checkRequiredEnv(), checkSiteScheduleConfig(), dbCheck, credentialsCheck, sourceSheetCheck, checkOCRReady()];
+  const site_compliance = await getSiteComplianceState();
+  const checks = [
+    checkRequiredEnv(),
+    checkSiteScheduleConfig(),
+    dbCheck,
+    credentialsCheck,
+    sourceSheetCheck,
+    checkOCRReady(),
+    checkSiteComplianceHealthy(site_compliance),
+  ];
   const siteConnectivityEntries = storeReadiness.ok
     ? await (async () => {
       const store = new ScheduledRunStore();
@@ -245,7 +285,6 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       }] as const;
     });
   const site_connectivity = Object.fromEntries(siteConnectivityEntries) as ScheduleReadinessReport['site_connectivity'];
-  const site_compliance = await getSiteComplianceState();
   const maricopaPersistedState = await getMaricopaPersistedStateReadiness();
   const maricopaConnectivity = site_connectivity.maricopa_recorder;
   if (maricopaPersistedState.artifactRetrievalEnabled && maricopaPersistedState.refreshRequired) {

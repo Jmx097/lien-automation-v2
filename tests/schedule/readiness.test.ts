@@ -46,6 +46,9 @@ vi.mock('pg', () => {
       ) {
         return { rows: [] };
       }
+      if (normalized.includes('FROM scheduled_runs WHERE site = $1 ORDER BY started_at DESC LIMIT $2')) {
+        return { rows: [] };
+      }
       if (normalized.includes('FROM scheduler_site_connectivity_state WHERE site = $1')) {
         return { rows: [] };
       }
@@ -83,6 +86,7 @@ vi.mock('../../src/sheets/push', () => ({
 
 vi.mock('../../src/scraper/maricopa_artifacts', () => ({
   getMaricopaPersistedStateReadiness: async () => ({ ...maricopaBehavior }),
+  isMaricopaArtifactRetrievalEnabled: () => maricopaBehavior.artifactRetrievalEnabled,
 }));
 
 function setReadyEnv(): void {

@@ -5,6 +5,7 @@ import { pushRunToNewSheetTab } from "./sheets/push";
 import { log } from "./utils/logger";
 import dotenv from 'dotenv';
 import { SQLiteQueueStore } from "./queue/sqlite";
+import { discoverMaricopaArtifacts, refreshMaricopaSessionState } from "./maintenance/maricopa";
 import {
   checkMissedRuns,
   checkSiteConnectivity,
@@ -16,8 +17,16 @@ import {
   type RetryableScheduledFailureClass,
 } from "./scheduler";
 import { getScheduleReadinessReport } from "./schedule/readiness";
+import { exportTriSiteProof } from "./proof/tri_site";
 import { ensureDatabaseReady } from "./db/init";
-import { validateNYCAcrisDebugRequest, validateScheduleRunRequest, validateScrapeRequest, type ValidationIssue } from "./http/validation";
+import {
+  validateMaricopaMaintenanceRequest,
+  validateNYCAcrisDebugRequest,
+  validateScheduleProofExportRequest,
+  validateScheduleRunRequest,
+  validateScrapeRequest,
+  type ValidationIssue,
+} from "./http/validation";
 import { isSchedulerRequestAuthorized } from "./http/scheduler-auth";
 
 dotenv.config();
@@ -299,6 +308,69 @@ app.post("/schedule/run", async (req, res) => {
       transportModeOverride: validation.value.transport_mode_override,
     });
     return res.json(result);
+  } catch (err: any) {
+    return res.status(errorStatusFor(err)).json({ error: err.message });
+  }
+});
+
+app.post("/maintenance/maricopa/session-refresh", async (req, res) => {
+  try {
+    const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
+    if (!configuredToken) {
+      return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
+    }
+
+    if (!isSchedulerRequestAuthorized(req, configuredToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const validation = validateMaricopaMaintenanceRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+
+    const result = await refreshMaricopaSessionState();
+    return res.status(result.ok ? 200 : 503).json(result);
+  } catch (err: any) {
+    return res.status(errorStatusFor(err)).json({ error: err.message });
+  }
+});
+
+app.post("/maintenance/maricopa/discover", async (req, res) => {
+  try {
+    const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
+    if (!configuredToken) {
+      return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
+    }
+
+    if (!isSchedulerRequestAuthorized(req, configuredToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const validation = validateMaricopaMaintenanceRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+
+    const result = await discoverMaricopaArtifacts();
+    return res.status(result.ok ? 200 : 503).json(result);
+  } catch (err: any) {
+    return res.status(errorStatusFor(err)).json({ error: err.message });
+  }
+});
+
+app.post("/schedule/proof/export", async (req, res) => {
+  try {
+    const configuredToken = process.env.SCHEDULE_RUN_TOKEN;
+    if (!configuredToken) {
+      return res.status(500).json({ error: 'SCHEDULE_RUN_TOKEN is not configured' });
+    }
+
+    if (!isSchedulerRequestAuthorized(req, configuredToken)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const validation = validateScheduleProofExportRequest(req.body);
+    if (!validation.ok) return sendValidationError(res, validation.issues);
+
+    const summary = await exportTriSiteProof();
+    return res.json(summary);
   } catch (err: any) {
     return res.status(errorStatusFor(err)).json({ error: err.message });
   }

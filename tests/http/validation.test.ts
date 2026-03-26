@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { validateNYCAcrisDebugRequest, validateScheduleRunRequest, validateScrapeRequest } from '../../src/http/validation';
+import {
+  validateMaricopaMaintenanceRequest,
+  validateNYCAcrisDebugRequest,
+  validateScheduleProofExportRequest,
+  validateScheduleRunRequest,
+  validateScrapeRequest,
+} from '../../src/http/validation';
 
 describe('HTTP validation', () => {
   it('accepts a well-formed scrape request', () => {
@@ -143,6 +149,39 @@ describe('HTTP validation', () => {
           expect.objectContaining({
             field: 'transport_mode_override',
             message: 'transport_mode_override is supported only for nyc_acris bootstrap debug runs',
+          }),
+        ]),
+      );
+    }
+  });
+
+  it('accepts empty maintenance and proof export requests', () => {
+    expect(validateMaricopaMaintenanceRequest({}).ok).toBe(true);
+    expect(validateScheduleProofExportRequest(undefined).ok).toBe(true);
+  });
+
+  it('rejects unexpected fields on maintenance and proof export requests', () => {
+    const maintenance = validateMaricopaMaintenanceRequest({ force: true });
+    expect(maintenance.ok).toBe(false);
+    if (!maintenance.ok) {
+      expect(maintenance.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'force',
+            message: 'maintenance does not accept request body fields',
+          }),
+        ]),
+      );
+    }
+
+    const proof = validateScheduleProofExportRequest({ output_path: 'out/proof/custom.json' });
+    expect(proof.ok).toBe(false);
+    if (!proof.ok) {
+      expect(proof.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            field: 'output_path',
+            message: 'proof export does not accept request body fields',
           }),
         ]),
       );

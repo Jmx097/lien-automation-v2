@@ -13,14 +13,14 @@ set -euo pipefail
 : "${MIN_BACKOFF:=30s}"
 : "${MAX_BACKOFF:=300s}"
 
-RUN_URI="${API_BASE_URL%/}/schedule/run"
 JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
 
 create_or_update_job () {
   local name="$1"
   local schedule="$2"
-  local body="$3"
-  local time_zone="$4"
+  local time_zone="$3"
+  local uri="$4"
+  local body="$5"
 
   if gcloud scheduler jobs describe "${name}" --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "${name}" \
@@ -28,7 +28,7 @@ create_or_update_job () {
       --project="${GCP_PROJECT_ID}" \
       --schedule="${schedule}" \
       --time-zone="${time_zone}" \
-      --uri="${RUN_URI}" \
+      --uri="${uri}" \
       --http-method=POST \
       --max-retry-attempts="${RETRY_COUNT}" \
       --max-retry-duration="${MAX_RETRY_DURATION}" \
@@ -42,7 +42,7 @@ create_or_update_job () {
       --project="${GCP_PROJECT_ID}" \
       --schedule="${schedule}" \
       --time-zone="${time_zone}" \
-      --uri="${RUN_URI}" \
+      --uri="${uri}" \
       --http-method=POST \
       --max-retry-attempts="${RETRY_COUNT}" \
       --max-retry-duration="${MAX_RETRY_DURATION}" \
@@ -53,12 +53,12 @@ create_or_update_job () {
   fi
 }
 
-while IFS=$'\t' read -r name schedule time_zone body; do
-  create_or_update_job "${name}" "${schedule}" "${body}" "${time_zone}"
+while IFS=$'\t' read -r name schedule time_zone uri body; do
+  create_or_update_job "${name}" "${schedule}" "${time_zone}" "${uri}" "${body}"
 done < <(
-  printf '%s' "${JOB_SPECS_JSON}" | node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, JSON.stringify(spec.body)].join('\t') + '\n'); }"
+  printf '%s' "${JOB_SPECS_JSON}" | API_BASE_URL="${API_BASE_URL}" node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); const base=(process.env.API_BASE_URL ?? '').replace(/\/$/, ''); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, \`\${base}\${spec.path ?? '/schedule/run'}\`, JSON.stringify(spec.body ?? {})].join('\t') + '\n'); }"
 )
 
-echo "Scheduler jobs upserted for ${RUN_URI} using derived job specs from scheduler environment."
+echo "Scheduler jobs upserted using derived job specs from scheduler environment."
 
 

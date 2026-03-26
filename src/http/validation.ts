@@ -35,6 +35,10 @@ export interface NYCAcrisDebugRequest {
   transport_mode_override?: BrowserTransportMode;
 }
 
+export interface MaricopaMaintenanceRequest {}
+
+export interface ScheduleProofExportRequest {}
+
 const DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
 const allowedRetryFailureClasses = new Set<RetryableScheduledFailureClass>([
   'timeout_or_navigation',
@@ -64,6 +68,35 @@ function asObject(input: unknown): Record<string, unknown> {
 
 function asTrimmedString(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined;
+}
+
+function validateEmptyObjectRequest(
+  input: unknown,
+  requestName: string,
+): ValidationResult<Record<string, never>> {
+  if (input == null) {
+    return { ok: true, value: {} };
+  }
+
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return {
+      ok: false,
+      issues: [{ field: 'body', message: `${requestName} body must be a JSON object` }],
+    };
+  }
+
+  const extraKeys = Object.keys(input as Record<string, unknown>);
+  if (extraKeys.length > 0) {
+    return {
+      ok: false,
+      issues: extraKeys.map((key) => ({
+        field: key,
+        message: `${requestName} does not accept request body fields`,
+      })),
+    };
+  }
+
+  return { ok: true, value: {} };
 }
 
 function parseDate(value: string): Date | undefined {
@@ -226,4 +259,12 @@ export function validateNYCAcrisDebugRequest(input: unknown): ValidationResult<N
       transport_mode_override: transportModeOverride as BrowserTransportMode | undefined,
     },
   };
+}
+
+export function validateMaricopaMaintenanceRequest(input: unknown): ValidationResult<MaricopaMaintenanceRequest> {
+  return validateEmptyObjectRequest(input, 'maintenance');
+}
+
+export function validateScheduleProofExportRequest(input: unknown): ValidationResult<ScheduleProofExportRequest> {
+  return validateEmptyObjectRequest(input, 'proof export');
 }

@@ -74,6 +74,7 @@ function buildSiteSpec(options) {
     jobName: `${jobPrefix}-${siteSlug}-${slot}`,
     schedule: buildCronExpression(scheduledHour, scheduledMinute, weeklyDays),
     timeZone,
+    path: '/schedule/run',
     body: { site, slot },
     scheduledHour,
     scheduledMinute,
@@ -84,8 +85,33 @@ function buildSiteSpec(options) {
   };
 }
 
+function buildMaintenanceSpec(options) {
+  const {
+    jobPrefix,
+    jobSuffix,
+    schedule,
+    timeZone,
+    path,
+    body = {},
+  } = options;
+
+  return {
+    site: 'maricopa_recorder',
+    slot: 'maintenance',
+    jobName: `${jobPrefix}-${jobSuffix}`,
+    schedule,
+    timeZone,
+    path,
+    body,
+  };
+}
+
 function collectSchedulerJobSpecs(env = process.env) {
   const jobPrefix = env.JOB_NAME ?? 'lien-scraper-schedule-run';
+  const maintenanceTimeZone = env.MARICOPA_MAINTENANCE_TIMEZONE ?? 'America/Denver';
+  const maintenanceDays = env.MARICOPA_MAINTENANCE_DAYS ?? 'SU,MO,TU,WE,TH,FR,SA';
+  const proofTimeZone = env.TRI_SITE_PROOF_TIMEZONE ?? 'America/Denver';
+  const proofDays = env.TRI_SITE_PROOF_WEEKLY_DAYS ?? 'MO,TU,WE,TH,FR';
 
   return {
     jobPrefix,
@@ -183,6 +209,52 @@ function collectSchedulerJobSpecs(env = process.env) {
         runHour: env.SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR ?? '22',
         runMinute: env.SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE ?? '0',
       }),
+      buildMaintenanceSpec({
+        jobPrefix,
+        jobSuffix: 'maricopa-session-refresh-morning',
+        schedule: buildCronExpression(
+          parseInteger('MARICOPA_SESSION_REFRESH_MORNING_RUN_HOUR', env.MARICOPA_SESSION_REFRESH_MORNING_RUN_HOUR ?? '8'),
+          parseInteger('MARICOPA_SESSION_REFRESH_MORNING_RUN_MINUTE', env.MARICOPA_SESSION_REFRESH_MORNING_RUN_MINUTE ?? '30'),
+          maintenanceDays,
+        ),
+        timeZone: maintenanceTimeZone,
+        path: '/maintenance/maricopa/session-refresh',
+      }),
+      buildMaintenanceSpec({
+        jobPrefix,
+        jobSuffix: 'maricopa-session-refresh-evening',
+        schedule: buildCronExpression(
+          parseInteger('MARICOPA_SESSION_REFRESH_EVENING_RUN_HOUR', env.MARICOPA_SESSION_REFRESH_EVENING_RUN_HOUR ?? '20'),
+          parseInteger('MARICOPA_SESSION_REFRESH_EVENING_RUN_MINUTE', env.MARICOPA_SESSION_REFRESH_EVENING_RUN_MINUTE ?? '30'),
+          maintenanceDays,
+        ),
+        timeZone: maintenanceTimeZone,
+        path: '/maintenance/maricopa/session-refresh',
+      }),
+      buildMaintenanceSpec({
+        jobPrefix,
+        jobSuffix: 'maricopa-discover',
+        schedule: buildCronExpression(
+          parseInteger('MARICOPA_DISCOVERY_RUN_HOUR', env.MARICOPA_DISCOVERY_RUN_HOUR ?? '8'),
+          parseInteger('MARICOPA_DISCOVERY_RUN_MINUTE', env.MARICOPA_DISCOVERY_RUN_MINUTE ?? '45'),
+          maintenanceDays,
+        ),
+        timeZone: maintenanceTimeZone,
+        path: '/maintenance/maricopa/discover',
+      }),
+      {
+        site: 'tri_site',
+        slot: 'proof_export',
+        jobName: `${jobPrefix}-proof-export-nightly`,
+        schedule: buildCronExpression(
+          parseInteger('TRI_SITE_PROOF_RUN_HOUR', env.TRI_SITE_PROOF_RUN_HOUR ?? '23'),
+          parseInteger('TRI_SITE_PROOF_RUN_MINUTE', env.TRI_SITE_PROOF_RUN_MINUTE ?? '15'),
+          proofDays,
+        ),
+        timeZone: proofTimeZone,
+        path: '/schedule/proof/export',
+        body: {},
+      },
     ],
   };
 }

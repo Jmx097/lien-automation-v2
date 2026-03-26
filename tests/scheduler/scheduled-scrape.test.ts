@@ -12,6 +12,7 @@ const mockProbeMaricopaRecorderConnectivity = vi.fn();
 const mockGetMaricopaPersistedStateReadiness = vi.fn();
 const mockProbeNYCAcrisConnectivity = vi.fn();
 const mockDebugNYCAcrisBootstrap = vi.fn();
+const mockHealMaricopaScheduledRunReadiness = vi.fn();
 
 const runs = new Map<string, any>();
 let controlState: any = null;
@@ -43,6 +44,10 @@ vi.mock('../../src/scraper/nyc_acris', () => ({
 
 vi.mock('../../src/scraper/maricopa_artifacts', () => ({
   getMaricopaPersistedStateReadiness: mockGetMaricopaPersistedStateReadiness,
+}));
+
+vi.mock('../../src/maintenance/maricopa', () => ({
+  healMaricopaScheduledRunReadiness: mockHealMaricopaScheduledRunReadiness,
 }));
 
 vi.mock('../../src/sheets/push', () => ({
@@ -151,6 +156,7 @@ describe('runScheduledScrape', () => {
     mockProbeNYCAcrisConnectivity.mockReset();
     mockDebugNYCAcrisBootstrap.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockReset();
+    mockHealMaricopaScheduledRunReadiness.mockReset();
     mockGetMaricopaPersistedStateReadiness.mockResolvedValue({
       artifactRetrievalEnabled: false,
       sessionPresent: false,
@@ -160,6 +166,28 @@ describe('runScheduledScrape', () => {
       refreshRequired: false,
       refreshReason: 'artifact_retrieval_disabled',
       detail: 'Maricopa artifact retrieval is disabled by configuration.',
+    });
+    mockHealMaricopaScheduledRunReadiness.mockResolvedValue({
+      operation: 'self_heal',
+      ok: true,
+      detail: 'Maricopa persisted session and artifact candidates are available.',
+      artifact_candidate_count: 1,
+      refresh_required: false,
+      refresh_reason: undefined,
+      readiness: {
+        artifactRetrievalEnabled: true,
+        sessionPresent: true,
+        sessionFresh: true,
+        sessionMaxAgeMinutes: 720,
+        artifactCandidatesPresent: true,
+        artifactCandidatesFresh: true,
+        artifactCandidateCount: 1,
+        artifactCandidateMaxAgeMinutes: 1440,
+        refreshRequired: false,
+        detail: 'Maricopa persisted session and artifact candidates are available.',
+      },
+      attempted_refresh: true,
+      attempted_discovery: true,
     });
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
@@ -773,6 +801,95 @@ describe('runScheduledScrape', () => {
     expect(mockScraper).toHaveBeenCalledWith(expect.objectContaining({ max_records: 10 }));
   });
 
+  it('alerts on repeated CA probe fallback during external scheduled runs', async () => {
+    runs.set('ca_sos:2026-03-10:morning', {
+      id: 'prior-ca-fallback',
+      site: 'ca_sos',
+      idempotency_key: 'ca_sos:2026-03-10:morning',
+      slot_time: 'ca_sos:2026-03-10:morning',
+      trigger_source: 'external',
+      started_at: '2026-03-10T14:00:00.000Z',
+      finished_at: '2026-03-10T14:05:00.000Z',
+      status: 'success',
+      records_scraped: 3,
+      records_skipped: 0,
+      rows_uploaded: 3,
+      amount_found_count: 3,
+      amount_missing_count: 0,
+      amount_coverage_pct: 100,
+      ocr_success_pct: 100,
+      row_fail_pct: 0,
+      deadline_hit: 0,
+      effective_max_records: 10,
+      partial: 0,
+      debug_artifact_json: JSON.stringify({ ca_probe_fallback_used: true, ca_probe_error: 'prior probe failure' }),
+      sla_score_pct: 100,
+      sla_pass: 1,
+    });
+    mockProbeCASOSResultCount.mockRejectedValueOnce(new Error('current probe timeout'));
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-11:morning',
+      slot: 'morning',
+      triggerSource: 'external',
+    });
+
+    expect(schedulerAlerts.get('ca_sos:2026-03-11:morning:ca_probe_fallback:operational_warning')).toEqual(
+      expect.objectContaining({
+        alert_type: 'operational_warning',
+        metrics_triggered: ['ca_probe_fallback_repeated'],
+      }),
+    );
+  });
+
+  it('alerts on unexpected CA zero-result slots after recent non-zero runs', async () => {
+    runs.set('ca_sos:2026-03-10:afternoon', {
+      id: 'prior-ca-nonzero',
+      site: 'ca_sos',
+      idempotency_key: 'ca_sos:2026-03-10:afternoon',
+      slot_time: 'ca_sos:2026-03-10:afternoon',
+      trigger_source: 'external',
+      started_at: '2026-03-10T18:00:00.000Z',
+      finished_at: '2026-03-10T18:05:00.000Z',
+      status: 'success',
+      records_scraped: 4,
+      records_skipped: 0,
+      rows_uploaded: 4,
+      amount_found_count: 4,
+      amount_missing_count: 0,
+      amount_coverage_pct: 100,
+      ocr_success_pct: 100,
+      row_fail_pct: 0,
+      deadline_hit: 0,
+      effective_max_records: 4,
+      partial: 0,
+      sla_score_pct: 100,
+      sla_pass: 1,
+    });
+    mockProbeCASOSResultCount.mockResolvedValueOnce(0);
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-11:evening',
+      slot: 'evening',
+      triggerSource: 'external',
+    });
+
+    expect(result.status).toBe('success');
+    expect(mockScraper).not.toHaveBeenCalled();
+    expect(schedulerAlerts.get('ca_sos:2026-03-11:evening:ca_zero_results:operational_warning')).toEqual(
+      expect.objectContaining({
+        alert_type: 'operational_warning',
+        metrics_triggered: ['ca_unexpected_zero_result_slot'],
+      }),
+    );
+  });
+
   it('defers blocked nyc scheduled runs before scraping', async () => {
     connectivityState.set('nyc_acris', {
       site: 'nyc_acris',
@@ -832,6 +949,88 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('deferred');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(result.failure_class).toBe('session_missing_or_stale');
+  });
+
+  it('self-heals Maricopa readiness before running an external scheduled scrape', async () => {
+    mockGetMaricopaPersistedStateReadiness.mockResolvedValueOnce({
+      artifactRetrievalEnabled: true,
+      sessionPresent: false,
+      sessionFresh: false,
+      sessionMaxAgeMinutes: 720,
+      artifactCandidatesPresent: false,
+      artifactCandidatesFresh: false,
+      artifactCandidateCount: 0,
+      artifactCandidateMaxAgeMinutes: 1440,
+      refreshRequired: true,
+      refreshReason: 'session_missing_or_stale',
+      detail: 'Maricopa session is missing. Run refresh:maricopa-session on the droplet.',
+    });
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'maricopa_recorder',
+      idempotencyKey: 'maricopa_recorder:2026-03-11:healed',
+      slot: 'morning',
+      triggerSource: 'external',
+    });
+
+    expect(result.status).toBe('success');
+    expect(mockHealMaricopaScheduledRunReadiness).toHaveBeenCalledTimes(1);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers Maricopa after one failed self-heal pass', async () => {
+    mockGetMaricopaPersistedStateReadiness.mockResolvedValueOnce({
+      artifactRetrievalEnabled: true,
+      sessionPresent: false,
+      sessionFresh: false,
+      sessionMaxAgeMinutes: 720,
+      artifactCandidatesPresent: false,
+      artifactCandidatesFresh: false,
+      artifactCandidateCount: 0,
+      artifactCandidateMaxAgeMinutes: 1440,
+      refreshRequired: true,
+      refreshReason: 'session_missing_or_stale',
+      detail: 'Maricopa session is missing. Run refresh:maricopa-session on the droplet.',
+    });
+    mockHealMaricopaScheduledRunReadiness.mockResolvedValueOnce({
+      operation: 'self_heal',
+      ok: false,
+      detail: 'Maricopa artifact candidates are stale. Run discover:maricopa-live on the droplet.',
+      blocking_reason: 'Maricopa artifact candidates are stale. Run discover:maricopa-live on the droplet.',
+      artifact_candidate_count: 0,
+      refresh_required: true,
+      refresh_reason: 'artifact_candidates_stale',
+      readiness: {
+        artifactRetrievalEnabled: true,
+        sessionPresent: true,
+        sessionFresh: true,
+        sessionMaxAgeMinutes: 720,
+        artifactCandidatesPresent: true,
+        artifactCandidatesFresh: false,
+        artifactCandidateCount: 0,
+        artifactCandidateMaxAgeMinutes: 1440,
+        refreshRequired: true,
+        refreshReason: 'artifact_candidates_stale',
+        detail: 'Maricopa artifact candidates are stale. Run discover:maricopa-live on the droplet.',
+      },
+      attempted_refresh: true,
+      attempted_discovery: true,
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'maricopa_recorder',
+      idempotencyKey: 'maricopa_recorder:2026-03-11:heal-fail',
+      slot: 'morning',
+      triggerSource: 'external',
+    });
+
+    expect(result.status).toBe('deferred');
+    expect(result.failure_class).toBe('artifact_candidates_missing');
+    expect(mockScraper).not.toHaveBeenCalled();
   });
 
   it('logs compact NYC probe diagnostics when connectivity probing fails', async () => {

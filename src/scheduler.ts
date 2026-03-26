@@ -35,6 +35,7 @@ import {
 import { debugNYCAcrisBootstrap, probeNYCAcrisConnectivity } from './scraper/nyc_acris';
 import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
 import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
+import { healMaricopaScheduledRunReadiness } from './maintenance/maricopa';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import { sendNewLeadsNotification } from './notifications/email';
 import type { LienRecord, ScrapeResult, ScrapeRunQualitySummary } from './types';
@@ -540,6 +541,52 @@ function parseDebugArtifact(value?: string): unknown {
   }
 }
 
+interface CAScheduledProbeDebugArtifact extends Record<string, unknown> {
+  ca_probe_result_count?: number;
+  ca_probe_zero_results?: boolean;
+  ca_probe_fallback_used?: boolean;
+  ca_probe_error?: string;
+}
+
+function mergeRunDebugArtifact(run: ScheduledRunRecord, patch: Record<string, unknown>): void {
+  const existing = parseDebugArtifact(run.debug_artifact_json);
+  const merged = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? { ...(existing as Record<string, unknown>), ...patch }
+    : patch;
+  run.debug_artifact_json = JSON.stringify(merged);
+}
+
+function applyCAScheduledProbeDebugArtifact(
+  run: ScheduledRunRecord,
+  artifact: CAScheduledProbeDebugArtifact,
+): void {
+  if (
+    artifact.ca_probe_result_count == null &&
+    !artifact.ca_probe_zero_results &&
+    !artifact.ca_probe_fallback_used &&
+    !artifact.ca_probe_error
+  ) {
+    return;
+  }
+
+  mergeRunDebugArtifact(run, artifact);
+}
+
+function readCAScheduledProbeDebugArtifact(run: ScheduledRunRecord): CAScheduledProbeDebugArtifact {
+  const parsed = parseDebugArtifact(run.debug_artifact_json);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const value = parsed as Partial<CAScheduledProbeDebugArtifact>;
+  return {
+    ca_probe_result_count: typeof value.ca_probe_result_count === 'number' ? value.ca_probe_result_count : undefined,
+    ca_probe_zero_results: value.ca_probe_zero_results === true,
+    ca_probe_fallback_used: value.ca_probe_fallback_used === true,
+    ca_probe_error: typeof value.ca_probe_error === 'string' ? value.ca_probe_error : undefined,
+  };
+}
+
 function parseStoredRunSlaComponents(value?: string): RunSlaComponents | undefined {
   if (!value) return undefined;
   try {
@@ -1020,6 +1067,8 @@ function buildSchedulerAlertText(alert: SchedulerAlertRecord): string {
       return `Missed scheduled scrape run for ${alert.site} ${alert.slot}. Expected success by ${alert.expected_by}. idempotency_key=${alert.idempotency_key}`;
     case 'quality_anomaly':
       return alert.summary ?? `Quality anomaly for ${alert.site} ${alert.slot}. idempotency_key=${alert.idempotency_key}`;
+    case 'operational_warning':
+      return alert.summary ?? `Operational warning for ${alert.site} ${alert.slot}. idempotency_key=${alert.idempotency_key}`;
   }
 }
 
@@ -1158,6 +1207,77 @@ async function maybeAlertOnCadenceBreach(site: SupportedSite, summary: SiteCompl
     webhook_attempted: delivery.attempted,
     webhook_delivered: delivery.delivered,
   });
+}
+
+async function maybeInsertOperationalWarningAlert(alert: SchedulerAlertRecord): Promise<void> {
+  const existing = await getStore().getAlertByKey(alert.idempotency_key, 'operational_warning');
+  if (existing) return;
+
+  await getStore().insertSchedulerAlert(alert);
+  const delivery = await sendSchedulerStatusAlert(alert);
+  log({
+    stage: 'scheduled_operational_warning_alerted',
+    site: alert.site,
+    idempotency_key: alert.idempotency_key,
+    slot: alert.slot,
+    summary: alert.summary,
+    webhook_attempted: delivery.attempted,
+    webhook_delivered: delivery.delivered,
+  });
+}
+
+async function maybeAlertOnCAOperationalWarnings(
+  run: ScheduledRunRecord,
+  slot: Slot,
+  triggerSource: TriggerSource,
+): Promise<void> {
+  if (run.site !== 'ca_sos' || triggerSource !== 'external' || run.status !== 'success') return;
+
+  const debug = readCAScheduledProbeDebugArtifact(run);
+  const recentRuns = await getStore().getRunHistory(12, 'ca_sos');
+  const priorRuns = recentRuns.filter((entry) => entry.id !== run.id);
+
+  if (
+    debug.ca_probe_fallback_used &&
+    priorRuns.some((entry) => readCAScheduledProbeDebugArtifact(entry).ca_probe_fallback_used)
+  ) {
+    await maybeInsertOperationalWarningAlert({
+      site: run.site,
+      idempotency_key: `${run.idempotency_key}:ca_probe_fallback`,
+      slot,
+      alert_type: 'operational_warning',
+      expected_by: run.finished_at ?? run.started_at,
+      run_id: run.id,
+      metrics_triggered: ['ca_probe_fallback_repeated'],
+      summary: `CA SOS probe fallback repeated for ${slot}. Current fallback_max_records=${run.effective_max_records} probe_error=${debug.ca_probe_error ?? 'unknown'}`,
+      detected_at: run.finished_at ?? run.started_at,
+      records_scraped: run.records_scraped,
+      amount_coverage_pct: run.amount_coverage_pct,
+      ocr_success_pct: run.ocr_success_pct,
+      row_fail_pct: run.row_fail_pct,
+    });
+  }
+
+  if (
+    debug.ca_probe_zero_results &&
+    priorRuns.some((entry) => entry.status === 'success' && entry.records_scraped > 0)
+  ) {
+    await maybeInsertOperationalWarningAlert({
+      site: run.site,
+      idempotency_key: `${run.idempotency_key}:ca_zero_results`,
+      slot,
+      alert_type: 'operational_warning',
+      expected_by: run.finished_at ?? run.started_at,
+      run_id: run.id,
+      metrics_triggered: ['ca_unexpected_zero_result_slot'],
+      summary: `CA SOS returned an unexpected zero-result scheduled slot for ${slot} after recent non-zero runs.`,
+      detected_at: run.finished_at ?? run.started_at,
+      records_scraped: run.records_scraped,
+      amount_coverage_pct: run.amount_coverage_pct,
+      ocr_success_pct: run.ocr_success_pct,
+      row_fail_pct: run.row_fail_pct,
+    });
+  }
 }
 
 async function sendMissedRunAlert(site: SupportedSite, slot: Slot, expectedAtIso: string, key: string): Promise<void> {
@@ -1515,15 +1635,25 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   const testFailureClass = options.testFailureClass;
   const debugBootstrapOnly = options.debugBootstrapOnly === true;
   let connectivityAtStart = await getConnectivityState(site);
+  let caProbeResultCount: number | undefined;
+  let caProbeZeroResults = false;
+  let caProbeFallbackUsed = false;
+  let caProbeError: string | undefined;
 
   if (site === 'maricopa_recorder' && triggerSource === 'external') {
     const readiness = await getMaricopaPersistedStateReadiness();
     if (readiness.refreshRequired) {
-      const failureClass = readiness.refreshReason === 'artifact_candidates_missing' || readiness.refreshReason === 'artifact_candidates_stale'
-        ? 'artifact_candidates_missing'
-        : 'session_missing_or_stale';
-      await applyConnectivityFailure(site, failureClass, readiness.detail);
-      connectivityAtStart = await getConnectivityState(site);
+      const healed = await healMaricopaScheduledRunReadiness();
+      if (healed.ok) {
+        await applyConnectivitySuccess(site, 'probe');
+        connectivityAtStart = await getConnectivityState(site);
+      } else {
+        const failureClass = healed.refresh_reason === 'artifact_candidates_missing' || healed.refresh_reason === 'artifact_candidates_stale'
+          ? 'artifact_candidates_missing'
+          : 'session_missing_or_stale';
+        await applyConnectivityFailure(site, failureClass, healed.blocking_reason ?? healed.detail);
+        connectivityAtStart = await getConnectivityState(site);
+      }
     }
   }
 
@@ -1560,7 +1690,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   if (site === 'ca_sos') {
     try {
       effectiveMaxRecords = await probeCASOSResultCount({ date_start, date_end });
+      caProbeResultCount = effectiveMaxRecords;
       skipScrape = effectiveMaxRecords === 0;
+      caProbeZeroResults = skipScrape;
       log({
         stage: 'scheduled_run_ca_probe_complete',
         site,
@@ -1571,6 +1703,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       });
     } catch (err: any) {
       effectiveMaxRecords = Math.min(seededMaxRecords, getCAScheduleFallbackMaxRecords());
+      caProbeFallbackUsed = true;
+      caProbeError = String(err?.message ?? err);
       log({
         stage: 'scheduled_run_ca_probe_failed',
         site,
@@ -1760,8 +1894,15 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     if (skipScrape) {
       run.status = 'success';
       run.finished_at = new Date().toISOString();
+      applyCAScheduledProbeDebugArtifact(run, {
+        ca_probe_result_count: caProbeResultCount,
+        ca_probe_zero_results: caProbeZeroResults,
+        ca_probe_fallback_used: caProbeFallbackUsed,
+        ca_probe_error: caProbeError,
+      });
       const sla = applyRunSla(run);
       await getStore().updateRun(run);
+      await maybeAlertOnCAOperationalWarnings(run, slot, triggerSource);
 
       log({
         stage: 'scheduled_run_complete',
@@ -1959,6 +2100,12 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.master_fallback_used = masterSync?.fallback_used ? 1 : 0;
         run.anomaly_detected = 0;
         run.debug_artifact_json = undefined;
+        applyCAScheduledProbeDebugArtifact(run, {
+          ca_probe_result_count: caProbeResultCount,
+          ca_probe_zero_results: caProbeZeroResults,
+          ca_probe_fallback_used: caProbeFallbackUsed,
+          ca_probe_error: caProbeError,
+        });
 
         const anomaly = await evaluateQualityAnomaly(site, run);
         run.anomaly_detected = anomaly ? 1 : 0;
@@ -1967,6 +2114,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         await clearNYCCachedRecords(idempotencyKey).catch(() => null);
         await applyConnectivitySuccess(site, 'run');
         await maybeAlertOnSlaBreach(run, slot, finalSla);
+        await maybeAlertOnCAOperationalWarnings(run, slot, triggerSource);
 
         if (anomaly) {
           const anomalyAlert: QualityAnomalyAlertRecord = {

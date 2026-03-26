@@ -67,7 +67,7 @@ export interface ScheduledRunRecord {
   sla_components_json?: string;
 }
 
-export type SchedulerAlertType = 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
+export type SchedulerAlertType = 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach' | 'operational_warning';
 
 interface MissedAlertRecord {
   site: SupportedSite;
@@ -426,7 +426,7 @@ function createCommonSchemaSql(): string[] {
         site TEXT NOT NULL DEFAULT 'ca_sos',
         idempotency_key TEXT NOT NULL,
         slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
+        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning')),
         expected_by TEXT NOT NULL,
         run_id TEXT,
         metrics_triggered TEXT,
@@ -494,7 +494,7 @@ function recreateSchedulerAlertsTable(db: Database.Database): void {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
       metrics_triggered TEXT,
@@ -1232,7 +1232,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           site TEXT NOT NULL DEFAULT 'ca_sos',
           idempotency_key TEXT NOT NULL,
           slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
+          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning')),
           expected_by TIMESTAMPTZ NOT NULL,
           run_id TEXT,
           metrics_triggered TEXT,
@@ -1252,7 +1252,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       `);
       await client.query('ALTER TABLE scheduler_alerts DROP CONSTRAINT IF EXISTS scheduler_alerts_alert_type_check');
       await client.query(
-        "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_alert_type_check CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach'))"
+        "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_alert_type_check CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning'))"
       ).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         if (!/already exists/i.test(message)) throw err;
