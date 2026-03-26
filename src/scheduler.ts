@@ -4,7 +4,12 @@ import path from 'path';
 import { log } from './utils/logger';
 import { scrapers } from './scraper/index';
 import { probeCASOSResultCount } from './scraper/ca_sos_enhanced';
-import { ScheduledRunStore, ScheduledRunRecord, type QualityAnomalyAlertRecord } from './scheduler/store';
+import {
+  ScheduledRunStore,
+  ScheduledRunRecord,
+  type QualityAnomalyAlertRecord,
+  type SchedulerAlertRecord,
+} from './scheduler/store';
 import {
   classifyMaricopaFailure,
   classifyNYCAcrisFailure,
@@ -20,6 +25,13 @@ import {
   type SiteConnectivityFailureClass,
   type SiteConnectivityState,
 } from './scheduler/connectivity';
+import {
+  buildRunSlaEvidence,
+  buildRunSlaSummary,
+  RUN_SLA_POLICY_VERSION,
+  type RunSlaComponents,
+  type RunSlaSummary,
+} from './scheduler/sla';
 import { debugNYCAcrisBootstrap, probeNYCAcrisConnectivity } from './scraper/nyc_acris';
 import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
 import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
@@ -96,6 +108,22 @@ function getScheduleAnomalyRowFailRisePts(): number {
   return Math.max(0, Number(process.env.SCHEDULE_ANOMALY_ROW_FAIL_RISE_PTS ?? '20'));
 }
 
+function getScheduleSlaRollingWindow(): number {
+  return Math.max(1, Number(process.env.SCHEDULE_SLA_ROLLING_WINDOW ?? '20'));
+}
+
+function getScheduleSlaMinimumObservedRuns(): number {
+  return Math.max(1, Number(process.env.SCHEDULE_SLA_MIN_OBSERVED_RUNS ?? '15'));
+}
+
+function getScheduleSlaEnforcementMode(): 'observe' | 'enforce' {
+  return process.env.SCHEDULE_SLA_ENFORCEMENT_MODE === 'enforce' ? 'enforce' : 'observe';
+}
+
+function isScheduleSlaEnforced(): boolean {
+  return getScheduleSlaEnforcementMode() === 'enforce';
+}
+
 export function isScheduleFailureInjectionEnabled(): boolean {
   return process.env.ENABLE_SCHEDULE_FAILURE_INJECTION === '1';
 }
@@ -162,7 +190,32 @@ export interface RunConfidenceSummary {
     partial_record_count: number;
     new_master_row_count: number;
     purged_review_row_count: number;
+    sla_score_pct: number;
+    sla_pass: number;
   };
+  sla: {
+    score_pct: number;
+    pass: boolean;
+    policy_version: string;
+    hard_fail_reason?: string;
+    components: RunSlaComponents;
+  };
+}
+
+export interface SiteComplianceSummary {
+  rolling_window_size: number;
+  rolling_sla_pass_rate_20: number;
+  rolling_sla_pass_count: number;
+  rolling_sla_window_successful_runs: number;
+  rolling_sla_status: 'passing' | 'breached' | 'insufficient_data';
+  observed_run_count: number;
+  minimum_observed_runs: number;
+  minimum_successful_runs: number;
+  previous_business_day: string;
+  previous_business_day_slot_success_count: number;
+  previous_business_day_expected_slots: number;
+  previous_business_day_slots_ok: boolean;
+  site_compliant: boolean;
 }
 
 export interface SiteScheduleState {
@@ -173,6 +226,14 @@ export interface SiteScheduleState {
   latest_run_started_at?: string;
   latest_run_confidence_status?: RunConfidenceSummary['status'];
   latest_run_confidence_reasons?: string[];
+  rolling_sla_pass_rate_20: number;
+  rolling_sla_pass_count: number;
+  rolling_sla_window_successful_runs: number;
+  rolling_sla_status: SiteComplianceSummary['rolling_sla_status'];
+  previous_business_day: string;
+  previous_business_day_slot_success_count: number;
+  previous_business_day_slots_ok: boolean;
+  site_compliant: boolean;
   connectivity: {
     status: SiteConnectivityState['status'];
     next_probe_at?: string;
@@ -189,6 +250,8 @@ export interface SiteScheduleState {
     partial: number;
     deadline_hit: number;
     effective_max_records: number;
+    sla_score_pct: number;
+    sla_pass: number;
   }>;
   latest_anomaly?: {
     run_id: string;
@@ -477,6 +540,148 @@ function parseDebugArtifact(value?: string): unknown {
   }
 }
 
+function parseStoredRunSlaComponents(value?: string): RunSlaComponents | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as Partial<RunSlaComponents>;
+    return {
+      delivery_pct: Number(parsed.delivery_pct ?? 0),
+      integrity_pct: Number(parsed.integrity_pct ?? 0),
+      completeness_pct: Number(parsed.completeness_pct ?? 0),
+      extraction_pct: Number(parsed.extraction_pct ?? 0),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildPersistedOrComputedRunSla(run: ScheduledRunRecord): RunSlaSummary {
+  const computed = buildRunSlaSummary(run);
+  const storedComponents = parseStoredRunSlaComponents(run.sla_components_json);
+
+  if (!run.sla_policy_version) {
+    return computed;
+  }
+
+  return {
+    ...computed,
+    score_pct: typeof run.sla_score_pct === 'number' ? run.sla_score_pct : computed.score_pct,
+    pass: typeof run.sla_pass === 'number' ? run.sla_pass === 1 : computed.pass,
+    policy_version: run.sla_policy_version ?? computed.policy_version,
+    components: storedComponents ?? computed.components,
+  };
+}
+
+function applyRunSla(run: ScheduledRunRecord): RunSlaSummary {
+  const summary = buildRunSlaSummary(run);
+  run.sla_score_pct = summary.score_pct;
+  run.sla_pass = summary.pass ? 1 : 0;
+  run.sla_policy_version = summary.policy_version;
+  run.sla_components_json = JSON.stringify(summary.components);
+  return summary;
+}
+
+function buildPreMasterSlaSummary(run: ScheduledRunRecord): RunSlaSummary {
+  return buildRunSlaSummary({
+    ...run,
+    review_tab_title: run.review_tab_title ?? '__pending_review_sync__',
+  });
+}
+
+function formatDateKey(date: Date, timeZone: string): string {
+  const parts = getDateParts(date, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getPreviousBusinessDayKey(timeZone: string, now = new Date()): string {
+  const cursor = new Date(now);
+  cursor.setUTCDate(cursor.getUTCDate() - 1);
+
+  while (true) {
+    const parts = getDateParts(cursor, timeZone);
+    if (['MO', 'TU', 'WE', 'TH', 'FR'].includes(parts.weekday)) {
+      return `${parts.year}-${parts.month}-${parts.day}`;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+}
+
+function parseScheduledSlot(run: ScheduledRunRecord): { date_key: string; slot: Slot } | null {
+  const sources = [run.idempotency_key, run.slot_time];
+  for (const source of sources) {
+    const match = source.match(/:(\d{4}-\d{2}-\d{2}):(morning|afternoon|evening)(?::|$)/i);
+    if (match) {
+      return {
+        date_key: match[1],
+        slot: match[2] as Slot,
+      };
+    }
+  }
+  return null;
+}
+
+function isComplianceEligibleRun(run: ScheduledRunRecord): boolean {
+  return parseScheduledSlot(run) !== null && run.partial_reason !== 'debug_bootstrap_only';
+}
+
+function roundPercent(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function buildSiteComplianceSummaryFromRuns(
+  site: SupportedSite,
+  runs: ScheduledRunRecord[],
+  now = new Date(),
+): SiteComplianceSummary {
+  const rollingWindowSize = getScheduleSlaRollingWindow();
+  const minimumObservedRuns = getScheduleSlaMinimumObservedRuns();
+  const minimumSuccessfulRuns = rollingWindowSize;
+  const siteTimeZone = getSiteSchedule(site).timezone;
+  const previousBusinessDay = getPreviousBusinessDayKey(siteTimeZone, now);
+  const observedRuns = runs.filter(isComplianceEligibleRun);
+  const successfulRuns = observedRuns.filter((run) => run.status === 'success');
+  const rollingSuccessfulRuns = successfulRuns.slice(0, rollingWindowSize);
+  const rollingSlaPassCount = rollingSuccessfulRuns.filter((run) => (run.sla_pass ?? 0) === 1).length;
+  const rollingSlaPassRate20 = rollingSuccessfulRuns.length > 0
+    ? roundPercent((rollingSlaPassCount / rollingSuccessfulRuns.length) * 100)
+    : 0;
+  const previousBusinessDayPassingSlots = new Set(
+    successfulRuns
+      .map((run) => {
+        const slot = parseScheduledSlot(run);
+        if (!slot || slot.date_key !== previousBusinessDay || (run.sla_pass ?? 0) !== 1) {
+          return null;
+        }
+        return slot.slot;
+      })
+      .filter((value): value is Slot => value !== null),
+  );
+  const observedThresholdMet = observedRuns.length >= minimumObservedRuns;
+  const successfulThresholdMet = rollingSuccessfulRuns.length >= minimumSuccessfulRuns;
+  let rollingStatus: SiteComplianceSummary['rolling_sla_status'] = 'insufficient_data';
+  if (observedThresholdMet && successfulThresholdMet) {
+    rollingStatus = rollingSlaPassRate20 >= 95 ? 'passing' : 'breached';
+  }
+  const previousBusinessDaySlotSuccessCount = previousBusinessDayPassingSlots.size;
+  const previousBusinessDaySlotsOk = previousBusinessDaySlotSuccessCount >= 3;
+
+  return {
+    rolling_window_size: rollingWindowSize,
+    rolling_sla_pass_rate_20: rollingSlaPassRate20,
+    rolling_sla_pass_count: rollingSlaPassCount,
+    rolling_sla_window_successful_runs: rollingSuccessfulRuns.length,
+    rolling_sla_status: rollingStatus,
+    observed_run_count: observedRuns.length,
+    minimum_observed_runs: minimumObservedRuns,
+    minimum_successful_runs: minimumSuccessfulRuns,
+    previous_business_day: previousBusinessDay,
+    previous_business_day_slot_success_count: previousBusinessDaySlotSuccessCount,
+    previous_business_day_expected_slots: 3,
+    previous_business_day_slots_ok: previousBusinessDaySlotsOk,
+    site_compliant: rollingStatus === 'passing' && previousBusinessDaySlotsOk,
+  };
+}
+
 function shouldPersistFailureDebugArtifact(site: SupportedSite, failureClass?: string): boolean {
   return site === 'nyc_acris' && Boolean(
     failureClass &&
@@ -524,34 +729,17 @@ function buildNYCScheduledFailureDebugArtifact(run: ScheduledRunRecord, err: unk
 function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   const reasons: string[] = [];
   const normalizedReviewReasons = normalizeReviewReasonCounts(run.review_reason_counts_json);
-  const sourcePublishConfirmed = Boolean(
-    run.records_scraped === 0 ||
-    (
-      Boolean(run.source_tab_title) ||
-      (run.status === 'success' && run.rows_uploaded === run.records_scraped && run.rows_uploaded > 0)
-    )
-  );
-  const masterSyncConfirmed = Boolean(
-    run.records_scraped === 0 ||
-    run.master_tab_title ||
-    run.review_tab_title ||
-    (run.new_master_row_count ?? 0) > 0 ||
-    (run.purged_review_row_count ?? 0) > 0 ||
-    (run.current_run_quarantined_row_count ?? 0) > 0 ||
-    (run.current_run_conflict_row_count ?? 0) > 0 ||
-    (run.retained_prior_review_row_count ?? 0) > 0 ||
-    (run.master_fallback_used ?? 0) > 0
-  );
-  const uploadedRowsMatchScrapedRows = run.rows_uploaded === run.records_scraped;
+  const sla = buildPersistedOrComputedRunSla(run);
+  const evidence = buildRunSlaEvidence(run);
 
   if (run.status !== 'success') reasons.push('run_not_successful');
-  if (!sourcePublishConfirmed && run.records_scraped > 0) reasons.push('source_tab_missing');
+  if (!evidence.source_publish_confirmed && run.records_scraped > 0) reasons.push('source_tab_missing');
   if (run.partial === 1) reasons.push('partial_run');
   if ((run.retry_exhausted ?? 0) > 0) reasons.push('retry_budget_exhausted');
   if ((run.master_fallback_used ?? 0) > 0) reasons.push('master_publish_fallback_active');
   if ((run.anomaly_detected ?? 0) > 0) reasons.push('quality_anomaly_detected');
-  if (!uploadedRowsMatchScrapedRows) reasons.push('row_upload_mismatch');
-  if (run.records_scraped > 0 && !masterSyncConfirmed) reasons.push('master_tab_missing');
+  if (!evidence.uploaded_rows_match_scraped_rows) reasons.push('row_upload_mismatch');
+  if (run.records_scraped > 0 && !evidence.master_sync_confirmed) reasons.push('master_tab_missing');
   if (run.failure_class === 'range_result_integrity') reasons.push('range_result_integrity');
   if (run.records_scraped > 0 && run.amount_coverage_pct < getAmountMinCoveragePct()) reasons.push('amount_coverage_below_target');
   if (run.records_scraped > 0 && run.ocr_success_pct < 80) reasons.push('ocr_success_below_floor');
@@ -579,6 +767,12 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   ) {
     reasons.push('artifact_fetch_coverage_below_target');
   }
+  if (!sla.pass && sla.hard_fail_reason && !reasons.includes(sla.hard_fail_reason)) {
+    reasons.push(sla.hard_fail_reason);
+  }
+  if (!sla.pass && !sla.hard_fail_reason && sla.score_pct < 95) {
+    reasons.push('sla_below_target');
+  }
 
   let status: RunConfidenceSummary['status'] = 'high';
   if (
@@ -603,14 +797,7 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
   return {
     status,
     reasons,
-    evidence: {
-      source_publish_confirmed: sourcePublishConfirmed,
-      master_sync_confirmed: masterSyncConfirmed,
-      source_tab_title_present: Boolean(run.source_tab_title),
-      master_tab_title_present: Boolean(run.master_tab_title),
-      review_tab_title_present: Boolean(run.review_tab_title),
-      uploaded_rows_match_scraped_rows: uploadedRowsMatchScrapedRows,
-    },
+    evidence,
     metrics: {
       records_scraped: run.records_scraped,
       rows_uploaded: run.rows_uploaded,
@@ -631,6 +818,15 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
       partial_record_count: run.partial_record_count ?? 0,
       new_master_row_count: run.new_master_row_count ?? 0,
       purged_review_row_count: run.purged_review_row_count ?? 0,
+      sla_score_pct: run.sla_score_pct ?? sla.score_pct,
+      sla_pass: typeof run.sla_pass === 'number' ? run.sla_pass : (sla.pass ? 1 : 0),
+    },
+    sla: {
+      score_pct: run.sla_score_pct ?? sla.score_pct,
+      pass: typeof run.sla_pass === 'number' ? run.sla_pass === 1 : sla.pass,
+      policy_version: run.sla_policy_version ?? sla.policy_version,
+      hard_fail_reason: sla.hard_fail_reason,
+      components: parseStoredRunSlaComponents(run.sla_components_json) ?? sla.components,
     },
   };
 }
@@ -812,6 +1008,156 @@ async function loadNYCCachedRecords(idempotencyKey: string): Promise<LienRecord[
 
 async function clearNYCCachedRecords(idempotencyKey: string): Promise<void> {
   await fs.rm(getNYCCachePath(idempotencyKey), { force: true });
+}
+
+function buildSchedulerAlertText(alert: SchedulerAlertRecord): string {
+  switch (alert.alert_type) {
+    case 'sla_breach':
+      return alert.summary ?? `SLA breach for ${alert.site} ${alert.slot}. idempotency_key=${alert.idempotency_key}`;
+    case 'cadence_breach':
+      return alert.summary ?? `Cadence breach for ${alert.site}. idempotency_key=${alert.idempotency_key}`;
+    case 'missed_run':
+      return `Missed scheduled scrape run for ${alert.site} ${alert.slot}. Expected success by ${alert.expected_by}. idempotency_key=${alert.idempotency_key}`;
+    case 'quality_anomaly':
+      return alert.summary ?? `Quality anomaly for ${alert.site} ${alert.slot}. idempotency_key=${alert.idempotency_key}`;
+  }
+}
+
+async function sendSchedulerStatusAlert(alert: SchedulerAlertRecord): Promise<{ attempted: boolean; delivered: boolean }> {
+  const webhook = process.env.SCHEDULE_ALERT_WEBHOOK_URL;
+  if (!webhook) {
+    return { attempted: false, delivered: false };
+  }
+
+  try {
+    const res = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: buildSchedulerAlertText(alert),
+        alert_type: alert.alert_type,
+        site: alert.site,
+        slot: alert.slot,
+        run_id: alert.run_id,
+        idempotency_key: alert.idempotency_key,
+        expected_by: alert.expected_by,
+        detected_at: alert.detected_at,
+        metrics_triggered: alert.metrics_triggered,
+        summary: alert.summary,
+        baseline: {
+          records_scraped: alert.baseline_records_scraped,
+          amount_coverage_pct: alert.baseline_amount_coverage_pct,
+          ocr_success_pct: alert.baseline_ocr_success_pct,
+          row_fail_pct: alert.baseline_row_fail_pct,
+        },
+        current: {
+          records_scraped: alert.records_scraped,
+          amount_coverage_pct: alert.amount_coverage_pct,
+          ocr_success_pct: alert.ocr_success_pct,
+          row_fail_pct: alert.row_fail_pct,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      log({
+        stage: 'scheduler_status_alert_failed',
+        alert_type: alert.alert_type,
+        site: alert.site,
+        run_id: alert.run_id,
+        status: res.status,
+        response: body,
+      });
+      return { attempted: true, delivered: false };
+    }
+
+    return { attempted: true, delivered: true };
+  } catch (err: any) {
+    log({
+      stage: 'scheduler_status_alert_error',
+      alert_type: alert.alert_type,
+      site: alert.site,
+      run_id: alert.run_id,
+      error: String(err?.message ?? err),
+    });
+    return { attempted: true, delivered: false };
+  }
+}
+
+function buildSlaMetricsTriggered(summary: RunSlaSummary): string[] {
+  const triggered: string[] = [];
+  if (summary.hard_fail_reason) triggered.push(summary.hard_fail_reason);
+  if (summary.components.delivery_pct < 95) triggered.push('delivery_pct');
+  if (summary.components.integrity_pct < 95) triggered.push('integrity_pct');
+  if (summary.components.completeness_pct < 95) triggered.push('completeness_pct');
+  if (summary.components.extraction_pct < 95) triggered.push('extraction_pct');
+  return Array.from(new Set(triggered));
+}
+
+async function maybeAlertOnSlaBreach(run: ScheduledRunRecord, slot: Slot, summary: RunSlaSummary): Promise<void> {
+  if (summary.pass) return;
+  const existing = await getStore().getAlertByKey(run.idempotency_key, 'sla_breach');
+  if (existing) return;
+
+  const alert: SchedulerAlertRecord = {
+    site: run.site,
+    idempotency_key: run.idempotency_key,
+    slot,
+    alert_type: 'sla_breach',
+    expected_by: run.finished_at ?? run.started_at,
+    run_id: run.id,
+    metrics_triggered: buildSlaMetricsTriggered(summary),
+    summary: `SLA breach for ${run.site} ${slot}: score=${summary.score_pct.toFixed(2)} hard_fail=${summary.hard_fail_reason ?? 'none'}`,
+    records_scraped: run.records_scraped,
+    amount_coverage_pct: run.amount_coverage_pct,
+    ocr_success_pct: run.ocr_success_pct,
+    row_fail_pct: run.row_fail_pct,
+    detected_at: run.finished_at ?? run.started_at,
+  };
+
+  await getStore().insertSchedulerAlert(alert);
+  const delivery = await sendSchedulerStatusAlert(alert);
+  log({
+    stage: 'scheduled_run_sla_breach_alerted',
+    site: run.site,
+    run_id: run.id,
+    idempotency_key: run.idempotency_key,
+    slot,
+    sla_score_pct: summary.score_pct,
+    sla_hard_fail_reason: summary.hard_fail_reason,
+    webhook_attempted: delivery.attempted,
+    webhook_delivered: delivery.delivered,
+  });
+}
+
+async function maybeAlertOnCadenceBreach(site: SupportedSite, summary: SiteComplianceSummary): Promise<void> {
+  if (summary.observed_run_count === 0 || summary.previous_business_day_slots_ok) return;
+  const idempotencyKey = `${site}:${summary.previous_business_day}:cadence`;
+  const existing = await getStore().getAlertByKey(idempotencyKey, 'cadence_breach');
+  if (existing) return;
+
+  const alert: SchedulerAlertRecord = {
+    site,
+    idempotency_key: idempotencyKey,
+    slot: 'evening',
+    alert_type: 'cadence_breach',
+    expected_by: `${summary.previous_business_day}T23:59:59`,
+    summary: `Cadence breach for ${site} on ${summary.previous_business_day}: ${summary.previous_business_day_slot_success_count}/3 SLA-passing slots`,
+    detected_at: new Date().toISOString(),
+    metrics_triggered: ['previous_business_day_slot_success_count'],
+  };
+
+  await getStore().insertSchedulerAlert(alert);
+  const delivery = await sendSchedulerStatusAlert(alert);
+  log({
+    stage: 'scheduled_site_cadence_breach_alerted',
+    site,
+    previous_business_day: summary.previous_business_day,
+    previous_business_day_slot_success_count: summary.previous_business_day_slot_success_count,
+    webhook_attempted: delivery.attempted,
+    webhook_delivered: delivery.delivered,
+  });
 }
 
 async function sendMissedRunAlert(site: SupportedSite, slot: Slot, expectedAtIso: string, key: string): Promise<void> {
@@ -1040,7 +1386,7 @@ export async function checkSiteConnectivity(): Promise<void> {
     if (site === 'maricopa_recorder') {
       const readiness = await getMaricopaPersistedStateReadiness();
       if (readiness.refreshRequired) {
-        const failureClass = readiness.refreshReason === 'artifact_candidates_missing'
+        const failureClass = readiness.refreshReason === 'artifact_candidates_missing' || readiness.refreshReason === 'artifact_candidates_stale'
           ? 'artifact_candidates_missing'
           : 'session_missing_or_stale';
         await applyConnectivityFailure(site, failureClass, readiness.detail);
@@ -1111,6 +1457,53 @@ export async function checkSiteConnectivity(): Promise<void> {
   }
 }
 
+async function maybeProbeNYCConnectivityBeforeRun(
+  site: SupportedSite,
+  triggerSource: TriggerSource,
+  currentState: SiteConnectivityState,
+): Promise<SiteConnectivityState> {
+  if (
+    site !== 'nyc_acris' ||
+    triggerSource !== 'external' ||
+    !['degraded', 'blocked', 'probing'].includes(currentState.status)
+  ) {
+    return currentState;
+  }
+
+  const probe = await probeNYCAcrisConnectivity();
+  if (probe.ok) {
+    await applyConnectivitySuccess(site, 'probe');
+    const updatedState = await getConnectivityState(site);
+    log({
+      stage: 'scheduled_run_pre_slot_probe_success',
+      site,
+      connectivity_status_before: currentState.status,
+      connectivity_status_after: updatedState.status,
+      transport_mode: probe.transportMode,
+      probe_recovery_action: probe.recoveryAction,
+      probe_bootstrap_strategy: probe.bootstrapStrategy,
+      detail: probe.detail,
+    });
+    return updatedState;
+  }
+
+  const failureClass = probe.failureClass ?? classifyNYCAcrisFailure(probe.detail ?? 'probe_failed');
+  await applyConnectivityFailure(site, failureClass, probe.detail ?? 'probe_failed');
+  const updatedState = await getConnectivityState(site);
+  log({
+    stage: 'scheduled_run_pre_slot_probe_failure',
+    site,
+    connectivity_status_before: currentState.status,
+    connectivity_status_after: updatedState.status,
+    transport_mode: probe.transportMode,
+    failure_class: failureClass,
+    probe_recovery_action: probe.recoveryAction,
+    probe_bootstrap_strategy: probe.bootstrapStrategy,
+    detail: probe.detail,
+  });
+  return updatedState;
+}
+
 export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}): Promise<ScheduledRun> {
   const site = options.site ?? 'ca_sos';
   const requestedSlot = options.slot;
@@ -1126,13 +1519,15 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
   if (site === 'maricopa_recorder' && triggerSource === 'external') {
     const readiness = await getMaricopaPersistedStateReadiness();
     if (readiness.refreshRequired) {
-      const failureClass = readiness.refreshReason === 'artifact_candidates_missing'
+      const failureClass = readiness.refreshReason === 'artifact_candidates_missing' || readiness.refreshReason === 'artifact_candidates_stale'
         ? 'artifact_candidates_missing'
         : 'session_missing_or_stale';
       await applyConnectivityFailure(site, failureClass, readiness.detail);
       connectivityAtStart = await getConnectivityState(site);
     }
   }
+
+  connectivityAtStart = await maybeProbeNYCConnectivityBeforeRun(site, triggerSource, connectivityAtStart);
 
   const existing = await getStore().getByIdempotencyKey(idempotencyKey);
   if (getEnableScheduleIdempotency() && existing && existing.status !== 'error') {
@@ -1247,6 +1642,10 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     master_fallback_used: 0,
     anomaly_detected: 0,
     debug_artifact_json: undefined,
+    sla_score_pct: 0,
+    sla_pass: 0,
+    sla_policy_version: RUN_SLA_POLICY_VERSION,
+    sla_components_json: undefined,
     finished_at: undefined,
   };
 
@@ -1267,12 +1666,14 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       ? deriveFailureClass(site, connectivityAtStart.last_failure_reason)
       : (site === 'maricopa_recorder' ? 'session_missing_or_stale' : 'timeout_or_navigation');
     run.finished_at = new Date().toISOString();
+    applyRunSla(run);
 
     if (existing?.status === 'error') {
       await getStore().updateRun(run);
     } else {
       await getStore().insertRun(run);
     }
+    await maybeAlertOnSlaBreach(run, slot, buildPersistedOrComputedRunSla(run));
 
     log({
       stage: 'scheduled_run_deferred',
@@ -1319,6 +1720,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
       run.failure_class = artifact.ok ? undefined : (artifact.failureClass ?? 'transport_or_bootstrap');
       run.finished_at = new Date().toISOString();
       run.status = artifact.ok ? 'success' : 'error';
+      applyRunSla(run);
       await getStore().updateRun(run);
 
       if (artifact.ok) {
@@ -1358,6 +1760,7 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     if (skipScrape) {
       run.status = 'success';
       run.finished_at = new Date().toISOString();
+      const sla = applyRunSla(run);
       await getStore().updateRun(run);
 
       log({
@@ -1373,6 +1776,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         deadline_hit: 0,
         effective_max_records: effectiveMaxRecords,
         partial: 0,
+        sla_score_pct: sla.score_pct,
+        sla_pass: sla.pass,
         tab_title: null,
       });
 
@@ -1451,19 +1856,6 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           throw new Error(`sheet_upload_mismatch uploaded=${uploadResult.uploaded} records=${records.length}`);
         }
 
-        const masterSync = await syncMasterSheetTab({ currentSourceTab: uploadResult.tab_title });
-        let leadAlertResult = { attempted: false, delivered: false };
-        if ((masterSync?.new_master_row_count ?? 0) > 0) {
-          leadAlertResult = await sendNewLeadsNotification({
-            site,
-            run_id: runId,
-            idempotency_key: idempotencyKey,
-            new_master_row_count: masterSync!.new_master_row_count,
-            master_tab_title: masterSync!.tab_title,
-            target_spreadsheet_id_suffix: masterSync!.target_spreadsheet_id.slice(-6),
-          });
-        }
-
         run.records_scraped = records.length;
         run.records_skipped = quality.recordsSkipped;
         run.rows_uploaded = uploadResult.uploaded;
@@ -1490,6 +1882,58 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.retry_exhausted = 0;
         run.finished_at = new Date().toISOString();
         run.source_tab_title = uploadResult.tab_title;
+        run.master_tab_title = undefined;
+        run.review_tab_title = undefined;
+        run.quarantined_row_count = quality.quarantinedCount;
+        run.current_run_quarantined_row_count = quality.quarantinedCount;
+        run.current_run_conflict_row_count = 0;
+        run.retained_prior_review_row_count = 0;
+        run.review_reason_counts_json = undefined;
+        run.artifact_retrieval_enabled = quality.artifactRetrievalEnabled;
+        run.artifact_fetch_coverage_pct = quality.artifactFetchCoveragePct;
+        run.enrichment_mode = quality.enrichmentMode;
+        run.artifact_readiness_not_met = quality.artifactReadinessNotMet;
+        run.enriched_record_count = quality.enrichedRecordCount;
+        run.partial_record_count = quality.partialRecordCount;
+        run.new_master_row_count = 0;
+        run.purged_review_row_count = 0;
+        run.master_fallback_used = 0;
+        run.lead_alert_attempted = 0;
+        run.lead_alert_delivered = 0;
+        run.anomaly_detected = 0;
+        run.debug_artifact_json = undefined;
+
+        const preMasterSla = buildPreMasterSlaSummary(run);
+        const forceReviewForCurrentSourceTab = isScheduleSlaEnforced() && !preMasterSla.pass;
+        if (forceReviewForCurrentSourceTab) {
+          log({
+            stage: 'scheduled_run_sla_enforcement_applied',
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            slot,
+            pre_master_sla_score_pct: preMasterSla.score_pct,
+            pre_master_sla_hard_fail_reason: preMasterSla.hard_fail_reason,
+          });
+        }
+
+        const masterSync = await syncMasterSheetTab({
+          currentSourceTab: uploadResult.tab_title,
+          forceReviewForCurrentSourceTab,
+          forceReviewReason: 'sla_breach',
+        });
+        let leadAlertResult = { attempted: false, delivered: false };
+        if ((masterSync?.new_master_row_count ?? 0) > 0) {
+          leadAlertResult = await sendNewLeadsNotification({
+            site,
+            run_id: runId,
+            idempotency_key: idempotencyKey,
+            new_master_row_count: masterSync!.new_master_row_count,
+            master_tab_title: masterSync!.tab_title,
+            target_spreadsheet_id_suffix: masterSync!.target_spreadsheet_id.slice(-6),
+          });
+        }
+
         run.master_tab_title = masterSync?.tab_title;
         run.review_tab_title = masterSync?.review_tab_title;
         run.quarantined_row_count =
@@ -1518,9 +1962,11 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
         const anomaly = await evaluateQualityAnomaly(site, run);
         run.anomaly_detected = anomaly ? 1 : 0;
+        const finalSla = applyRunSla(run);
         await getStore().updateRun(run);
         await clearNYCCachedRecords(idempotencyKey).catch(() => null);
         await applyConnectivitySuccess(site, 'run');
+        await maybeAlertOnSlaBreach(run, slot, finalSla);
 
         if (anomaly) {
           const anomalyAlert: QualityAnomalyAlertRecord = {
@@ -1626,6 +2072,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           master_fallback_used: masterSync?.fallback_used ?? false,
           new_master_row_count: masterSync?.new_master_row_count ?? 0,
           purged_review_row_count: masterSync?.purged_review_row_count ?? 0,
+          sla_score_pct: finalSla.score_pct,
+          sla_pass: finalSla.pass,
+          sla_hard_fail_reason: finalSla.hard_fail_reason,
           lead_alert_attempted: leadAlertResult.attempted,
           lead_alert_delivered: leadAlertResult.delivered,
         });
@@ -1674,7 +2123,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
         run.status = 'error';
         run.retry_exhausted = retryable && !retryBlockedByCircuit && !hasRemainingAttempts ? 1 : 0;
         run.finished_at = new Date().toISOString();
+        const finalSla = applyRunSla(run);
         await getStore().updateRun(run);
+        await maybeAlertOnSlaBreach(run, slot, finalSla);
         log({
           stage: 'scheduled_run_error',
           site,
@@ -1686,6 +2137,8 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
           retryable,
           retry_exhausted: run.retry_exhausted,
           retry_blocked_by_circuit: retryBlockedByCircuit,
+          sla_score_pct: finalSla.score_pct,
+          sla_hard_fail_reason: finalSla.hard_fail_reason,
           error: run.error,
         });
         return run;
@@ -1700,7 +2153,9 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
     run.retry_exhausted = 1;
     const failureDebugArtifact = buildNYCScheduledFailureDebugArtifact(run, err);
     run.debug_artifact_json = failureDebugArtifact ? JSON.stringify(failureDebugArtifact) : undefined;
+    const finalSla = applyRunSla(run);
     await getStore().updateRun(run);
+    await maybeAlertOnSlaBreach(run, slot, finalSla);
     await applyConnectivityFailure(site, failureClass, run.error);
     log({ stage: 'scheduled_run_error', site, run_id: runId, idempotency_key: idempotencyKey, error: run.error });
   }
@@ -1717,7 +2172,20 @@ export async function getRunHistory(limit = 50): Promise<ScheduledRun[]> {
   }));
 }
 
+export async function getSiteComplianceState(now = new Date()): Promise<Record<SupportedSite, SiteComplianceSummary>> {
+  const historyLimit = Math.max(100, getScheduleSlaRollingWindow() * 5, getScheduleSlaMinimumObservedRuns() * 4);
+  const entries = await Promise.all(
+    supportedSites.map(async (site) => {
+      const runs = await getStore().getRunHistory(historyLimit, site);
+      return [site, buildSiteComplianceSummaryFromRuns(site, runs, now)] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries) as Record<SupportedSite, SiteComplianceSummary>;
+}
+
 export async function getScheduleState(): Promise<ScheduleState> {
+  const compliance = await getSiteComplianceState();
   const entries = await Promise.all(
     supportedSites.map(async (site) => {
       const control = await getStore().getControlState(site);
@@ -1729,6 +2197,7 @@ export async function getScheduleState(): Promise<ScheduleState> {
       const latestRunConfidence = latestRun ? buildRunConfidence(latestRun) : undefined;
       const connectivity = await getConnectivityState(site);
       const latestAnomaly = await getStore().getLatestQualityAnomalyAlert(site);
+      const siteCompliance = compliance[site];
 
       const state: SiteScheduleState = {
         effective_max_records: effectiveMax,
@@ -1738,6 +2207,14 @@ export async function getScheduleState(): Promise<ScheduleState> {
         latest_run_started_at: latestRun?.started_at,
         latest_run_confidence_status: latestRunConfidence?.status,
         latest_run_confidence_reasons: latestRunConfidence?.reasons,
+        rolling_sla_pass_rate_20: siteCompliance.rolling_sla_pass_rate_20,
+        rolling_sla_pass_count: siteCompliance.rolling_sla_pass_count,
+        rolling_sla_window_successful_runs: siteCompliance.rolling_sla_window_successful_runs,
+        rolling_sla_status: siteCompliance.rolling_sla_status,
+        previous_business_day: siteCompliance.previous_business_day,
+        previous_business_day_slot_success_count: siteCompliance.previous_business_day_slot_success_count,
+        previous_business_day_slots_ok: siteCompliance.previous_business_day_slots_ok,
+        site_compliant: siteCompliance.site_compliant,
         connectivity: {
           status: connectivity.status,
           next_probe_at: connectivity.next_probe_at,
@@ -1754,6 +2231,8 @@ export async function getScheduleState(): Promise<ScheduleState> {
           partial: run.partial,
           deadline_hit: run.deadline_hit,
           effective_max_records: run.effective_max_records,
+          sla_score_pct: run.sla_score_pct ?? buildPersistedOrComputedRunSla(run).score_pct,
+          sla_pass: typeof run.sla_pass === 'number' ? run.sla_pass : (buildPersistedOrComputedRunSla(run).pass ? 1 : 0),
         })),
         latest_anomaly: latestAnomaly
           ? {
@@ -1814,6 +2293,9 @@ export async function checkMissedRuns(): Promise<void> {
       await sendMissedRunAlert(site, config.slot, expectedAtIso, key);
       log({ stage: 'missed_run_alerted', site, slot: config.slot, idempotency_key: key, expected_by: expectedAtIso });
     }
+
+    const siteRuns = await getStore().getRunHistory(Math.max(100, getScheduleSlaRollingWindow() * 5), site);
+    await maybeAlertOnCadenceBreach(site, buildSiteComplianceSummaryFromRuns(site, siteRuns, now));
   }
 }
 

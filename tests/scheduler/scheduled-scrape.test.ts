@@ -17,6 +17,7 @@ const runs = new Map<string, any>();
 let controlState: any = null;
 const connectivityState = new Map<string, any>();
 const anomalyAlerts = new Map<string, any>();
+const schedulerAlerts = new Map<string, any>();
 const scheduledCacheDir = path.join(process.cwd(), 'out', 'acris', 'scheduled-cache');
 
 vi.mock('../../src/scraper/index', () => ({
@@ -113,6 +114,14 @@ vi.mock('../../src/scheduler/store', () => {
       return null;
     }
 
+    insertSchedulerAlert(alert: any) {
+      schedulerAlerts.set(`${alert.idempotency_key}:${alert.alert_type}`, { ...alert });
+    }
+
+    getAlertByKey(idempotencyKey: string, alertType: string) {
+      return schedulerAlerts.get(`${idempotencyKey}:${alertType}`) ?? null;
+    }
+
     insertQualityAnomalyAlert(alert: any) {
       anomalyAlerts.set(`${alert.idempotency_key}:quality_anomaly`, { ...alert });
     }
@@ -135,6 +144,7 @@ describe('runScheduledScrape', () => {
     controlState = null;
     connectivityState.clear();
     anomalyAlerts.clear();
+    schedulerAlerts.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
     mockProbeMaricopaRecorderConnectivity.mockReset();
@@ -153,10 +163,15 @@ describe('runScheduledScrape', () => {
     });
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
-    fs.rmSync(scheduledCacheDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    try {
+      fs.rmSync(scheduledCacheDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch (err: any) {
+      if (err?.code !== 'EPERM') throw err;
+    }
     process.env.SCHEDULE_RUN_MAX_ATTEMPTS = '3';
     process.env.SCHEDULE_RUN_BASE_DELAY_MS = '0';
     process.env.SCHEDULE_RUN_MAX_DELAY_MS = '0';
+    delete process.env.SCHEDULE_SLA_ENFORCEMENT_MODE;
     delete process.env.SCHEDULE_ALERT_WEBHOOK_URL;
     delete process.env.ENABLE_SCHEDULE_FAILURE_INJECTION;
   });
@@ -437,6 +452,106 @@ describe('runScheduledScrape', () => {
     ]));
   });
 
+  it('alerts on observe-only SLA breaches without blocking master sync', async () => {
+    process.env.SCHEDULE_SLA_ENFORCEMENT_MODE = 'observe';
+    mockProbeCASOSResultCount.mockResolvedValueOnce(2);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: undefined, amount_reason: 'amount_not_found' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 2,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 2,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 2,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {},
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-24:morning:observe-sla',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(result.sla_pass).toBe(0);
+    expect(mockSyncMasterSheetTab).toHaveBeenCalledWith(expect.objectContaining({
+      currentSourceTab: 'tab-name',
+      forceReviewForCurrentSourceTab: false,
+      forceReviewReason: 'sla_breach',
+    }));
+    expect(schedulerAlerts.get('ca_sos:2026-03-24:morning:observe-sla:sla_breach')).toEqual(
+      expect.objectContaining({ alert_type: 'sla_breach' }),
+    );
+  });
+
+  it('forces current source rows into review when SLA enforcement is enabled', async () => {
+    process.env.SCHEDULE_SLA_ENFORCEMENT_MODE = 'enforce';
+    mockProbeCASOSResultCount.mockResolvedValueOnce(2);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: undefined, amount_reason: 'amount_not_found' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 0,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 2,
+      current_run_quarantined_row_count: 2,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 0,
+        quarantined_row_count: 2,
+        purged_review_row_count: 0,
+        review_reason_counts: { sla_breach: 2 },
+        current_run_quarantined_row_count: 2,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-24:afternoon:enforce-sla',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.sla_pass).toBe(0);
+    expect(result.current_run_quarantined_row_count).toBe(2);
+    expect(mockSyncMasterSheetTab).toHaveBeenCalledWith(expect.objectContaining({
+      currentSourceTab: 'tab-name',
+      forceReviewForCurrentSourceTab: true,
+      forceReviewReason: 'sla_breach',
+    }));
+  });
+
   it('does not downgrade confidence for retained prior review rows alone', async () => {
     mockProbeCASOSResultCount.mockResolvedValueOnce(1);
     mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
@@ -669,6 +784,14 @@ describe('runScheduledScrape', () => {
       next_probe_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
       last_failure_reason: 'Requested URL is restricted in accordance with robots.txt (brob)',
     });
+    mockProbeNYCAcrisConnectivity.mockResolvedValueOnce({
+      ok: false,
+      transportMode: 'legacy-sbr-cdp',
+      detail: 'Requested URL is restricted in accordance with robots.txt (brob)',
+      failureClass: 'policy_block',
+      recoveryAction: 'retry_fresh_context',
+      bootstrapStrategy: 'direct_document_type',
+    });
 
     const { runScheduledScrape } = await import('../../src/scheduler');
 
@@ -682,6 +805,7 @@ describe('runScheduledScrape', () => {
     expect(result.status).toBe('deferred');
     expect(mockScraper).not.toHaveBeenCalled();
     expect(result.failure_class).toBe('policy_block');
+    expect(mockProbeNYCAcrisConnectivity).toHaveBeenCalledTimes(1);
   });
 
   it('defers blocked Maricopa scheduled runs before scraping', async () => {

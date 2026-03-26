@@ -11,6 +11,7 @@ const runs = new Map<string, any>();
 const controlState = new Map<string, any>();
 const connectivityState = new Map<string, any>();
 const anomalyAlerts = new Map<string, any>();
+const schedulerAlerts = new Map<string, any>();
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -60,6 +61,10 @@ vi.mock('../../src/scheduler/store', () => {
     listConnectivityStates() { return Array.from(connectivityState.values()); }
     insertMissedAlert() {}
     getMissedAlertByKey() { return null; }
+    insertSchedulerAlert(alert: any) { schedulerAlerts.set(`${alert.idempotency_key}:${alert.alert_type}`, { ...alert }); }
+    getAlertByKey(idempotencyKey: string, alertType: string) {
+      return schedulerAlerts.get(`${idempotencyKey}:${alertType}`) ?? null;
+    }
     insertQualityAnomalyAlert(alert: any) { anomalyAlerts.set(`${alert.idempotency_key}:quality_anomaly`, { ...alert }); }
     getLatestQualityAnomalyAlert(site: string) {
       const alerts = Array.from(anomalyAlerts.values()).filter((alert: any) => alert.site === site);
@@ -77,6 +82,7 @@ describe('site-aware scheduler', () => {
     controlState.clear();
     connectivityState.clear();
     anomalyAlerts.clear();
+    schedulerAlerts.clear();
     mockScraper.mockReset();
     mockProbeCASOSResultCount.mockReset();
     mockPushToSheetsForTab.mockReset();
@@ -183,6 +189,9 @@ describe('site-aware scheduler', () => {
     expect(state.ca_sos.recent_run_count).toBe(1);
     expect(state.nyc_acris.recent_run_count).toBe(1);
     expect(state.ca_sos.latest_run_started_at).toBeTruthy();
+    expect(state.ca_sos.rolling_sla_pass_rate_20).toBeGreaterThanOrEqual(0);
+    expect(typeof state.ca_sos.previous_business_day_slot_success_count).toBe('number');
+    expect(typeof state.ca_sos.previous_business_day_slots_ok).toBe('boolean');
     expect(Array.from(runs.keys())).toEqual(
       expect.arrayContaining(['ca_sos:2026-03-03:morning', 'nyc_acris:2026-03-03:afternoon'])
     );

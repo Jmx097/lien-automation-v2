@@ -210,9 +210,25 @@ app.get("/schedule/confidence", async (req, res) => {
   const limitParam = Number.parseInt(String(req.query.limit ?? '20'), 10);
   const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 20;
   const history = await getRunHistory(limit);
+  const state = await getScheduleState();
 
   res.json({
     generated_at: new Date().toISOString(),
+    sites: Object.fromEntries(
+      Object.entries(state).map(([site, value]) => [
+        site,
+        {
+          rolling_sla_pass_rate_20: value.rolling_sla_pass_rate_20,
+          rolling_sla_pass_count: value.rolling_sla_pass_count,
+          rolling_sla_window_successful_runs: value.rolling_sla_window_successful_runs,
+          rolling_sla_status: value.rolling_sla_status,
+          previous_business_day: value.previous_business_day,
+          previous_business_day_slot_success_count: value.previous_business_day_slot_success_count,
+          previous_business_day_slots_ok: value.previous_business_day_slots_ok,
+          site_compliant: value.site_compliant,
+        },
+      ])
+    ),
     runs: history.map((run) => ({
       id: run.id,
       site: run.site,
@@ -220,6 +236,7 @@ app.get("/schedule/confidence", async (req, res) => {
       finished_at: run.finished_at,
       status: run.status,
       confidence: run.confidence,
+      sla: run.confidence?.sla,
       requested_date_start: run.requested_date_start,
       requested_date_end: run.requested_date_end,
       discovered_count: run.discovered_count,
@@ -242,6 +259,9 @@ app.get("/schedule/confidence", async (req, res) => {
       master_tab_title: run.master_tab_title,
       review_tab_title: run.review_tab_title,
       failure_class: run.failure_class,
+      sla_score_pct: run.sla_score_pct,
+      sla_pass: run.sla_pass === 1,
+      sla_policy_version: run.sla_policy_version,
     })),
   });
 });

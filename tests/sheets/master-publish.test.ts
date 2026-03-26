@@ -358,6 +358,32 @@ describe('syncMasterSheetTab', () => {
     expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[20]).toContain('low_confidence');
   });
 
+  it('forces current-source rows into Review when SLA enforcement is requested', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_current: [sourceRow({ 14: 0.98, 16: 'sla-enforced-file' })],
+    });
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab({
+      currentSourceTab: 'Scheduled_current',
+      forceReviewForCurrentSourceTab: true,
+      forceReviewReason: 'sla_breach',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 0,
+      quarantined_row_count: 1,
+      current_run_quarantined_row_count: 1,
+      review_summary: expect.objectContaining({
+        review_reason_counts: expect.objectContaining({
+          sla_breach: 1,
+        }),
+      }),
+    }));
+    expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([]);
+    expect(ensureWorkbook('target-sheet').get('Review_Queue')?.rows?.[0]?.[20]).toContain('sla_breach');
+  });
+
   it('accepts otherwise-clean mid-confidence rows when they are above the review threshold', async () => {
     process.env.DIRECTOR_MIN_CONFIDENCE_ACCEPT = '0.85';
     process.env.DIRECTOR_MIN_CONFIDENCE_REVIEW = '0.75';
@@ -482,10 +508,10 @@ describe('syncMasterSheetTab', () => {
 
   it('prefers the newer duplicate when confidence and review flags are otherwise tied', async () => {
     seedWorkbook('source-sheet', {
-      'Scheduled_NYC_03-12-2026_to_03-12-2026_20260312T010101_Pacific': [
+      'Scheduled_NYC_03-12-2099_to_03-12-2099_20990312T010101_Pacific': [
         sourceRow({ 2: '100', 14: 0.9, 16: 'duplicate-newer-file' }),
       ],
-      'Scheduled_NYC_03-13-2026_to_03-13-2026_20260313T010101_Pacific': [
+      'Scheduled_NYC_03-13-2099_to_03-13-2099_20990313T010101_Pacific': [
         sourceRow({ 2: '125', 14: 0.9, 16: 'duplicate-newer-file' }),
       ],
     });
@@ -505,7 +531,7 @@ describe('syncMasterSheetTab', () => {
     expect(ensureWorkbook('target-sheet').get('Master')?.rows).toEqual([
       mergedMasterRow(
         { 2: '125', 14: 0.9, 16: 'duplicate-newer-file' },
-        { sourceTab: 'Scheduled_NYC_03-13-2026_to_03-13-2026_20260313T010101_Pacific' }
+        { sourceTab: 'Scheduled_NYC_03-13-2099_to_03-13-2099_20990313T010101_Pacific' }
       ),
     ]);
   });
@@ -544,17 +570,17 @@ describe('syncMasterSheetTab', () => {
 
   it('prefers the current run when an otherwise-identical accepted row already exists in retained history', async () => {
     seedWorkbook('source-sheet', {
-      'Scheduled_old_sched_ca_sos_1773620000000_deadbe_03-09-2026_to_03-16-2026': [
+      'Scheduled_old_sched_ca_sos_1773620000000_deadbe_03-24-2099_to_03-24-2099': [
         sourceRow({ 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' }),
       ],
-      'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026': [
+      'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-24-2099_to_03-24-2099': [
         sourceRow({ 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' }),
       ],
     });
 
     const { syncMasterSheetTab } = await import('../../src/sheets/push');
     const result = await syncMasterSheetTab({
-      currentSourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026',
+      currentSourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-24-2099_to_03-24-2099',
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -573,7 +599,7 @@ describe('syncMasterSheetTab', () => {
       mergedMasterRow(
         { 0: 20, 2: '100', 14: 0.98, 15: 'ca_sos', 16: 'duplicate-current-preferred' },
         {
-          sourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-09-2026_to_03-16-2026',
+          sourceTab: 'Scheduled_current_sched_ca_sos_1773625523337_53ff21_03-24-2099_to_03-24-2099',
           scheduledRunId: 'sched_ca_sos_1773625523337_53ff21',
         }
       ),
@@ -661,13 +687,13 @@ describe('syncMasterSheetTab', () => {
 
   it('accepts a fresh clean CA row even when many retained identical rows already exist', async () => {
     seedWorkbook('source-sheet', {
-      'Scheduled_ca_sos_morning_sched_ca_sos_1773396024549_81fdd3_03-06-2026_to_03-13-2026_20260313T030102_': [
+      'Scheduled_ca_sos_morning_sched_ca_sos_1773396024549_81fdd3_03-24-2099_to_03-24-2099_20990324T030102_': [
         sourceRow({ 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }),
       ],
-      'Scheduled_ca_sos_afternoon_sched_ca_sos_1773417624033_7fd9ef_03-06-2026_to_03-13-2026_20260313T09010': [
+      'Scheduled_ca_sos_afternoon_sched_ca_sos_1773417624033_7fd9ef_03-24-2099_to_03-24-2099_20990324T09010': [
         sourceRow({ 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }),
       ],
-      'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific': [
+      'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-24-2099_to_03-24-2099_20990324T194354_Pacific': [
         sourceRowWithScheduledRunId(
           'sched_ca_sos_1773628803417_2d1c36',
           { 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' }
@@ -677,7 +703,7 @@ describe('syncMasterSheetTab', () => {
 
     const { syncMasterSheetTab } = await import('../../src/sheets/push');
     const result = await syncMasterSheetTab({
-      currentSourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+      currentSourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-24-2099_to_03-24-2099_20990324T194354_Pacific',
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -692,7 +718,7 @@ describe('syncMasterSheetTab', () => {
       mergedMasterRow(
         { 0: 20, 2: '881', 14: 0.98, 15: 'ca_sos', 16: 'U260017962937' },
         {
-          sourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-09-2026_to_03-16-2026_20260315T194354_Pacific',
+          sourceTab: 'Scheduled_ca_sos_evening_sched_ca_sos_1773628803417_03-24-2099_to_03-24-2099_20990324T194354_Pacific',
           scheduledRunId: 'sched_ca_sos_1773628803417_2d1c36',
         }
       ),

@@ -17,7 +17,7 @@ const pgState = {
     idempotency_key: string;
     slot: 'morning' | 'afternoon' | 'evening';
     expected_by: string;
-    alert_type: 'missed_run' | 'quality_anomaly';
+    alert_type: 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
     run_id?: string;
     metrics_triggered?: string;
     summary?: string;
@@ -131,6 +131,10 @@ function buildRunFromColumns(columns: string[], params: unknown[]): StoredRunRow
     lead_alert_delivered: Number(row.lead_alert_delivered ?? 0),
     master_fallback_used: Number(row.master_fallback_used ?? 0),
     anomaly_detected: Number(row.anomaly_detected ?? 0),
+    sla_score_pct: Number(row.sla_score_pct ?? 0),
+    sla_pass: Number(row.sla_pass ?? 0),
+    sla_policy_version: row.sla_policy_version == null ? undefined : String(row.sla_policy_version),
+    sla_components_json: row.sla_components_json == null ? undefined : String(row.sla_components_json),
     created_at: nowIso(),
     updated_at: nowIso(),
   };
@@ -208,6 +212,14 @@ vi.mock('pg', () => {
             returned_count: Number(updates.returned_count ?? existing.returned_count ?? 0),
             filtered_out_count: Number(updates.filtered_out_count ?? existing.filtered_out_count ?? 0),
             partial_reason: updates.partial_reason == null ? undefined : String(updates.partial_reason),
+            sla_score_pct: Number(updates.sla_score_pct ?? existing.sla_score_pct ?? 0),
+            sla_pass: Number(updates.sla_pass ?? existing.sla_pass ?? 0),
+            sla_policy_version: updates.sla_policy_version == null
+              ? existing.sla_policy_version
+              : String(updates.sla_policy_version),
+            sla_components_json: updates.sla_components_json == null
+              ? existing.sla_components_json
+              : String(updates.sla_components_json),
             updated_at: nowIso(),
           });
         }
@@ -309,35 +321,36 @@ vi.mock('pg', () => {
       }
 
       if (normalized.startsWith('INSERT INTO scheduler_alerts')) {
-        const key = `${String(params[1])}:${normalized.includes("'quality_anomaly'") ? 'quality_anomaly' : 'missed_run'}`;
+        const alertType = (
+          normalized.includes("'missed_run'") ? 'missed_run'
+            : normalized.includes("'quality_anomaly'") ? 'quality_anomaly'
+              : String(params[4])
+        ) as 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
+        const key = `${String(params[1])}:${alertType}`;
         if (!pgState.alerts.has(key)) {
+          const usesLiteralAlertType = normalized.includes("'missed_run'") || normalized.includes("'quality_anomaly'");
           pgState.alerts.set(key, {
             site: String(params[0]) as ScheduledRunRecord['site'],
             idempotency_key: String(params[1]),
             slot: String(params[2]) as 'morning' | 'afternoon' | 'evening',
             expected_by: String(params[3]),
-            alert_type: normalized.includes("'quality_anomaly'") ? 'quality_anomaly' : 'missed_run',
-            run_id: params[4] == null ? undefined : String(params[4]),
-            metrics_triggered: params[5] == null ? undefined : String(params[5]),
-            summary: params[6] == null ? undefined : String(params[6]),
-            baseline_records_scraped: params[7] == null ? undefined : Number(params[7]),
-            baseline_amount_coverage_pct: params[8] == null ? undefined : Number(params[8]),
-            baseline_ocr_success_pct: params[9] == null ? undefined : Number(params[9]),
-            baseline_row_fail_pct: params[10] == null ? undefined : Number(params[10]),
-            records_scraped: params[11] == null ? undefined : Number(params[11]),
-            amount_coverage_pct: params[12] == null ? undefined : Number(params[12]),
-            ocr_success_pct: params[13] == null ? undefined : Number(params[13]),
-            row_fail_pct: params[14] == null ? undefined : Number(params[14]),
-            detected_at: params[15] == null ? undefined : String(params[15]),
+            alert_type: alertType,
+            run_id: usesLiteralAlertType ? undefined : (params[5] == null ? undefined : String(params[5])),
+            metrics_triggered: usesLiteralAlertType ? undefined : (params[6] == null ? undefined : String(params[6])),
+            summary: usesLiteralAlertType ? undefined : (params[7] == null ? undefined : String(params[7])),
+            baseline_records_scraped: usesLiteralAlertType ? undefined : (params[8] == null ? undefined : Number(params[8])),
+            baseline_amount_coverage_pct: usesLiteralAlertType ? undefined : (params[9] == null ? undefined : Number(params[9])),
+            baseline_ocr_success_pct: usesLiteralAlertType ? undefined : (params[10] == null ? undefined : Number(params[10])),
+            baseline_row_fail_pct: usesLiteralAlertType ? undefined : (params[11] == null ? undefined : Number(params[11])),
+            records_scraped: usesLiteralAlertType ? undefined : (params[12] == null ? undefined : Number(params[12])),
+            amount_coverage_pct: usesLiteralAlertType ? undefined : (params[13] == null ? undefined : Number(params[13])),
+            ocr_success_pct: usesLiteralAlertType ? undefined : (params[14] == null ? undefined : Number(params[14])),
+            row_fail_pct: usesLiteralAlertType ? undefined : (params[15] == null ? undefined : Number(params[15])),
+            detected_at: usesLiteralAlertType ? undefined : (params[16] == null ? undefined : String(params[16])),
             created_at: nowIso(),
           });
         }
         return { rows: [] };
-      }
-
-      if (normalized.includes("FROM scheduler_alerts WHERE idempotency_key = $1 AND alert_type = 'missed_run'")) {
-        const row = pgState.alerts.get(`${String(params[0])}:missed_run`);
-        return { rows: row ? [row] : [] };
       }
 
       if (normalized.includes("FROM scheduler_alerts") && normalized.includes("alert_type = 'quality_anomaly'")) {
@@ -348,7 +361,7 @@ vi.mock('pg', () => {
       }
 
       if (normalized.includes('FROM scheduler_alerts WHERE idempotency_key = $1')) {
-        const row = pgState.alerts.get(`${String(params[0])}:missed_run`);
+        const row = pgState.alerts.get(`${String(params[0])}:${String(params[1] ?? 'missed_run')}`);
         return { rows: row ? [row] : [] };
       }
 
@@ -379,6 +392,15 @@ function buildRun(id: string, site: ScheduledRunRecord['site'], startedAt: strin
     deadline_hit: 0,
     effective_max_records: 75,
     partial: 0,
+    sla_score_pct: status === 'success' ? 100 : 0,
+    sla_pass: status === 'success' ? 1 : 0,
+    sla_policy_version: 'tri_site_composite_v1',
+    sla_components_json: JSON.stringify({
+      delivery_pct: status === 'success' ? 100 : 0,
+      integrity_pct: status === 'success' ? 100 : 0,
+      completeness_pct: status === 'success' ? 100 : 0,
+      extraction_pct: status === 'success' ? 100 : 0,
+    }),
   };
 }
 
@@ -400,8 +422,11 @@ async function exerciseStore(store: ScheduledRunStore): Promise<void> {
   second.rows_uploaded = 2;
   second.records_scraped = 2;
   second.finished_at = '2026-03-11T12:30:00.000Z';
+  second.sla_score_pct = 96;
+  second.sla_pass = 1;
   await store.updateRun(second);
   expect((await store.getByIdempotencyKey(second.idempotency_key))?.rows_uploaded).toBe(2);
+  expect((await store.getByIdempotencyKey(second.idempotency_key))?.sla_score_pct).toBe(96);
 
   await store.upsertControlState('nyc_acris', 7);
   expect((await store.getControlState('nyc_acris'))?.effective_max_records).toBe(7);
@@ -436,6 +461,19 @@ async function exerciseStore(store: ScheduledRunStore): Promise<void> {
     expected_by: '2026-03-11T22:45:00.000Z',
   });
   expect((await store.getMissedAlertByKey('nyc_acris:2026-03-11:evening'))?.slot).toBe('evening');
+
+  await store.insertSchedulerAlert({
+    site: 'nyc_acris',
+    idempotency_key: 'nyc_acris:2026-03-11:afternoon',
+    slot: 'afternoon',
+    alert_type: 'sla_breach',
+    expected_by: '2026-03-11T14:00:00.000Z',
+    run_id: second.id,
+    metrics_triggered: ['completeness_pct'],
+    summary: 'SLA breach for nyc_acris afternoon',
+    detected_at: '2026-03-11T12:32:00.000Z',
+  });
+  expect((await store.getAlertByKey('nyc_acris:2026-03-11:afternoon', 'sla_breach'))?.alert_type).toBe('sla_breach');
 
   await store.insertQualityAnomalyAlert({
     site: 'nyc_acris',

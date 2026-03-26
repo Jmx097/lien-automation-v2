@@ -160,7 +160,7 @@ export function classifyMaricopaFailure(message: string): MaricopaConnectivityFa
     return 'session_missing_or_stale';
   }
 
-  if (/artifact candidates are missing|discover:maricopa-live|artifact_candidates_missing/.test(normalized)) {
+  if (/artifact candidates are missing|artifact candidates are stale|discover:maricopa-live|artifact_candidates_missing|artifact_candidates_stale/.test(normalized)) {
     return 'artifact_candidates_missing';
   }
 

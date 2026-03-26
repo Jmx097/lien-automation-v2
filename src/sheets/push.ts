@@ -355,7 +355,8 @@ type ReviewReason =
   | 'address_incomplete'
   | 'legacy_missing_metadata'
   | 'partial_run'
-  | 'low_confidence';
+  | 'low_confidence'
+  | 'sla_breach';
 
 type ConflictType =
   | 'duplicate_against_current_run'
@@ -409,6 +410,13 @@ type CollectedSourceRow = {
   sourceTab: string;
   sourceTabCapturedAt?: Date;
   scheduledRunId?: string;
+};
+
+type MergeClassificationOptions = {
+  reviewRetentionCutoff?: Date;
+  currentSourceTab?: string;
+  forceReviewForCurrentSourceTab?: boolean;
+  forceReviewReason?: ReviewReason;
 };
 
 function directorHeadersEndColumn(headers: readonly string[]): string {
@@ -972,6 +980,7 @@ function reviewReasonCategory(reason: ReviewReason): ReviewReasonCategory {
     case 'name_conflict':
     case 'address_incomplete':
     case 'legacy_missing_metadata':
+    case 'sla_breach':
       return 'hard';
     case 'partial_run':
     case 'low_confidence':
@@ -1081,6 +1090,32 @@ function buildCandidate(sourceRow: CollectedSourceRow): DirectorCandidate {
   };
 }
 
+function applyForcedCurrentSourceReview(
+  candidate: DirectorCandidate,
+  options: MergeClassificationOptions,
+): DirectorCandidate {
+  const forceReason = options.forceReviewReason ?? 'sla_breach';
+  if (
+    !options.forceReviewForCurrentSourceTab ||
+    !options.currentSourceTab ||
+    candidate.sourceTab !== options.currentSourceTab ||
+    candidate.reviewReasons.includes(forceReason)
+  ) {
+    return candidate;
+  }
+
+  const reviewReasons = [...candidate.reviewReasons, forceReason];
+  const { hardReasons, softReasons } = categorizeReviewReasons(reviewReasons);
+
+  return {
+    ...candidate,
+    reviewReasons,
+    hardReasons,
+    softReasons,
+    disposition: resolveCandidateDisposition(hardReasons, softReasons, candidate.confidenceScore),
+  };
+}
+
 function buildMergedRow(
   candidate: DirectorCandidate,
   options: {
@@ -1176,14 +1211,16 @@ function quarantineCandidate(
 
 export function classifyMergedRows(
   rows: CollectedSourceRow[],
-  options: { reviewRetentionCutoff?: Date; currentSourceTab?: string } = {}
+  options: MergeClassificationOptions = {}
 ): {
   acceptedRows: any[][];
   quarantinedRows: any[][];
   purgedReviewRowCount: number;
   reviewSummary: ReviewClassificationSummary;
 } {
-  const candidates = rows.map(buildCandidate);
+  const candidates = rows
+    .map(buildCandidate)
+    .map((candidate) => applyForcedCurrentSourceReview(candidate, options));
   const acceptedRows: any[][] = [];
   const quarantinedRows: any[][] = [];
   let purgedReviewRowCount = 0;
@@ -1430,6 +1467,8 @@ export async function syncMasterSheetTab(options: {
   sourceSpreadsheetId?: string;
   targetSpreadsheetId?: string;
   currentSourceTab?: string;
+  forceReviewForCurrentSourceTab?: boolean;
+  forceReviewReason?: ReviewReason;
 } = {}): Promise<MasterSheetSyncResult> {
   const sourceSpreadsheetId = options.sourceSpreadsheetId ?? getSourceSpreadsheetId();
   const configuredTargetSpreadsheetId = options.targetSpreadsheetId ?? getMergedSpreadsheetId();
@@ -1449,6 +1488,8 @@ export async function syncMasterSheetTab(options: {
   const { acceptedRows, quarantinedRows, purgedReviewRowCount, reviewSummary } = classifyMergedRows(rows, {
     reviewRetentionCutoff: getReviewQueueRetentionCutoff(),
     currentSourceTab: options.currentSourceTab,
+    forceReviewForCurrentSourceTab: options.forceReviewForCurrentSourceTab,
+    forceReviewReason: options.forceReviewReason,
   });
 
   const finalize = async (targetSpreadsheetId: string, fallbackUsed: boolean) => {

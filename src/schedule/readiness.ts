@@ -1,6 +1,7 @@
 import { checkOCRRuntime } from '../scraper/ocr-runtime';
 import { getMaricopaPersistedStateReadiness } from '../scraper/maricopa_artifacts';
 import { supportedSites, type SupportedSite } from '../sites';
+import { getSiteComplianceState, type SiteComplianceSummary } from '../scheduler';
 import { ScheduledRunStore, getSchedulerStoreReadiness } from '../scheduler/store';
 import { createDefaultConnectivityState, getNextAllowedRunAt, type SiteConnectivityStatus } from '../scheduler/connectivity';
 import { checkSpreadsheetAccess, getMergedSheetTargetConfig } from '../sheets/push';
@@ -28,6 +29,7 @@ export interface ScheduleReadinessReport {
     last_failure_reason?: string;
     last_success_at?: string;
   }>;
+  site_compliance: Record<SupportedSite, SiteComplianceSummary>;
   maricopa: {
     artifact_retrieval_enabled: boolean;
     enrichment_mode: 'api_only' | 'artifact_enriched';
@@ -35,8 +37,14 @@ export interface ScheduleReadinessReport {
     session_present: boolean;
     session_fresh: boolean;
     session_captured_at?: string;
+    session_age_minutes?: number;
+    session_max_age_minutes?: number;
     artifact_candidates_present: boolean;
     artifact_candidate_count: number;
+    artifact_candidates_fresh: boolean;
+    artifact_candidates_updated_at?: string;
+    artifact_candidate_age_minutes?: number;
+    artifact_candidate_max_age_minutes?: number;
     refresh_required: boolean;
     refresh_reason?: string;
     detail: string;
@@ -237,6 +245,7 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       }] as const;
     });
   const site_connectivity = Object.fromEntries(siteConnectivityEntries) as ScheduleReadinessReport['site_connectivity'];
+  const site_compliance = await getSiteComplianceState();
   const maricopaPersistedState = await getMaricopaPersistedStateReadiness();
   const maricopaConnectivity = site_connectivity.maricopa_recorder;
   if (maricopaPersistedState.artifactRetrievalEnabled && maricopaPersistedState.refreshRequired) {
@@ -264,6 +273,7 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       detail: targetAccess.detail,
     },
     site_connectivity,
+    site_compliance,
     maricopa: {
       artifact_retrieval_enabled: maricopaPersistedState.artifactRetrievalEnabled,
       enrichment_mode: maricopaPersistedState.artifactRetrievalEnabled ? 'artifact_enriched' : 'api_only',
@@ -271,8 +281,14 @@ export async function getScheduleReadinessReport(): Promise<ScheduleReadinessRep
       session_present: maricopaPersistedState.sessionPresent,
       session_fresh: maricopaPersistedState.sessionFresh,
       session_captured_at: maricopaPersistedState.sessionCapturedAt,
+      session_age_minutes: maricopaPersistedState.sessionAgeMinutes,
+      session_max_age_minutes: maricopaPersistedState.sessionMaxAgeMinutes,
       artifact_candidates_present: maricopaPersistedState.artifactCandidatesPresent,
       artifact_candidate_count: maricopaPersistedState.artifactCandidateCount,
+      artifact_candidates_fresh: maricopaPersistedState.artifactCandidatesFresh,
+      artifact_candidates_updated_at: maricopaPersistedState.artifactCandidatesUpdatedAt,
+      artifact_candidate_age_minutes: maricopaPersistedState.artifactCandidateAgeMinutes,
+      artifact_candidate_max_age_minutes: maricopaPersistedState.artifactCandidateMaxAgeMinutes,
       refresh_required: maricopaPersistedState.refreshRequired,
       refresh_reason: maricopaPersistedState.refreshReason,
       detail: maricopaPersistedState.detail,

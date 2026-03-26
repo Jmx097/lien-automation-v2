@@ -37,6 +37,41 @@ function recreateScheduledRunsTable(db: Database.Database): void {
       max_attempts INTEGER NOT NULL DEFAULT 1,
       retried INTEGER NOT NULL DEFAULT 0,
       retry_exhausted INTEGER NOT NULL DEFAULT 0,
+      source_tab_title TEXT,
+      master_tab_title TEXT,
+      review_tab_title TEXT,
+      quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+      current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+      current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0,
+      retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0,
+      review_reason_counts_json TEXT,
+      requested_date_start TEXT,
+      requested_date_end TEXT,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      returned_count INTEGER NOT NULL DEFAULT 0,
+      filtered_out_count INTEGER NOT NULL DEFAULT 0,
+      returned_min_filing_date TEXT,
+      returned_max_filing_date TEXT,
+      upstream_min_filing_date TEXT,
+      upstream_max_filing_date TEXT,
+      partial_reason TEXT,
+      artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+      artifact_fetch_coverage_pct REAL NOT NULL DEFAULT 0,
+      enrichment_mode TEXT,
+      artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0,
+      enriched_record_count INTEGER NOT NULL DEFAULT 0,
+      partial_record_count INTEGER NOT NULL DEFAULT 0,
+      new_master_row_count INTEGER NOT NULL DEFAULT 0,
+      purged_review_row_count INTEGER NOT NULL DEFAULT 0,
+      lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
+      lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
+      master_fallback_used INTEGER NOT NULL DEFAULT 0,
+      anomaly_detected INTEGER NOT NULL DEFAULT 0,
+      debug_artifact_json TEXT,
+      sla_score_pct REAL NOT NULL DEFAULT 0,
+      sla_pass INTEGER NOT NULL DEFAULT 0,
+      sla_policy_version TEXT,
+      sla_components_json TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -116,7 +151,7 @@ function recreateSchedulerAlertsTable(db: Database.Database): void {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
       metrics_triggered TEXT,
@@ -175,6 +210,8 @@ function migrateSchedulerAlertsIfNeeded(db: Database.Database): void {
   if (!table?.sql) return;
   if (
     table.sql.includes("'quality_anomaly'") &&
+    table.sql.includes("'sla_breach'") &&
+    table.sql.includes("'cadence_breach'") &&
     table.sql.includes("'evening'") &&
     table.sql.includes('run_id') &&
     table.sql.includes('detected_at')
@@ -239,6 +276,41 @@ export function ensureDatabaseReady(): string {
         max_attempts INTEGER NOT NULL DEFAULT 1,
         retried INTEGER NOT NULL DEFAULT 0,
         retry_exhausted INTEGER NOT NULL DEFAULT 0,
+        source_tab_title TEXT,
+        master_tab_title TEXT,
+        review_tab_title TEXT,
+        quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+        current_run_quarantined_row_count INTEGER NOT NULL DEFAULT 0,
+        current_run_conflict_row_count INTEGER NOT NULL DEFAULT 0,
+        retained_prior_review_row_count INTEGER NOT NULL DEFAULT 0,
+        review_reason_counts_json TEXT,
+        requested_date_start TEXT,
+        requested_date_end TEXT,
+        discovered_count INTEGER NOT NULL DEFAULT 0,
+        returned_count INTEGER NOT NULL DEFAULT 0,
+        filtered_out_count INTEGER NOT NULL DEFAULT 0,
+        returned_min_filing_date TEXT,
+        returned_max_filing_date TEXT,
+        upstream_min_filing_date TEXT,
+        upstream_max_filing_date TEXT,
+        partial_reason TEXT,
+        artifact_retrieval_enabled INTEGER NOT NULL DEFAULT 0,
+        artifact_fetch_coverage_pct REAL NOT NULL DEFAULT 0,
+        enrichment_mode TEXT,
+        artifact_readiness_not_met INTEGER NOT NULL DEFAULT 0,
+        enriched_record_count INTEGER NOT NULL DEFAULT 0,
+        partial_record_count INTEGER NOT NULL DEFAULT 0,
+        new_master_row_count INTEGER NOT NULL DEFAULT 0,
+        purged_review_row_count INTEGER NOT NULL DEFAULT 0,
+        lead_alert_attempted INTEGER NOT NULL DEFAULT 0,
+        lead_alert_delivered INTEGER NOT NULL DEFAULT 0,
+        master_fallback_used INTEGER NOT NULL DEFAULT 0,
+        anomaly_detected INTEGER NOT NULL DEFAULT 0,
+        debug_artifact_json TEXT,
+        sla_score_pct REAL NOT NULL DEFAULT 0,
+        sla_pass INTEGER NOT NULL DEFAULT 0,
+        sla_policy_version TEXT,
+        sla_components_json TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -251,7 +323,7 @@ export function ensureDatabaseReady(): string {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
       metrics_triggered TEXT,
@@ -368,6 +440,18 @@ export function ensureDatabaseReady(): string {
   }
   if (!scheduledRunColumns.some((column) => column.name === 'retry_exhausted')) {
     db.prepare("ALTER TABLE scheduled_runs ADD COLUMN retry_exhausted INTEGER NOT NULL DEFAULT 0").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'sla_score_pct')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_score_pct REAL NOT NULL DEFAULT 0").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'sla_pass')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_pass INTEGER NOT NULL DEFAULT 0").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'sla_policy_version')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_policy_version TEXT").run();
+  }
+  if (!scheduledRunColumns.some((column) => column.name === 'sla_components_json')) {
+    db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_components_json TEXT").run();
   }
 
   migrateScheduledRunsIfNeeded(db);

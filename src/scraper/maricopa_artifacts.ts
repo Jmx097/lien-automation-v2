@@ -43,10 +43,20 @@ export interface MaricopaPersistedStateReadiness {
   sessionPresent: boolean;
   sessionFresh: boolean;
   sessionCapturedAt?: string;
+  sessionAgeMinutes?: number;
+  sessionMaxAgeMinutes: number;
   artifactCandidatesPresent: boolean;
+  artifactCandidatesFresh: boolean;
   artifactCandidateCount: number;
+  artifactCandidatesUpdatedAt?: string;
+  artifactCandidateAgeMinutes?: number;
+  artifactCandidateMaxAgeMinutes: number;
   refreshRequired: boolean;
-  refreshReason?: 'session_missing_or_stale' | 'artifact_candidates_missing' | 'artifact_retrieval_disabled';
+  refreshReason?:
+    | 'session_missing_or_stale'
+    | 'artifact_candidates_missing'
+    | 'artifact_candidates_stale'
+    | 'artifact_retrieval_disabled';
   detail: string;
 }
 
@@ -115,6 +125,24 @@ async function loadArtifactPayload<T>(key: string): Promise<T | null> {
     return JSON.parse(record.payload_json) as T;
   } catch {
     return null;
+  }
+}
+
+async function loadArtifactUpdatedAt(key: string, fallbackPath?: string): Promise<string | undefined> {
+  try {
+    const record = await withStore((store) => store.getSiteStateArtifact(MARICOPA_SITE, key));
+    if (record?.updated_at) return record.updated_at;
+  } catch {
+    // Fall back to the local filesystem below.
+  }
+
+  if (!fallbackPath) return undefined;
+
+  try {
+    const stat = await fs.stat(fallbackPath);
+    return stat.mtime.toISOString();
+  } catch {
+    return undefined;
   }
 }
 
@@ -195,9 +223,24 @@ export function isUsableMaricopaArtifactPayload(
 }
 
 export function isFreshMaricopaSession(capturedAt: string): boolean {
-  const maxAgeMinutes = Math.max(1, Number(process.env.MARICOPA_SESSION_MAX_AGE_MINUTES ?? '240'));
+  const maxAgeMinutes = getMaricopaSessionMaxAgeMinutes();
   const ageMs = Date.now() - new Date(capturedAt).getTime();
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMinutes * 60 * 1000;
+}
+
+export function getMaricopaSessionMaxAgeMinutes(): number {
+  return Math.max(1, Number(process.env.MARICOPA_SESSION_MAX_AGE_MINUTES ?? '720'));
+}
+
+export function getMaricopaArtifactCandidateMaxAgeMinutes(): number {
+  return Math.max(1, Number(process.env.MARICOPA_ARTIFACT_CANDIDATE_MAX_AGE_MINUTES ?? '1440'));
+}
+
+function getAgeMinutes(iso?: string): number | undefined {
+  if (!iso) return undefined;
+  const ageMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) return undefined;
+  return Math.round(ageMs / 60000);
 }
 
 export function isMaricopaArtifactRetrievalEnabled(): boolean {
@@ -385,6 +428,16 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
   const candidates = await loadMaricopaArtifactCandidates();
   const validCandidates = filterValidMaricopaArtifactCandidates(candidates);
   const sessionFresh = Boolean(session?.captured_at && isFreshMaricopaSession(session.captured_at));
+  const sessionMaxAgeMinutes = getMaricopaSessionMaxAgeMinutes();
+  const artifactCandidateMaxAgeMinutes = getMaricopaArtifactCandidateMaxAgeMinutes();
+  const sessionAgeMinutes = getAgeMinutes(session?.captured_at);
+  const artifactCandidatesUpdatedAt = await loadArtifactUpdatedAt(DISCOVERY_ARTIFACT_KEY, getMaricopaDiscoveryPath());
+  const artifactCandidateAgeMinutes = getAgeMinutes(artifactCandidatesUpdatedAt);
+  const artifactCandidatesFresh = Boolean(
+    artifactCandidatesUpdatedAt &&
+    artifactCandidateAgeMinutes != null &&
+    artifactCandidateAgeMinutes <= artifactCandidateMaxAgeMinutes
+  );
 
   if (!artifactRetrievalEnabled) {
     return {
@@ -392,8 +445,14 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       sessionPresent: Boolean(session),
       sessionFresh,
       sessionCapturedAt: session?.captured_at,
+      sessionAgeMinutes,
+      sessionMaxAgeMinutes,
       artifactCandidatesPresent: validCandidates.length > 0,
+      artifactCandidatesFresh,
       artifactCandidateCount: validCandidates.length,
+      artifactCandidatesUpdatedAt,
+      artifactCandidateAgeMinutes,
+      artifactCandidateMaxAgeMinutes,
       refreshRequired: false,
       refreshReason: 'artifact_retrieval_disabled',
       detail: 'Maricopa artifact retrieval is disabled by configuration.',
@@ -406,12 +465,18 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       sessionPresent: Boolean(session),
       sessionFresh,
       sessionCapturedAt: session?.captured_at,
+      sessionAgeMinutes,
+      sessionMaxAgeMinutes,
       artifactCandidatesPresent: validCandidates.length > 0,
+      artifactCandidatesFresh,
       artifactCandidateCount: validCandidates.length,
+      artifactCandidatesUpdatedAt,
+      artifactCandidateAgeMinutes,
+      artifactCandidateMaxAgeMinutes,
       refreshRequired: true,
       refreshReason: 'session_missing_or_stale',
       detail: session
-        ? `Maricopa session is stale (captured_at=${session.captured_at}). Run refresh:maricopa-session on the droplet.`
+        ? `Maricopa session is stale (captured_at=${session.captured_at}, age_minutes=${sessionAgeMinutes ?? 'unknown'}, max_age_minutes=${sessionMaxAgeMinutes}). Run refresh:maricopa-session on the droplet.`
         : 'Maricopa session is missing. Run refresh:maricopa-session on the droplet.',
     };
   }
@@ -422,8 +487,14 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
       sessionPresent: true,
       sessionFresh: true,
       sessionCapturedAt: session.captured_at,
+      sessionAgeMinutes,
+      sessionMaxAgeMinutes,
       artifactCandidatesPresent: false,
+      artifactCandidatesFresh,
       artifactCandidateCount: 0,
+      artifactCandidatesUpdatedAt,
+      artifactCandidateAgeMinutes,
+      artifactCandidateMaxAgeMinutes,
       refreshRequired: true,
       refreshReason: 'artifact_candidates_missing',
       detail: candidates.length === 0
@@ -432,13 +503,41 @@ export async function getMaricopaPersistedStateReadiness(): Promise<MaricopaPers
     };
   }
 
+  if (!artifactCandidatesFresh) {
+    return {
+      artifactRetrievalEnabled,
+      sessionPresent: true,
+      sessionFresh: true,
+      sessionCapturedAt: session.captured_at,
+      sessionAgeMinutes,
+      sessionMaxAgeMinutes,
+      artifactCandidatesPresent: true,
+      artifactCandidatesFresh: false,
+      artifactCandidateCount: validCandidates.length,
+      artifactCandidatesUpdatedAt,
+      artifactCandidateAgeMinutes,
+      artifactCandidateMaxAgeMinutes,
+      refreshRequired: true,
+      refreshReason: 'artifact_candidates_stale',
+      detail: artifactCandidatesUpdatedAt
+        ? `Maricopa artifact candidates are stale (updated_at=${artifactCandidatesUpdatedAt}, age_minutes=${artifactCandidateAgeMinutes ?? 'unknown'}, max_age_minutes=${artifactCandidateMaxAgeMinutes}). Run discover:maricopa-live on the droplet.`
+        : 'Maricopa artifact candidates are stale or missing freshness metadata. Run discover:maricopa-live on the droplet.',
+    };
+  }
+
   return {
     artifactRetrievalEnabled,
     sessionPresent: true,
     sessionFresh: true,
     sessionCapturedAt: session.captured_at,
+    sessionAgeMinutes,
+    sessionMaxAgeMinutes,
     artifactCandidatesPresent: true,
+    artifactCandidatesFresh: true,
     artifactCandidateCount: validCandidates.length,
+    artifactCandidatesUpdatedAt,
+    artifactCandidateAgeMinutes,
+    artifactCandidateMaxAgeMinutes,
     refreshRequired: false,
     detail: 'Maricopa persisted session and artifact candidates are available.',
   };

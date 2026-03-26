@@ -61,15 +61,39 @@ export interface ScheduledRunRecord {
   master_fallback_used?: number;
   anomaly_detected?: number;
   debug_artifact_json?: string;
+  sla_score_pct?: number;
+  sla_pass?: number;
+  sla_policy_version?: string;
+  sla_components_json?: string;
 }
 
-export type SchedulerAlertType = 'missed_run' | 'quality_anomaly';
+export type SchedulerAlertType = 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
 
 interface MissedAlertRecord {
   site: SupportedSite;
   idempotency_key: string;
   slot: 'morning' | 'afternoon' | 'evening';
   expected_by: string;
+}
+
+export interface SchedulerAlertRecord {
+  site: SupportedSite;
+  idempotency_key: string;
+  slot: 'morning' | 'afternoon' | 'evening';
+  alert_type: SchedulerAlertType;
+  expected_by: string;
+  run_id?: string;
+  metrics_triggered?: string[];
+  summary?: string;
+  baseline_records_scraped?: number;
+  baseline_amount_coverage_pct?: number;
+  baseline_ocr_success_pct?: number;
+  baseline_row_fail_pct?: number;
+  records_scraped?: number;
+  amount_coverage_pct?: number;
+  ocr_success_pct?: number;
+  row_fail_pct?: number;
+  detected_at?: string;
 }
 
 export interface QualityAnomalyAlertRecord {
@@ -130,6 +154,8 @@ interface SchedulerStoreBackend {
   getSiteStateArtifact(site: SupportedSite, artifactKey: string): Promise<SiteStateArtifactRecord | null>;
   insertMissedAlert(alert: MissedAlertRecord): Promise<void>;
   getMissedAlertByKey(idempotencyKey: string): Promise<MissedAlertRecord | null>;
+  insertSchedulerAlert(alert: SchedulerAlertRecord): Promise<void>;
+  getAlertByKey(idempotencyKey: string, alertType: SchedulerAlertType): Promise<SchedulerAlertRecord | null>;
   insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void>;
   getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null>;
 }
@@ -205,6 +231,10 @@ function normalizeScheduledRunRecord(row: Record<string, unknown> | undefined): 
     master_fallback_used: toNumber(row.master_fallback_used || 0),
     anomaly_detected: toNumber(row.anomaly_detected || 0),
     debug_artifact_json: row.debug_artifact_json == null ? undefined : String(row.debug_artifact_json),
+    sla_score_pct: toNumber(row.sla_score_pct || 0),
+    sla_pass: toNumber(row.sla_pass || 0),
+    sla_policy_version: row.sla_policy_version == null ? undefined : String(row.sla_policy_version),
+    sla_components_json: row.sla_components_json == null ? undefined : String(row.sla_components_json),
   };
 }
 
@@ -244,6 +274,29 @@ function normalizeMissedAlertRecord(row: Record<string, unknown> | undefined): M
     idempotency_key: String(row.idempotency_key),
     slot: String(row.slot) as MissedAlertRecord['slot'],
     expected_by: toIso(row.expected_by) ?? '',
+  };
+}
+
+function normalizeSchedulerAlertRecord(row: Record<string, unknown> | undefined): SchedulerAlertRecord | null {
+  if (!row) return null;
+  return {
+    site: String(row.site) as SupportedSite,
+    idempotency_key: String(row.idempotency_key),
+    slot: String(row.slot) as SchedulerAlertRecord['slot'],
+    alert_type: String(row.alert_type) as SchedulerAlertType,
+    expected_by: toIso(row.expected_by) ?? '',
+    run_id: row.run_id == null ? undefined : String(row.run_id),
+    metrics_triggered: parseMetricsTriggered(row.metrics_triggered),
+    summary: row.summary == null ? undefined : String(row.summary),
+    baseline_records_scraped: row.baseline_records_scraped == null ? undefined : toNumber(row.baseline_records_scraped),
+    baseline_amount_coverage_pct: row.baseline_amount_coverage_pct == null ? undefined : toNumber(row.baseline_amount_coverage_pct),
+    baseline_ocr_success_pct: row.baseline_ocr_success_pct == null ? undefined : toNumber(row.baseline_ocr_success_pct),
+    baseline_row_fail_pct: row.baseline_row_fail_pct == null ? undefined : toNumber(row.baseline_row_fail_pct),
+    records_scraped: row.records_scraped == null ? undefined : toNumber(row.records_scraped),
+    amount_coverage_pct: row.amount_coverage_pct == null ? undefined : toNumber(row.amount_coverage_pct),
+    ocr_success_pct: row.ocr_success_pct == null ? undefined : toNumber(row.ocr_success_pct),
+    row_fail_pct: row.row_fail_pct == null ? undefined : toNumber(row.row_fail_pct),
+    detected_at: toIso(row.detected_at),
   };
 }
 
@@ -356,6 +409,10 @@ function createCommonSchemaSql(): string[] {
         master_fallback_used INTEGER NOT NULL DEFAULT 0,
         anomaly_detected INTEGER NOT NULL DEFAULT 0,
         debug_artifact_json TEXT,
+        sla_score_pct REAL NOT NULL DEFAULT 0,
+        sla_pass INTEGER NOT NULL DEFAULT 0,
+        sla_policy_version TEXT,
+        sla_components_json TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -369,7 +426,7 @@ function createCommonSchemaSql(): string[] {
         site TEXT NOT NULL DEFAULT 'ca_sos',
         idempotency_key TEXT NOT NULL,
         slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+        alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
         expected_by TEXT NOT NULL,
         run_id TEXT,
         metrics_triggered TEXT,
@@ -437,7 +494,7 @@ function recreateSchedulerAlertsTable(db: Database.Database): void {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
       metrics_triggered TEXT,
@@ -526,6 +583,8 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       | undefined;
     const alertsNeedRecreate = !alertsTable?.sql ||
       !alertsTable.sql.includes("'quality_anomaly'") ||
+      !alertsTable.sql.includes("'sla_breach'") ||
+      !alertsTable.sql.includes("'cadence_breach'") ||
       !alertsTable.sql.includes("'evening'") ||
       !alertColumns.some((column) => column.name === 'run_id') ||
       !alertColumns.some((column) => column.name === 'detected_at');
@@ -681,6 +740,18 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     if (!scheduledRunColumns.some((column) => column.name === 'debug_artifact_json')) {
       db.prepare("ALTER TABLE scheduled_runs ADD COLUMN debug_artifact_json TEXT").run();
     }
+    if (!scheduledRunColumns.some((column) => column.name === 'sla_score_pct')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_score_pct REAL NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'sla_pass')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_pass INTEGER NOT NULL DEFAULT 0").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'sla_policy_version')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_policy_version TEXT").run();
+    }
+    if (!scheduledRunColumns.some((column) => column.name === 'sla_components_json')) {
+      db.prepare("ALTER TABLE scheduled_runs ADD COLUMN sla_components_json TEXT").run();
+    }
   }
 
   async insertRun(run: ScheduledRunRecord): Promise<void> {
@@ -741,6 +812,10 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
       ['debug_artifact_json', run.debug_artifact_json ?? null],
+      ['sla_score_pct', run.sla_score_pct ?? 0],
+      ['sla_pass', run.sla_pass ?? 0],
+      ['sla_policy_version', run.sla_policy_version ?? null],
+      ['sla_components_json', run.sla_components_json ?? null],
     ];
     const columns = entries.map(([column]) => column);
     const values = entries.map(([, value]) => value);
@@ -802,6 +877,10 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
       ['debug_artifact_json', run.debug_artifact_json ?? null],
+      ['sla_score_pct', run.sla_score_pct ?? 0],
+      ['sla_pass', run.sla_pass ?? 0],
+      ['sla_policy_version', run.sla_policy_version ?? null],
+      ['sla_components_json', run.sla_components_json ?? null],
     ];
     const assignments = entries.map(([column]) => `${column} = ?`).join(', ');
     const values = entries.map(([, value]) => value);
@@ -956,31 +1035,54 @@ class SQLiteSchedulerStoreBackend implements SchedulerStoreBackend {
     return normalizeMissedAlertRecord(row);
   }
 
-  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+  async insertSchedulerAlert(alert: SchedulerAlertRecord): Promise<void> {
     this.getDb().prepare(
       `INSERT OR IGNORE INTO scheduler_alerts (
         site, idempotency_key, slot, expected_by, alert_type, run_id, metrics_triggered, summary,
         baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
         records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
-      ) VALUES (?, ?, ?, ?, 'quality_anomaly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       alert.site,
       alert.idempotency_key,
       alert.slot,
-      alert.detected_at,
-      alert.run_id,
-      JSON.stringify(alert.metrics_triggered),
-      alert.summary,
-      alert.baseline_records_scraped,
-      alert.baseline_amount_coverage_pct,
-      alert.baseline_ocr_success_pct,
-      alert.baseline_row_fail_pct,
-      alert.records_scraped,
-      alert.amount_coverage_pct,
-      alert.ocr_success_pct,
-      alert.row_fail_pct,
-      alert.detected_at
+      alert.detected_at ?? alert.expected_by,
+      alert.alert_type,
+      alert.run_id ?? null,
+      alert.metrics_triggered ? JSON.stringify(alert.metrics_triggered) : null,
+      alert.summary ?? null,
+      alert.baseline_records_scraped ?? null,
+      alert.baseline_amount_coverage_pct ?? null,
+      alert.baseline_ocr_success_pct ?? null,
+      alert.baseline_row_fail_pct ?? null,
+      alert.records_scraped ?? null,
+      alert.amount_coverage_pct ?? null,
+      alert.ocr_success_pct ?? null,
+      alert.row_fail_pct ?? null,
+      alert.detected_at ?? null
     );
+  }
+
+  async getAlertByKey(idempotencyKey: string, alertType: SchedulerAlertType): Promise<SchedulerAlertRecord | null> {
+    const row = this.getDb()
+      .prepare(
+        `SELECT site, idempotency_key, slot, alert_type, expected_by, run_id, metrics_triggered, summary,
+                baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+                records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+         FROM scheduler_alerts
+         WHERE idempotency_key = ? AND alert_type = ?
+         LIMIT 1`
+      )
+      .get(idempotencyKey, alertType) as Record<string, unknown> | undefined;
+    return normalizeSchedulerAlertRecord(row);
+  }
+
+  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+    await this.insertSchedulerAlert({
+      ...alert,
+      alert_type: 'quality_anomaly',
+      expected_by: alert.detected_at,
+    });
   }
 
   async getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null> {
@@ -1074,6 +1176,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
             master_fallback_used INTEGER NOT NULL DEFAULT 0,
             anomaly_detected INTEGER NOT NULL DEFAULT 0,
             debug_artifact_json TEXT,
+            sla_score_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+            sla_pass INTEGER NOT NULL DEFAULT 0,
+            sla_policy_version TEXT,
+            sla_components_json TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )
@@ -1113,6 +1219,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS master_fallback_used INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS anomaly_detected INTEGER NOT NULL DEFAULT 0');
         await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS debug_artifact_json TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS sla_score_pct DOUBLE PRECISION NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS sla_pass INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS sla_policy_version TEXT');
+        await client.query('ALTER TABLE scheduled_runs ADD COLUMN IF NOT EXISTS sla_components_json TEXT');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_started_at ON scheduled_runs(started_at DESC)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_status ON scheduled_runs(status)');
       await client.query('CREATE INDEX IF NOT EXISTS idx_scheduled_runs_site_started_at ON scheduled_runs(site, started_at DESC)');
@@ -1122,7 +1232,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
           site TEXT NOT NULL DEFAULT 'ca_sos',
           idempotency_key TEXT NOT NULL,
           slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+          alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach')),
           expected_by TIMESTAMPTZ NOT NULL,
           run_id TEXT,
           metrics_triggered TEXT,
@@ -1142,7 +1252,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       `);
       await client.query('ALTER TABLE scheduler_alerts DROP CONSTRAINT IF EXISTS scheduler_alerts_alert_type_check');
       await client.query(
-        "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_alert_type_check CHECK(alert_type IN ('missed_run', 'quality_anomaly'))"
+        "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_alert_type_check CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach'))"
       ).catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         if (!/already exists/i.test(message)) throw err;
@@ -1270,6 +1380,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
       ['debug_artifact_json', run.debug_artifact_json ?? null],
+      ['sla_score_pct', run.sla_score_pct ?? 0],
+      ['sla_pass', run.sla_pass ?? 0],
+      ['sla_policy_version', run.sla_policy_version ?? null],
+      ['sla_components_json', run.sla_components_json ?? null],
     ];
     const columns = entries.map(([column]) => column);
     const values = entries.map(([, value]) => value);
@@ -1333,6 +1447,10 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
       ['master_fallback_used', run.master_fallback_used ?? 0],
       ['anomaly_detected', run.anomaly_detected ?? 0],
       ['debug_artifact_json', run.debug_artifact_json ?? null],
+      ['sla_score_pct', run.sla_score_pct ?? 0],
+      ['sla_pass', run.sla_pass ?? 0],
+      ['sla_policy_version', run.sla_policy_version ?? null],
+      ['sla_components_json', run.sla_components_json ?? null],
     ];
     const assignments = entries.map(([column], index) => `${column} = $${index + 1}`).join(', ');
     const values = entries.map(([, value]) => value);
@@ -1515,7 +1633,7 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
     );
   }
 
-  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+  async insertSchedulerAlert(alert: SchedulerAlertRecord): Promise<void> {
     await this.pool.query(
       `INSERT INTO scheduler_alerts (
          site, idempotency_key, slot, expected_by, alert_type, run_id, metrics_triggered, summary,
@@ -1523,29 +1641,52 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
          records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
        )
        VALUES (
-         $1, $2, $3, $4::timestamptz, 'quality_anomaly', $5, $6, $7,
-         $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz
+         $1, $2, $3, $4::timestamptz, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13, $14, $15, $16, $17::timestamptz
        )
        ON CONFLICT(idempotency_key, alert_type) DO NOTHING`,
       [
         alert.site,
         alert.idempotency_key,
         alert.slot,
-        alert.detected_at,
-        alert.run_id,
-        JSON.stringify(alert.metrics_triggered),
-        alert.summary,
-        alert.baseline_records_scraped,
-        alert.baseline_amount_coverage_pct,
-        alert.baseline_ocr_success_pct,
-        alert.baseline_row_fail_pct,
-        alert.records_scraped,
-        alert.amount_coverage_pct,
-        alert.ocr_success_pct,
-        alert.row_fail_pct,
-        alert.detected_at,
+        alert.detected_at ?? alert.expected_by,
+        alert.alert_type,
+        alert.run_id ?? null,
+        alert.metrics_triggered ? JSON.stringify(alert.metrics_triggered) : null,
+        alert.summary ?? null,
+        alert.baseline_records_scraped ?? null,
+        alert.baseline_amount_coverage_pct ?? null,
+        alert.baseline_ocr_success_pct ?? null,
+        alert.baseline_row_fail_pct ?? null,
+        alert.records_scraped ?? null,
+        alert.amount_coverage_pct ?? null,
+        alert.ocr_success_pct ?? null,
+        alert.row_fail_pct ?? null,
+        alert.detected_at ?? null,
       ]
     );
+  }
+
+  async getAlertByKey(idempotencyKey: string, alertType: SchedulerAlertType): Promise<SchedulerAlertRecord | null> {
+    return normalizeSchedulerAlertRecord(
+      await this.queryRow<Record<string, unknown>>(
+        `SELECT site, idempotency_key, slot, alert_type, expected_by, run_id, metrics_triggered, summary,
+                baseline_records_scraped, baseline_amount_coverage_pct, baseline_ocr_success_pct, baseline_row_fail_pct,
+                records_scraped, amount_coverage_pct, ocr_success_pct, row_fail_pct, detected_at
+         FROM scheduler_alerts
+         WHERE idempotency_key = $1 AND alert_type = $2
+         LIMIT 1`,
+        [idempotencyKey, alertType]
+      )
+    );
+  }
+
+  async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {
+    await this.insertSchedulerAlert({
+      ...alert,
+      alert_type: 'quality_anomaly',
+      expected_by: alert.detected_at,
+    });
   }
 
   async getLatestQualityAnomalyAlert(site: SupportedSite): Promise<QualityAnomalyAlertRecord | null> {
@@ -1662,6 +1803,16 @@ export class ScheduledRunStore {
   async getMissedAlertByKey(idempotencyKey: string): Promise<MissedAlertRecord | null> {
     await this.ensureReady();
     return this.backend.getMissedAlertByKey(idempotencyKey);
+  }
+
+  async insertSchedulerAlert(alert: SchedulerAlertRecord): Promise<void> {
+    await this.ensureReady();
+    await this.backend.insertSchedulerAlert(alert);
+  }
+
+  async getAlertByKey(idempotencyKey: string, alertType: SchedulerAlertType): Promise<SchedulerAlertRecord | null> {
+    await this.ensureReady();
+    return this.backend.getAlertByKey(idempotencyKey, alertType);
   }
 
   async insertQualityAnomalyAlert(alert: QualityAnomalyAlertRecord): Promise<void> {

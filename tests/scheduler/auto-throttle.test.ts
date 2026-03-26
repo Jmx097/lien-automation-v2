@@ -10,6 +10,7 @@ const mockSyncMasterSheetTab = vi.fn();
 const runs = new Map<string, any>();
 let controlState: any = null;
 const connectivityState = new Map<string, any>();
+const schedulerAlerts = new Map<string, any>();
 
 vi.mock('../../src/scraper/index', () => ({
   scrapers: {
@@ -53,6 +54,10 @@ vi.mock('../../src/scheduler/store', () => {
     listConnectivityStates() { return Array.from(connectivityState.values()); }
     insertMissedAlert() {}
     getMissedAlertByKey() { return null; }
+    insertSchedulerAlert(alert: any) { schedulerAlerts.set(`${alert.idempotency_key}:${alert.alert_type}`, { ...alert }); }
+    getAlertByKey(idempotencyKey: string, alertType: string) {
+      return schedulerAlerts.get(`${idempotencyKey}:${alertType}`) ?? null;
+    }
     insertQualityAnomalyAlert() {}
     getLatestQualityAnomalyAlert() { return null; }
   }
@@ -66,6 +71,7 @@ describe('scheduler auto-throttle', () => {
     runs.clear();
     controlState = { site: 'ca_sos', effective_max_records: 75 };
     connectivityState.clear();
+    schedulerAlerts.clear();
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
     mockSyncMasterSheetTab.mockReset();
