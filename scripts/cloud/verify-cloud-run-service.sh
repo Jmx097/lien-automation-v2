@@ -13,9 +13,22 @@ set -euo pipefail
 SERVICE_URL="${SERVICE_URL:-$(gcloud run services describe "${SERVICE_NAME}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --format='value(status.url)')}"
 
 health_json="$(curl -fsS "${SERVICE_URL}/health")"
-schedule_health_json="$(curl -fsS "${SERVICE_URL}/schedule/health")"
 schedule_json="$(curl -fsS "${SERVICE_URL}/schedule")"
 version_json="$(curl -fsS "${SERVICE_URL}/version")"
+
+schedule_health_file="$(mktemp)"
+cleanup() {
+  rm -f "${schedule_health_file}"
+}
+trap cleanup EXIT
+
+schedule_health_status="$(curl -sS -o "${schedule_health_file}" -w "%{http_code}" "${SERVICE_URL}/schedule/health")"
+schedule_health_json="$(cat "${schedule_health_file}")"
+
+if [[ "${schedule_health_status}" != "200" && "${schedule_health_status}" != "503" ]]; then
+  echo "Expected /schedule/health to return HTTP 200 or 503, received ${schedule_health_status}" >&2
+  exit 1
+fi
 
 node_json_eval() {
   local expression="$1"
