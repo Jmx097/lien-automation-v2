@@ -1,0 +1,35 @@
+name: Codex Daily Tri-Site Diagnosis
+
+on:
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+jobs:
+  codex-diagnosis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Run Codex daily diagnosis and review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5.3-codex
+          CODEX_REPORT_DIR: ${{ github.workspace }}/tmp/codex-reports
+        run: node scripts/codex/daily-tri-site-review.mjs
+
+      - name: Upload diagnosis artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-daily-tri-site-diagnosis
+          path: tmp/codex-reports/
+          if-no-files-found: error
