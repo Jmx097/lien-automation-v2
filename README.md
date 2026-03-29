@@ -463,6 +463,9 @@ Use GitHub as the deployment source of truth for both hosted environments:
 
 - **Cloud Run service**: run `.github/workflows/deploy-cloud-run-service.yml` with the target ref.
 - **DigitalOcean droplet**: run `.github/workflows/deploy-droplet.yml` with the target ref.
+- **Daily Codex tri-site diagnosis**: `.github/workflows/codex-daily-tri-site-review.yml` runs once per day (13:00 UTC) and on demand. It sends the exact prompt below to Codex, then runs a second Codex pass that code-reviews the first output and uploads both markdown reports + JSON to workflow artifacts.
+  - Prompt: `analyze the workspace and diagnose how strong California, NYC Acris and Mericopa are all pulling 3x a day with 95% accuracy`
+  - Secret required: `OPENAI_API_KEY`
 - **Droplet rollout logic** lives in `scripts/ops/deploy-droplet.sh` and assumes the server has a clean git checkout plus systemd units already installed.
 
 Required GitHub configuration:
@@ -633,4 +636,3 @@ Expected response includes the same `git_sha` you exported. Operators should alw
 
 Please do not commit editor or manual backup files (for example `*.bak`, `*.broken`, or `*.bak-*`).
 These are local artifacts and should remain untracked.
-
