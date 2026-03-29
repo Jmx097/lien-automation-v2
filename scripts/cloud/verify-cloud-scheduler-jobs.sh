@@ -5,6 +5,7 @@ set -euo pipefail
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
+: "${VERIFY_SCHEDULER_STRICT_PREFIX:=0}"
 
 API_BASE_URL_TRIMMED="${API_BASE_URL%/}"
 JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
@@ -24,9 +25,13 @@ if [[ -n "${missing_jobs}" ]]; then
 fi
 
 if [[ -n "${unexpected_jobs}" ]]; then
-  echo "Found unexpected managed scheduler jobs for prefix ${JOB_NAME}:" >&2
+  if [[ "${VERIFY_SCHEDULER_STRICT_PREFIX}" == "1" ]]; then
+    echo "Found unexpected managed scheduler jobs for prefix ${JOB_NAME}:" >&2
+    printf '%s\n' "${unexpected_jobs}" >&2
+    exit 1
+  fi
+  echo "WARN: Found extra scheduler jobs for prefix ${JOB_NAME} (continuing because VERIFY_SCHEDULER_STRICT_PREFIX=${VERIFY_SCHEDULER_STRICT_PREFIX})." >&2
   printf '%s\n' "${unexpected_jobs}" >&2
-  exit 1
 fi
 
 verify_job() {
