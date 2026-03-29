@@ -51,7 +51,29 @@ verify_job() {
   actual_method="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.httpTarget?.httpMethod ?? ''))")"
   actual_body="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const body=p.httpTarget?.body ? Buffer.from(String(p.httpTarget.body), 'base64').toString('utf8') : '';process.stdout.write(body)")"
   local bodies_match
-  bodies_match="$(node -e "const actual=JSON.parse(process.argv[1]); const expected=JSON.parse(process.argv[2]); process.stdout.write(JSON.stringify(actual) === JSON.stringify(expected) ? 'true' : 'false');" "${actual_body}" "${expected_body}")"
+  bodies_match="$(
+    node -e "
+      function normalize(value) {
+        if (Array.isArray(value)) return value.map(normalize);
+        if (value && typeof value === 'object') {
+          const sorted = {};
+          for (const key of Object.keys(value).sort()) {
+            sorted[key] = normalize(value[key]);
+          }
+          return sorted;
+        }
+        return value;
+      }
+      const parseJson = (raw) => {
+        const text = String(raw ?? '').trim();
+        if (!text) return {};
+        return JSON.parse(text);
+      };
+      const actual = normalize(parseJson(process.argv[1]));
+      const expected = normalize(parseJson(process.argv[2]));
+      process.stdout.write(JSON.stringify(actual) === JSON.stringify(expected) ? 'true' : 'false');
+    " "${actual_body}" "${expected_body}"
+  )"
 
   [[ "${actual_schedule}" == "${expected_schedule}" ]] || { echo "${name}: expected schedule ${expected_schedule}, got ${actual_schedule}" >&2; exit 1; }
   [[ "${actual_timezone}" == "${expected_timezone}" ]] || { echo "${name}: expected time zone ${expected_timezone}, got ${actual_timezone}" >&2; exit 1; }
