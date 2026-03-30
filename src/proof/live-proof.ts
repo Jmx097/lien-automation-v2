@@ -138,10 +138,17 @@ async function runSharedCanary(config: SharedCanaryRunnerConfig, deps?: Partial<
     date_end: window.date_end,
     run_started_at: resolvedDeps.now(),
   });
-  const masterSync = await resolvedDeps.syncMaster({
-    includePrefixes: config.syncPrefixes,
-  });
   const incompleteRecords = countIncompleteRecords(rows);
+  const masterSync = rows.length > 0
+    ? await resolvedDeps.syncMaster({
+      includePrefixes: config.syncPrefixes,
+    })
+    : {
+      tab_title: '',
+      review_tab_title: '',
+      quarantined_row_count: 0,
+      new_master_row_count: 0,
+    };
 
   return {
     site: config.site,

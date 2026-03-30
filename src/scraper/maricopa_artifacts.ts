@@ -238,7 +238,10 @@ export function getMaricopaArtifactCandidateMaxAgeMinutes(): number {
 
 function getAgeMinutes(iso?: string): number | undefined {
   if (!iso) return undefined;
-  const ageMs = Date.now() - new Date(iso).getTime();
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso)
+    ? iso.replace(' ', 'T') + 'Z'
+    : iso;
+  const ageMs = Date.now() - new Date(normalized).getTime();
   if (!Number.isFinite(ageMs) || ageMs < 0) return undefined;
   return Math.round(ageMs / 60000);
 }

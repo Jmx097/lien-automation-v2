@@ -1,8 +1,24 @@
 import dotenv from 'dotenv';
 import { validateNYCAcrisSelectors } from '../src/scraper/nyc_acris';
-import { resolveTransportMode } from '../src/browser/transport';
+import { resolveTransportMode, type BrowserTransportMode } from '../src/browser/transport';
 
 dotenv.config();
+
+function readValidationTransportOverride(): BrowserTransportMode | undefined {
+  const raw = process.env.NYC_ACRIS_VALIDATION_TRANSPORT_MODE?.trim();
+  if (!raw) return undefined;
+
+  if (
+    raw === 'brightdata-browser-api' ||
+    raw === 'brightdata-proxy' ||
+    raw === 'legacy-sbr-cdp' ||
+    raw === 'local'
+  ) {
+    return raw;
+  }
+
+  throw new Error(`Invalid NYC_ACRIS_VALIDATION_TRANSPORT_MODE: ${raw}`);
+}
 
 function logStageEvent(event: {
   step: string;
@@ -19,13 +35,17 @@ function logStageEvent(event: {
 }
 
 async function main(): Promise<void> {
+  const transportModeOverride = readValidationTransportOverride();
   const requestedTransportMode = resolveTransportMode({
     site: 'nyc_acris',
     purpose: 'diagnostic',
+    transportModeOverride,
   });
 
-  if (requestedTransportMode !== 'brightdata-browser-api') {
-    throw new Error('NYC live selector validation requires BRIGHTDATA_BROWSER_WS Browser API transport');
+  if (requestedTransportMode === 'local') {
+    throw new Error(
+      'NYC live selector validation requires a remote browser transport. Configure BRIGHTDATA_BROWSER_WS, SBR_CDP_URL, or set NYC_ACRIS_VALIDATION_TRANSPORT_MODE accordingly.',
+    );
   }
 
   const maxDocuments = Number(process.env.ACRIS_VALIDATION_MAX_DOCS ?? '2');
@@ -36,6 +56,7 @@ async function main(): Promise<void> {
     max_documents: maxDocuments,
     onStageEvent: logStageEvent,
     transportPolicyPurpose: 'diagnostic',
+    transportModeOverride,
   });
 
   console.log(
@@ -63,6 +84,11 @@ void main().catch((err) => {
         {
           error: err.message,
           name: err.name,
+          requestedTransportMode: resolveTransportMode({
+            site: 'nyc_acris',
+            purpose: 'diagnostic',
+            transportModeOverride: readValidationTransportOverride(),
+          }),
         },
         null,
         2

@@ -182,6 +182,69 @@ describe('maricopa artifact helpers', () => {
     fs.rmSync(maricopaOutDir, { recursive: true, force: true });
   });
 
+  it('accepts freshly discovered DB candidates when updated_at uses sqlite timestamp formatting', async () => {
+    process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL = '1';
+    delete process.env.DATABASE_URL;
+
+    vi.doMock('../../src/scheduler/store', () => ({
+      ScheduledRunStore: class {
+        async getSiteStateArtifact(site: string, artifactKey: string) {
+          if (site !== 'maricopa_recorder') return null;
+
+          if (artifactKey === 'session_state') {
+            return {
+              site,
+              artifact_key: artifactKey,
+              payload_json: JSON.stringify({
+                meta: {
+                  version: 1,
+                  captured_at: new Date().toISOString(),
+                  transport_mode: 'brightdata-browser-api',
+                  source_url: 'https://example.test',
+                  cookie_summary: [],
+                },
+                storage_state: {
+                  cookies: [],
+                  origins: [],
+                },
+              }),
+              updated_at: '2026-03-30 16:04:38',
+            };
+          }
+
+          if (artifactKey === 'artifact_candidates') {
+            return {
+              site,
+              artifact_key: artifactKey,
+              payload_json: JSON.stringify([
+                {
+                  urlTemplate: 'https://publicapi.recorder.maricopa.gov/preview/pdf?recordingNumber={recordingNumber}&suffix=',
+                  sampleUrl: 'https://publicapi.recorder.maricopa.gov/preview/pdf?recordingNumber=20260017884&suffix=',
+                  kind: 'pdf',
+                },
+              ]),
+              updated_at: '2026-03-30 16:05:08',
+            };
+          }
+
+          return null;
+        }
+        async close() {
+          return null;
+        }
+      },
+    }));
+
+    const { getMaricopaPersistedStateReadiness } = await import('../../src/scraper/maricopa_artifacts');
+    const readiness = await getMaricopaPersistedStateReadiness();
+
+    expect(readiness.refreshRequired).toBe(false);
+    expect(readiness.artifactCandidatesFresh).toBe(true);
+    expect(readiness.artifactCandidateAgeMinutes).toBeTypeOf('number');
+
+    delete process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL;
+  });
+
   it('rejects HTML or non-artifact download bodies before they are saved', () => {
     const pdfBody = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\ntrailer\n%%EOF\n' + ' '.repeat(48), 'latin1');
     const htmlBody = Buffer.from('<html><body>Just a moment...</body></html>', 'utf8');

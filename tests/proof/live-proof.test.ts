@@ -93,6 +93,39 @@ describe('live proof helpers', () => {
     });
   });
 
+  it('treats a zero-row CA canary as a successful no-op merge', async () => {
+    const pushRun = vi.fn().mockResolvedValue({
+      uploaded: 0,
+      tab_title: 'ca_sos_canary_03-06-2026_to_03-13-2026_20260313T110000_Pacific',
+    });
+    const syncMaster = vi.fn();
+    const scrape = vi.fn().mockResolvedValue([]);
+
+    const summary = await runCASOSCanary({
+      now: () => new Date('2026-03-13T12:00:00Z'),
+      pushRun,
+      syncMaster,
+      scrape,
+    });
+
+    expect(syncMaster).not.toHaveBeenCalled();
+    expect(summary).toEqual({
+      site: 'ca_sos',
+      date_start: '03/06/2026',
+      date_end: '03/13/2026',
+      max_records: 25,
+      records_scraped: 0,
+      complete_records: 0,
+      incomplete_records: 0,
+      rows_uploaded: 0,
+      source_tab_title: 'ca_sos_canary_03-06-2026_to_03-13-2026_20260313T110000_Pacific',
+      master_tab_title: '',
+      review_tab_title: '',
+      quarantined_row_count: 0,
+      new_master_row_count: 0,
+    });
+  });
+
   it('summarizes Maricopa readiness from persisted state helpers', async () => {
     const capturedAt = new Date().toISOString();
     const readiness = await getMaricopaProofReadiness({
