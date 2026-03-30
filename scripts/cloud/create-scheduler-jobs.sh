@@ -6,6 +6,7 @@ set -euo pipefail
 : "${JOB_NAME:=lien-scraper-schedule-run}"
 : "${API_BASE_URL:?Set API_BASE_URL, e.g. https://your-service-url}"
 : "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
+: "${PRUNE_STALE_MANAGED_JOBS:=1}"
 
 # Retry policy requirements.
 : "${RETRY_COUNT:=3}"
@@ -14,6 +15,28 @@ set -euo pipefail
 : "${MAX_BACKOFF:=300s}"
 
 JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
+
+prune_stale_jobs () {
+  local stale_jobs
+  stale_jobs="$(
+    gcloud scheduler jobs list --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json \
+      | node -e "const fs=require('fs'); const jobs=JSON.parse(fs.readFileSync(0,'utf8')); const specs=JSON.parse(process.argv[1]); const expected=new Set((specs.specs ?? []).map((spec) => spec.jobName)); const prefix=String(specs.jobPrefix ?? '') + '-'; const names=(Array.isArray(jobs) ? jobs : []).map((job) => String(job.name ?? '').split('/').pop() ?? '').filter(Boolean); const stale=names.filter((name) => name.startsWith(prefix) && !expected.has(name)); process.stdout.write(stale.join('\n'));" "${JOB_SPECS_JSON}"
+  )"
+
+  if [[ -z "${stale_jobs}" ]]; then
+    return
+  fi
+
+  echo "Pruning stale scheduler jobs for prefix ${JOB_NAME}:"
+  printf '%s\n' "${stale_jobs}"
+  while IFS= read -r job_name; do
+    [[ -n "${job_name}" ]] || continue
+    gcloud scheduler jobs delete "${job_name}" \
+      --location="${GCP_REGION}" \
+      --project="${GCP_PROJECT_ID}" \
+      --quiet
+  done <<< "${stale_jobs}"
+}
 
 create_or_update_job () {
   local name="$1"
@@ -59,6 +82,11 @@ done < <(
   printf '%s' "${JOB_SPECS_JSON}" | API_BASE_URL="${API_BASE_URL}" node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); const base=(process.env.API_BASE_URL ?? '').replace(/\/$/, ''); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, \`\${base}\${spec.path ?? '/schedule/run'}\`, JSON.stringify(spec.body ?? {})].join('\t') + '\n'); }"
 )
 
-echo "Scheduler jobs upserted using derived job specs from scheduler environment."
+if [[ "${PRUNE_STALE_MANAGED_JOBS}" == "1" ]]; then
+  prune_stale_jobs
+else
+  echo "Skipping stale scheduler job pruning (PRUNE_STALE_MANAGED_JOBS=${PRUNE_STALE_MANAGED_JOBS})."
+fi
 
+echo "Scheduler jobs upserted using derived job specs from scheduler environment."
 

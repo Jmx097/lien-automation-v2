@@ -140,10 +140,12 @@ jobs:
       - name: Reconcile Cloud Scheduler jobs
         env:
           API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+          PRUNE_STALE_MANAGED_JOBS: "1"
         run: |
           bash scripts/cloud/create-scheduler-jobs.sh
 
       - name: Verify Cloud Scheduler jobs
         env:
           API_BASE_URL: ${{ steps.service-url.outputs.service_url }}
+          VERIFY_SCHEDULER_STRICT_PREFIX: "1"
         run: bash scripts/cloud/verify-cloud-scheduler-jobs.sh

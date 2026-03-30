@@ -85,7 +85,7 @@ verify_job() {
 while IFS=$'\t' read -r name schedule time_zone uri body; do
   verify_job "${name}" "${schedule}" "${body}" "${time_zone}" "${uri}"
 done < <(
-  printf '%s' "${JOB_SPECS_JSON}" | API_BASE_URL="${API_BASE_URL_TRIMMED}" node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); const base=(process.env.API_BASE_URL ?? '').replace(/\/$/, ''); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, `${base}${spec.path ?? '/schedule/run'}`, JSON.stringify(spec.body ?? {})].join('\t') + '\n'); }"
+  printf '%s' "${JOB_SPECS_JSON}" | API_BASE_URL="${API_BASE_URL_TRIMMED}" node -e "const fs=require('fs'); const payload=JSON.parse(fs.readFileSync(0,'utf8')); const base=(process.env.API_BASE_URL ?? '').replace(/\/$/, ''); for (const spec of payload.specs ?? []) { process.stdout.write([spec.jobName, spec.schedule, spec.timeZone, base + (spec.path ?? '/schedule/run'), JSON.stringify(spec.body ?? {})].join('\t') + '\n'); }"
 )
 
 echo "Cloud Scheduler jobs verified for ${API_BASE_URL_TRIMMED}"

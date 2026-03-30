@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const ANALYSIS_PROMPT =
   'analyze the workspace and diagnose how strong California, NYC Acris and Mericopa are all pulling 3x a day with 95% accuracy';
@@ -9,12 +10,10 @@ const model = process.env.OPENAI_MODEL || 'gpt-5.3-codex';
 const apiKey = process.env.OPENAI_API_KEY;
 const outputDir = process.env.CODEX_REPORT_DIR || path.join(process.cwd(), 'tmp', 'codex-reports');
 
-if (!apiKey) {
-  console.error('Missing OPENAI_API_KEY. Set it in the workflow secrets before running this automation.');
-  process.exit(1);
-}
-
 async function requestCodex(prompt, metadata = {}) {
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY. Set it in the workflow secrets before running this automation.');
+  }
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
@@ -34,10 +33,11 @@ async function requestCodex(prompt, metadata = {}) {
   }
 
   const payload = await response.json();
-  const text = payload.output_text?.trim();
+  const text = extractResponseText(payload);
 
   if (!text) {
-    throw new Error('Codex API response did not include output_text.');
+    const statusSuffix = typeof payload.status === 'string' ? ` Response status: ${payload.status}.` : '';
+    throw new Error(`Codex API response did not include any text output.${statusSuffix}`);
   }
 
   return {
@@ -47,6 +47,42 @@ async function requestCodex(prompt, metadata = {}) {
   };
 }
 
+export function extractResponseText(payload) {
+  if (typeof payload?.output_text === 'string') {
+    const text = payload.output_text.trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  if (!Array.isArray(payload?.output)) {
+    return '';
+  }
+
+  const parts = [];
+
+  for (const item of payload.output) {
+    if (!Array.isArray(item?.content)) {
+      continue;
+    }
+
+    for (const contentItem of item.content) {
+      if (
+        (contentItem?.type === 'output_text' || contentItem?.type === 'text') &&
+        typeof contentItem.text === 'string'
+      ) {
+        const text = contentItem.text.trim();
+
+        if (text) {
+          parts.push(text);
+        }
+      }
+    }
+  }
+
+  return parts.join('\n\n').trim();
+}
 function buildReviewPrompt(analysisText) {
   return [
     'You are a strict senior code reviewer.',
@@ -90,7 +126,12 @@ async function main() {
   console.log(`Saved Codex analysis and review to ${outputDir}`);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+const isDirectExecution =
+  typeof process.argv[1] === 'string' && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
