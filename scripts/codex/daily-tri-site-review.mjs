@@ -14,6 +14,7 @@ async function requestCodex(prompt, metadata = {}) {
   if (!apiKey) {
     throw new Error('Missing OPENAI_API_KEY. Set it in the workflow secrets before running this automation.');
   }
+
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
@@ -83,6 +84,7 @@ export function extractResponseText(payload) {
 
   return parts.join('\n\n').trim();
 }
+
 function buildReviewPrompt(analysisText) {
   return [
     'You are a strict senior code reviewer.',
