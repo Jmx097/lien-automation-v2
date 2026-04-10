@@ -5,7 +5,12 @@ set -euo pipefail
 : "${GCP_REGION:?Set GCP_REGION}"
 : "${API_BASE_URL:?Set API_BASE_URL}"
 : "${JOB_NAME:=lien-scraper-schedule-run}"
+: "${SCHEDULE_RUN_TOKEN:?Set SCHEDULE_RUN_TOKEN}"
 : "${VERIFY_SCHEDULER_STRICT_PREFIX:=0}"
+: "${RETRY_COUNT:=3}"
+: "${MAX_RETRY_DURATION:=1800s}"
+: "${MIN_BACKOFF:=30s}"
+: "${MAX_BACKOFF:=300s}"
 
 API_BASE_URL_TRIMMED="${API_BASE_URL%/}"
 JOB_SPECS_JSON="$(node scripts/cloud/scheduler-job-specs.js)"
@@ -44,12 +49,20 @@ verify_job() {
   local description
   description="$(gcloud scheduler jobs describe "${name}" --location="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format=json)"
 
-  local actual_schedule actual_timezone actual_uri actual_method actual_body
+  local actual_schedule actual_timezone actual_uri actual_method actual_body actual_headers_json
+  local actual_content_type actual_scheduler_token actual_retry_count actual_max_retry_duration actual_min_backoff actual_max_backoff
   actual_schedule="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.schedule ?? ''))")"
   actual_timezone="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.timeZone ?? ''))")"
   actual_uri="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.httpTarget?.uri ?? ''))")"
   actual_method="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.httpTarget?.httpMethod ?? ''))")"
   actual_body="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const body=p.httpTarget?.body ? Buffer.from(String(p.httpTarget.body), 'base64').toString('utf8') : '';process.stdout.write(body)")"
+  actual_headers_json="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(p.httpTarget?.headers ?? {}))")"
+  actual_content_type="$(printf '%s' "${actual_headers_json}" | node -e "const fs=require('fs');const headers=JSON.parse(fs.readFileSync(0,'utf8'));const normalized=Object.fromEntries(Object.entries(headers).map(([key,value]) => [String(key).toLowerCase(), String(value)]));process.stdout.write(normalized['content-type'] ?? '')")"
+  actual_scheduler_token="$(printf '%s' "${actual_headers_json}" | node -e "const fs=require('fs');const headers=JSON.parse(fs.readFileSync(0,'utf8'));const normalized=Object.fromEntries(Object.entries(headers).map(([key,value]) => [String(key).toLowerCase(), String(value)]));process.stdout.write(normalized['x-scheduler-token'] ?? '')")"
+  actual_retry_count="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.retryConfig?.retryCount ?? ''))")"
+  actual_max_retry_duration="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.retryConfig?.maxRetryDuration ?? ''))")"
+  actual_min_backoff="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.retryConfig?.minBackoffDuration ?? ''))")"
+  actual_max_backoff="$(printf '%s' "${description}" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(String(p.retryConfig?.maxBackoffDuration ?? ''))")"
   local bodies_match
   bodies_match="$(
     node -e "
@@ -79,6 +92,13 @@ verify_job() {
   [[ "${actual_timezone}" == "${expected_timezone}" ]] || { echo "${name}: expected time zone ${expected_timezone}, got ${actual_timezone}" >&2; exit 1; }
   [[ "${actual_uri}" == "${expected_uri}" ]] || { echo "${name}: expected URI ${expected_uri}, got ${actual_uri}" >&2; exit 1; }
   [[ "${actual_method}" == "POST" ]] || { echo "${name}: expected HTTP method POST, got ${actual_method}" >&2; exit 1; }
+  [[ "${actual_content_type}" == "application/json" ]] || { echo "${name}: expected Content-Type application/json, got ${actual_content_type}" >&2; exit 1; }
+  [[ -n "${actual_scheduler_token}" ]] || { echo "${name}: missing x-scheduler-token header" >&2; exit 1; }
+  [[ "${actual_scheduler_token}" == "${SCHEDULE_RUN_TOKEN}" ]] || { echo "${name}: x-scheduler-token header does not match configured scheduler token" >&2; exit 1; }
+  [[ "${actual_retry_count}" == "${RETRY_COUNT}" ]] || { echo "${name}: expected retry count ${RETRY_COUNT}, got ${actual_retry_count}" >&2; exit 1; }
+  [[ "${actual_max_retry_duration}" == "${MAX_RETRY_DURATION}" ]] || { echo "${name}: expected max retry duration ${MAX_RETRY_DURATION}, got ${actual_max_retry_duration}" >&2; exit 1; }
+  [[ "${actual_min_backoff}" == "${MIN_BACKOFF}" ]] || { echo "${name}: expected min backoff ${MIN_BACKOFF}, got ${actual_min_backoff}" >&2; exit 1; }
+  [[ "${actual_max_backoff}" == "${MAX_BACKOFF}" ]] || { echo "${name}: expected max backoff ${MAX_BACKOFF}, got ${actual_max_backoff}" >&2; exit 1; }
   [[ "${bodies_match}" == "true" ]] || { echo "${name}: expected body ${expected_body}, got ${actual_body}" >&2; exit 1; }
 }
 

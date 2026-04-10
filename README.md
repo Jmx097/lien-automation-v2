@@ -170,6 +170,8 @@ Important optional environment variables:
 - `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_MORNING_RUN_HOUR`, `SCHEDULE_CA_SOS_MORNING_RUN_MINUTE`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_CA_SOS_EVENING_RUN_HOUR`, `SCHEDULE_CA_SOS_EVENING_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_CA_SOS_TIMEZONE`
 - `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`
 - `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`
+- `MARICOPA_MAINTENANCE_TIMEZONE`, `MARICOPA_MAINTENANCE_DAYS`, `MARICOPA_SESSION_REFRESH_MORNING_RUN_HOUR`, `MARICOPA_SESSION_REFRESH_MORNING_RUN_MINUTE`, `MARICOPA_SESSION_REFRESH_EVENING_RUN_HOUR`, `MARICOPA_SESSION_REFRESH_EVENING_RUN_MINUTE`, `MARICOPA_DISCOVERY_RUN_HOUR`, `MARICOPA_DISCOVERY_RUN_MINUTE`
+- `TRI_SITE_PROOF_TIMEZONE`, `TRI_SITE_PROOF_WEEKLY_DAYS`, `TRI_SITE_PROOF_RUN_HOUR`, `TRI_SITE_PROOF_RUN_MINUTE`
 - `NYC_ACRIS_TRANSPORT_MODE`
 - `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`
 - `ACRIS_MAX_RESULT_PAGES`, `ACRIS_INITIAL_MAX_RECORDS`, `ACRIS_INITIAL_MAX_RESULT_PAGES`, `ACRIS_OUT_DIR`
@@ -473,20 +475,22 @@ Required GitHub configuration:
 - **Actions secrets (Cloud Run)**: `GCP_PROJECT_ID`, `GCP_REGION`, `GAR_REPOSITORY`, `GCP_SA_KEY_JSON`, `SHEET_ID`, `CLOUDSQL_INSTANCE_CONNECTION_NAME`, `DATABASE_URL_SECRET_REF`, `SCHEDULE_RUN_TOKEN_SECRET_REF`, `SHEETS_KEY_SECRET_REF`, `SBR_CDP_URL_SECRET_REF`
 - Optional Cloud Run alerting secrets: `LIEN_AUTOMATION_LEAD_ALERT_WEBHOOK_URL`, `SCHEDULE_ALERT_WEBHOOK_URL`, `LEAD_ALERT_EMAIL_FROM`, `LEAD_ALERT_RESEND_API_KEY`
 - **Actions secrets (Droplet)**: `DO_HOST`, `DO_USERNAME`, `DO_SSH_KEY`, `DO_APP_DIRECTORY`
-- **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_CA_SOS_TIMEZONE`, `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_MORNING_RUN_HOUR`, `SCHEDULE_CA_SOS_MORNING_RUN_MINUTE`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_CA_SOS_EVENING_RUN_HOUR`, `SCHEDULE_CA_SOS_EVENING_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
+- **Actions secrets or variables (optional scheduler tuning)**: `SCHEDULE_CA_SOS_TIMEZONE`, `SCHEDULE_CA_SOS_WEEKLY_DAYS`, `SCHEDULE_CA_SOS_MORNING_RUN_HOUR`, `SCHEDULE_CA_SOS_MORNING_RUN_MINUTE`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_HOUR`, `SCHEDULE_CA_SOS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_CA_SOS_EVENING_RUN_HOUR`, `SCHEDULE_CA_SOS_EVENING_RUN_MINUTE`, `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`, `SCHEDULE_MARICOPA_RECORDER_TIMEZONE`, `SCHEDULE_MARICOPA_RECORDER_WEEKLY_DAYS`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_MORNING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_AFTERNOON_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_HOUR`, `SCHEDULE_MARICOPA_RECORDER_EVENING_RUN_MINUTE`, `SCHEDULE_MARICOPA_RECORDER_MAX_RECORDS`, `SCHEDULE_NYC_ACRIS_TIMEZONE`, `SCHEDULE_NYC_ACRIS_WEEKLY_DAYS`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_MORNING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_AFTERNOON_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_HOUR`, `SCHEDULE_NYC_ACRIS_EVENING_RUN_MINUTE`, `SCHEDULE_NYC_ACRIS_MAX_RECORDS`, `MARICOPA_MAINTENANCE_TIMEZONE`, `MARICOPA_MAINTENANCE_DAYS`, `MARICOPA_SESSION_REFRESH_MORNING_RUN_HOUR`, `MARICOPA_SESSION_REFRESH_MORNING_RUN_MINUTE`, `MARICOPA_SESSION_REFRESH_EVENING_RUN_HOUR`, `MARICOPA_SESSION_REFRESH_EVENING_RUN_MINUTE`, `MARICOPA_DISCOVERY_RUN_HOUR`, `MARICOPA_DISCOVERY_RUN_MINUTE`, `TRI_SITE_PROOF_TIMEZONE`, `TRI_SITE_PROOF_WEEKLY_DAYS`, `TRI_SITE_PROOF_RUN_HOUR`, `TRI_SITE_PROOF_RUN_MINUTE`, `CLOUD_SCHEDULER_RETRY_COUNT`, `CLOUD_SCHEDULER_MAX_RETRY_DURATION`, `CLOUD_SCHEDULER_MIN_BACKOFF`, `CLOUD_SCHEDULER_MAX_BACKOFF`, `AMOUNT_MIN_COVERAGE_PCT`, `SCHEDULE_AUTO_THROTTLE`, `SCHEDULE_MAX_RECORDS`, `SCHEDULE_MAX_RECORDS_FLOOR`, `SCHEDULE_MAX_RECORDS_CEILING`, `REQUIRE_OCR_TOOLS`
 
 Cloud Run workflow expectation:
 
 - GitHub Actions deploys should preserve the Cloud SQL instance attachment, inject `DATABASE_URL` from Secret Manager, and publish the workflow commit SHA to `/version` via `GIT_SHA`.
 - The current runtime secret mapping is `DATABASE_URL`, `SCHEDULE_RUN_TOKEN`, `SHEETS_KEY`, and `SBR_CDP_URL` from Secret Manager-backed env vars; `SHEET_ID` and schedule tuning remain plain env vars.
+- The deploy workflow now exports the same scheduler timing/retry env vars into the Cloud Run deploy step and the Cloud Scheduler reconcile/verify steps so job specs stay aligned with the deployed service configuration.
 - The Cloud Run runtime service account must have `roles/secretmanager.secretAccessor` on those runtime secrets.
 - Avoid printing raw Cloud Run environment values during troubleshooting; hosted env output includes secrets such as scheduler tokens, Sheets credentials, and database credentials.
 
 ## Schedule Source of Truth
 
-Production scheduling now uses **an external scheduler** targeting one authenticated endpoint: `POST /schedule/run`.
+Production scheduling now uses **an external scheduler** targeting authenticated operational endpoints derived from `scripts/cloud/scheduler-job-specs.js`.
 
-- **Execution target:** `POST /schedule/run` only
+- **Primary execution target:** `POST /schedule/run`
+- **Additional scheduler-managed endpoints:** `POST /maintenance/maricopa/session-refresh`, `POST /maintenance/maricopa/discover`, and `POST /schedule/proof/export`
 - **Authentication:** required via `Authorization: Bearer $SCHEDULE_RUN_TOKEN` (or `x-scheduler-token`)
 - **Timezone:** `America/Denver` for all three sites in the default Cloud Run workflow configuration.
 - **CA SOS semantics:** `SCHEDULE_CA_SOS_*_RUN_HOUR` / `SCHEDULE_CA_SOS_*_RUN_MINUTE` are finish-by times, and the external trigger should use `GET /schedule` `trigger_time` (finish-by minus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`)
@@ -517,7 +521,14 @@ Linux cron example:
   -d '{"site":"nyc_acris","slot":"evening"}'
 ```
 
-Cloud Scheduler equivalent: create one job per site/slot with the schedule returned by `GET /schedule`, since CA SOS trigger times are derived from finish-by targets plus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`.
+Cloud Scheduler equivalent: reconcile the managed job set from `scripts/cloud/scheduler-job-specs.js`, since CA SOS trigger times are derived from finish-by targets plus `SCHEDULE_CA_SOS_TRIGGER_LEAD_MINUTES`.
+
+The default managed Cloud Scheduler set is 13 jobs:
+
+- 9 authenticated `POST /schedule/run` jobs for the three CA/Maricopa/NYC scrape slots.
+- 2 authenticated `POST /maintenance/maricopa/session-refresh` jobs.
+- 1 authenticated `POST /maintenance/maricopa/discover` job.
+- 1 authenticated `POST /schedule/proof/export` job.
 
 For operator evidence backfills outside CI, run `npm run proof:scheduled-evidence`. The script executes scheduled runs with deterministic proof idempotency keys, then prints the resulting persisted run evidence, `GET /schedule` next-run config, and per-site state summary.
 
@@ -530,7 +541,7 @@ bash scripts/cloud/verify-cloud-scheduler-jobs.sh
 ```
 
 - `create-scheduler-jobs.sh` is the production reconciliation path for Cloud Scheduler and should be run after Cloud Run deploys or any schedule-setting change.
-- `verify-cloud-scheduler-jobs.sh` now expects exactly 9 scheduler jobs in the target region: 3 weekday Mountain-time jobs per site.
+- `verify-cloud-scheduler-jobs.sh` verifies the full spec-derived managed job set, including URI, JSON body, auth header, and retry policy, and fails on any missing job or strict-prefix drift.
 
 ### Runtime safeguards
 
