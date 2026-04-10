@@ -308,6 +308,31 @@ describe('syncMasterSheetTab', () => {
     expect(requestCounts.valuesGet).toBe(1);
   });
 
+  it('chunks scheduled-tab batch reads when many source tabs are present', async () => {
+    const tabs: Record<string, any[][]> = {};
+    for (let index = 1; index <= 120; index += 1) {
+      tabs[`Scheduled_${String(index).padStart(3, '0')}`] = [
+        sourceRow({
+          16: `file-${index}`,
+          2: String(100 + index),
+        }),
+      ];
+    }
+    seedWorkbook('source-sheet', tabs);
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 120,
+      source_tabs: 120,
+      quarantined_row_count: 0,
+    }));
+    expect(requestCounts.valuesBatchGet).toBe(6);
+    expect(requestCounts.spreadsheetsGet).toBe(2);
+    expect(requestCounts.valuesGet).toBe(1);
+  });
+
   it('falls back to the source workbook when the destination sheet is not writable', async () => {
     seedWorkbook('source-sheet', {
       Scheduled_CA: [sourceRow({ 15: 'ca_sos', 16: 'ca-file-1' })],

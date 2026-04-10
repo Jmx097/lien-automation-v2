@@ -12,6 +12,7 @@ const DEFAULT_REVIEW_TAB_TITLE = 'Review_Queue';
 const DEFAULT_DIRECTOR_MIN_CONFIDENCE_ACCEPT = 0.85;
 const DEFAULT_DIRECTOR_MIN_CONFIDENCE_REVIEW = 0.75;
 const DEFAULT_REVIEW_QUEUE_RETENTION_DAYS = 7;
+const SHEETS_BATCH_GET_MAX_RANGES = 50;
 
 export const DIRECTOR_SHEET_HEADERS = [
   'Site Id',
@@ -301,6 +302,34 @@ async function withSheetsRetry<T>(
   }
 
   throw lastError;
+}
+
+function chunkArray<T>(values: T[], chunkSize: number): T[][] {
+  if (chunkSize <= 0) return [values];
+
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+async function batchGetSheetValueRanges(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  ranges: string[],
+): Promise<any[]> {
+  const valueRanges: any[] = [];
+
+  for (const rangeChunk of chunkArray(ranges, SHEETS_BATCH_GET_MAX_RANGES)) {
+    const response = await withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges: rangeChunk,
+    }));
+    valueRanges.push(...(response.data.valueRanges ?? []));
+  }
+
+  return valueRanges;
 }
 
 export interface SpreadsheetAccessResult {
@@ -879,26 +908,20 @@ async function collectRowsFromSourceTabs(
 
   const headerRanges = sourceTabs.map((sourceTab) => `'${sourceTab}'!A1:ZZ1`);
   const dataRanges = sourceTabs.map((sourceTab) => `'${sourceTab}'!A2:ZZ`);
-  const [headerResponse, dataResponse] = await Promise.all([
-    withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
-      spreadsheetId,
-      ranges: headerRanges,
-    })),
-    withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
-      spreadsheetId,
-      ranges: dataRanges,
-    })),
+  const [headerValueRanges, dataValueRanges] = await Promise.all([
+    batchGetSheetValueRanges(sheets, spreadsheetId, headerRanges),
+    batchGetSheetValueRanges(sheets, spreadsheetId, dataRanges),
   ]);
 
   const headerRowsByTab = new Map<string, any[]>();
-  for (const valueRange of headerResponse.data.valueRanges ?? []) {
+  for (const valueRange of headerValueRanges) {
     const title = valueRange.range?.match(/^'(.+)'!/i)?.[1];
     if (!title) continue;
     headerRowsByTab.set(title, valueRange.values?.[0] ?? []);
   }
 
   const dataRowsByTab = new Map<string, any[][]>();
-  for (const valueRange of dataResponse.data.valueRanges ?? []) {
+  for (const valueRange of dataValueRanges) {
     const title = valueRange.range?.match(/^'(.+)'!/i)?.[1];
     if (!title) continue;
     dataRowsByTab.set(title, valueRange.values ?? []);
