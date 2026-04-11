@@ -118,4 +118,64 @@ describe('buildRunSlaSummary', () => {
     expect(summary.score_pct).toBe(0);
     expect(summary.hard_fail_reason).toBe('row_upload_mismatch');
   });
+
+  it('passes a verified zero-record success', () => {
+    const summary = buildRunSlaSummary(buildRun({
+      records_scraped: 0,
+      rows_uploaded: 0,
+      amount_found_count: 0,
+      amount_missing_count: 0,
+      amount_coverage_pct: 0,
+      ocr_success_pct: 0,
+      row_fail_pct: 0,
+      partial: 0,
+      deadline_hit: 0,
+      new_master_row_count: 0,
+      source_tab_title: undefined,
+      master_tab_title: undefined,
+      review_tab_title: undefined,
+    }));
+
+    expect(summary.pass).toBe(true);
+    expect(summary.score_pct).toBe(100);
+    expect(summary.hard_fail_reason).toBeUndefined();
+  });
+
+  it('hard-fails partial zero-record successes as unverified', () => {
+    const summary = buildRunSlaSummary(buildRun({
+      site: 'nyc_acris',
+      records_scraped: 0,
+      rows_uploaded: 0,
+      amount_found_count: 0,
+      amount_missing_count: 0,
+      amount_coverage_pct: 0,
+      ocr_success_pct: 0,
+      partial: 1,
+      deadline_hit: 0,
+      new_master_row_count: 0,
+    }));
+
+    expect(summary.pass).toBe(false);
+    expect(summary.score_pct).toBe(0);
+    expect(summary.hard_fail_reason).toBe('zero_volume_unverified');
+  });
+
+  it('hard-fails deadline-hit zero-record successes as unverified', () => {
+    const summary = buildRunSlaSummary(buildRun({
+      site: 'nyc_acris',
+      records_scraped: 0,
+      rows_uploaded: 0,
+      amount_found_count: 0,
+      amount_missing_count: 0,
+      amount_coverage_pct: 0,
+      ocr_success_pct: 0,
+      partial: 0,
+      deadline_hit: 1,
+      new_master_row_count: 0,
+    }));
+
+    expect(summary.pass).toBe(false);
+    expect(summary.score_pct).toBe(0);
+    expect(summary.hard_fail_reason).toBe('zero_volume_unverified');
+  });
 });

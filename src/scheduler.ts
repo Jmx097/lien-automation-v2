@@ -461,9 +461,11 @@ function computeQualityMetrics(
   const discoveredCount = qualitySummary?.discovered_count ?? effectiveMaxRecords;
   const returnedCount = qualitySummary?.returned_count ?? records.length;
   const rowFailPct = discoveredCount > 0 ? ((discoveredCount - returnedCount) / discoveredCount) * 100 : 0;
-  const artifactFetchCoveragePct = records.length > 0
-    ? ((qualitySummary?.enriched_records ?? 0) / records.length) * 100
-    : 0;
+  const artifactFetchCoveragePct = typeof qualitySummary?.artifact_fetch_coverage_pct === 'number' && Number.isFinite(qualitySummary.artifact_fetch_coverage_pct)
+    ? qualitySummary.artifact_fetch_coverage_pct
+    : records.length > 0
+      ? ((qualitySummary?.enriched_records ?? 0) / records.length) * 100
+      : 0;
 
   return {
     amountFound,
@@ -606,7 +608,7 @@ function buildPersistedOrComputedRunSla(run: ScheduledRunRecord): RunSlaSummary 
   const computed = buildRunSlaSummary(run);
   const storedComponents = parseStoredRunSlaComponents(run.sla_components_json);
 
-  if (!run.sla_policy_version) {
+  if (run.sla_policy_version !== RUN_SLA_POLICY_VERSION) {
     return computed;
   }
 
@@ -696,7 +698,7 @@ function buildSiteComplianceSummaryFromRuns(
   const observedRuns = runs.filter((run) => isComplianceEligibleRunForSite(site, run));
   const successfulRuns = observedRuns.filter((run) => run.status === 'success');
   const rollingSuccessfulRuns = successfulRuns.slice(0, rollingWindowSize);
-  const rollingSlaPassCount = rollingSuccessfulRuns.filter((run) => (run.sla_pass ?? 0) === 1).length;
+  const rollingSlaPassCount = rollingSuccessfulRuns.filter((run) => buildPersistedOrComputedRunSla(run).pass).length;
   const rollingSlaPassRate20 = rollingSuccessfulRuns.length > 0
     ? roundPercent((rollingSlaPassCount / rollingSuccessfulRuns.length) * 100)
     : 0;
@@ -704,7 +706,7 @@ function buildSiteComplianceSummaryFromRuns(
     successfulRuns
       .map((run) => {
         const slot = parseScheduledSlot(run);
-        if (!slot || slot.date_key !== previousBusinessDay || (run.sla_pass ?? 0) !== 1) {
+        if (!slot || slot.date_key !== previousBusinessDay || !buildPersistedOrComputedRunSla(run).pass) {
           return null;
         }
         return slot.slot;

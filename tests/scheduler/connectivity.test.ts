@@ -89,6 +89,12 @@ describe('scheduler connectivity state', () => {
     ).toBe('range_result_integrity');
   });
 
+  it('classifies NYC Google Sheets master sync 400s as sheet export failures', () => {
+    expect(
+      classifyNYCAcrisFailure('GaxiosError: Google 400 Bad Request at Gaxios._request in google-auth-library from collectRowsFromSourceTabs syncMasterSheetTab')
+    ).toBe('sheet_export');
+  });
+
   it('classifies blank bootstrap failures separately from selector issues', () => {
     expect(
       classifyNYCAcrisFailure(

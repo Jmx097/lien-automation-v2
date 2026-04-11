@@ -13,6 +13,7 @@ const requestCounts = {
   valuesGet: 0,
   valuesBatchGet: 0,
 };
+let batchGetFailuresRemaining = 0;
 
 function ensureWorkbook(spreadsheetId: string): Map<string, SheetTab> {
   let workbook = workbookState.get(spreadsheetId);
@@ -93,6 +94,12 @@ vi.mock('googleapis', () => {
             },
             batchGet: async ({ spreadsheetId, ranges }: { spreadsheetId: string; ranges: string[] }) => {
               requestCounts.valuesBatchGet += 1;
+              if (batchGetFailuresRemaining > 0) {
+                batchGetFailuresRemaining -= 1;
+                const error = new Error('GaxiosError: Google 400 Bad Request from spreadsheets.values.batchGet');
+                Object.assign(error, { code: 400 });
+                throw error;
+              }
               const access = getWorkbookAccess(spreadsheetId);
               if (!access.read) throw new Error(`Access denied to ${spreadsheetId}`);
               const workbook = ensureWorkbook(spreadsheetId);
@@ -148,6 +155,7 @@ describe('syncMasterSheetTab', () => {
     requestCounts.spreadsheetsGet = 0;
     requestCounts.valuesGet = 0;
     requestCounts.valuesBatchGet = 0;
+    batchGetFailuresRemaining = 0;
     process.env.SHEETS_KEY = JSON.stringify({
       client_email: 'svc@example.com',
       private_key: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n',
@@ -306,6 +314,29 @@ describe('syncMasterSheetTab', () => {
     expect(requestCounts.valuesBatchGet).toBe(2);
     expect(requestCounts.spreadsheetsGet).toBe(2);
     expect(requestCounts.valuesGet).toBe(1);
+  });
+
+  it('falls back to per-range reads when a source-tab batch read gets a Google 400', async () => {
+    seedWorkbook('source-sheet', {
+      Scheduled_CA: [
+        sourceRow({ 0: 20, 15: 'ca_sos', 16: 'ca-file-1' }),
+      ],
+      Scheduled_NYC: [
+        sourceRow({ 16: 'ny-file-1', 2: '300', 14: 0.96 }),
+      ],
+    });
+    batchGetFailuresRemaining = 1;
+
+    const { syncMasterSheetTab } = await import('../../src/sheets/push');
+    const result = await syncMasterSheetTab();
+
+    expect(result).toEqual(expect.objectContaining({
+      row_count: 2,
+      source_tabs: 2,
+      quarantined_row_count: 0,
+    }));
+    expect(requestCounts.valuesBatchGet).toBe(2);
+    expect(requestCounts.valuesGet).toBeGreaterThan(1);
   });
 
   it('chunks scheduled-tab batch reads when many source tabs are present', async () => {

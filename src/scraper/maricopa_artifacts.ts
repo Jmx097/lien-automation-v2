@@ -4,6 +4,7 @@ import path from 'path';
 import type { BrowserContextOptions } from 'playwright';
 import { createIsolatedBrowserContext, type BrowserTransportMode } from '../browser/transport';
 import { ScheduledRunStore } from '../scheduler/store';
+import { log } from '../utils/logger';
 
 export interface MaricopaSessionState {
   version: 1;
@@ -220,6 +221,30 @@ export function isUsableMaricopaArtifactPayload(
   }
 
   return hasPdfSignature(buffer) || hasPngSignature(buffer) || hasJpegSignature(buffer);
+}
+
+function artifactResponseStatus(response: unknown): number | undefined {
+  const maybeResponse = response as { status?: () => number };
+  try {
+    return typeof maybeResponse?.status === 'function' ? maybeResponse.status() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function logMaricopaArtifactFetchAttemptFailure(
+  url: string,
+  attempt: number,
+  attempts: number,
+  reason: string,
+): void {
+  log({
+    stage: 'maricopa_artifact_fetch_attempt_failed',
+    url,
+    attempt,
+    attempts,
+    reason,
+  });
 }
 
 export function isFreshMaricopaSession(capturedAt: string): boolean {
@@ -566,6 +591,7 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
   const attempts = Math.max(1, Number(process.env.MARICOPA_ARTIFACT_FETCH_ATTEMPTS ?? '2'));
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let attemptFailureReason = 'artifact_not_found';
     const handle = await createIsolatedBrowserContext({
       contextOptions: session?.storage_state_path ? { storageState: session.storage_state_path } : undefined,
     });
@@ -575,7 +601,10 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
       const apiResponse = await handle.context.request.get(url, {
         timeout: requestTimeout,
         failOnStatusCode: false,
-      }).catch(() => null);
+      }).catch((error) => {
+        attemptFailureReason = `api_request_failed:${String((error as { message?: string })?.message ?? error)}`;
+        return null;
+      });
 
       if (apiResponse?.ok()) {
         const contentType = apiResponse.headers()['content-type'] ?? undefined;
@@ -587,30 +616,57 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
             url: apiResponse.url(),
           };
         }
+        attemptFailureReason = `api_unusable_payload content_type=${contentType ?? 'unknown'} bytes=${buffer.length}`;
+      } else if (apiResponse) {
+        attemptFailureReason = `api_non_ok status=${artifactResponseStatus(apiResponse) ?? 'unknown'}`;
       }
 
       const page = await handle.context.newPage();
       const response = await page.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: requestTimeout,
-      }).catch(() => null);
+      }).catch((error) => {
+        attemptFailureReason = `page_goto_failed:${String((error as { message?: string })?.message ?? error)}`;
+        return null;
+      });
 
-      if (!response || !response.ok()) return null;
+      if (!response || !response.ok()) {
+        attemptFailureReason = response
+          ? `page_non_ok status=${artifactResponseStatus(response) ?? 'unknown'}`
+          : attemptFailureReason;
+        logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
+        continue;
+      }
 
       const contentType = response.headers()['content-type'] ?? undefined;
 
       if (/text\/html/i.test(contentType ?? '') && /document-preview\.html/i.test(url)) {
         const imageUrl = await page.locator('img').first().getAttribute('src').catch(() => null);
-        if (!imageUrl) return null;
+        if (!imageUrl) {
+          attemptFailureReason = 'preview_image_missing';
+          logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
+          continue;
+        }
         const absoluteImageUrl = new URL(imageUrl, page.url()).toString();
         const imageResponse = await handle.context.request.get(absoluteImageUrl, {
           timeout: requestTimeout,
           failOnStatusCode: false,
-        }).catch(() => null);
-        if (!imageResponse || !imageResponse.ok()) return null;
+        }).catch((error) => {
+          attemptFailureReason = `preview_image_request_failed:${String((error as { message?: string })?.message ?? error)}`;
+          return null;
+        });
+        if (!imageResponse || !imageResponse.ok()) {
+          attemptFailureReason = imageResponse
+            ? `preview_image_non_ok status=${artifactResponseStatus(imageResponse) ?? 'unknown'}`
+            : attemptFailureReason;
+          logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
+          continue;
+        }
         const imageBuffer = Buffer.from(await imageResponse.body());
         if (!isUsableMaricopaArtifactPayload(imageBuffer, imageResponse.headers()['content-type'] ?? undefined, absoluteImageUrl)) {
-          return null;
+          attemptFailureReason = `preview_image_unusable_payload content_type=${imageResponse.headers()['content-type'] ?? 'unknown'} bytes=${imageBuffer.length}`;
+          logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
+          continue;
         }
         return {
           buffer: imageBuffer,
@@ -621,7 +677,9 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
 
       const responseBuffer = Buffer.from(await response.body());
       if (!isUsableMaricopaArtifactPayload(responseBuffer, contentType, response.url())) {
-        return null;
+        attemptFailureReason = `page_unusable_payload content_type=${contentType ?? 'unknown'} bytes=${responseBuffer.length}`;
+        logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
+        continue;
       }
       return {
         buffer: responseBuffer,
@@ -629,6 +687,8 @@ export async function fetchMaricopaArtifactWithSession(url: string): Promise<Mar
         url: response.url(),
       };
     } catch (error) {
+      attemptFailureReason = `exception:${String((error as { message?: string })?.message ?? error)}`;
+      logMaricopaArtifactFetchAttemptFailure(url, attempt, attempts, attemptFailureReason);
       if (attempt >= attempts) throw error;
     } finally {
       await handle.close().catch(() => null);

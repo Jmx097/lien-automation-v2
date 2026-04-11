@@ -120,7 +120,11 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
     return 'policy_block';
   }
 
-  if (/sheet_upload_mismatch|sheet export|googleapis|sheets/i.test(message)) {
+  if (
+    /sheet_upload_mismatch|sheet export|googleapis|sheets|gaxios|google-auth-library|googleapis-common/i.test(message) ||
+    /spreadsheets\.values|collectRowsFromSourceTabs|syncMasterSheetTab/i.test(message) ||
+    /google\s+400|400\s+bad request|bad request.*google/i.test(message)
+  ) {
     return 'sheet_export';
   }
 
@@ -152,7 +156,7 @@ export function classifyNYCAcrisFailure(message: string): NYCAcrisFailureClass {
 export function classifyMaricopaFailure(message: string): MaricopaConnectivityFailureClass {
   const normalized = message.toLowerCase();
 
-  if (/sheet_upload_mismatch|sheet export|googleapis|sheets|quota exceeded|read requests per minute/i.test(message)) {
+  if (/sheet_upload_mismatch|sheet export|googleapis|sheets|gaxios|google-auth-library|googleapis-common|quota exceeded|read requests per minute/i.test(message)) {
     return 'sheet_export';
   }
 

@@ -207,6 +207,7 @@ describe('site-aware scheduler', () => {
       slot_time: 'maricopa_recorder:2026-04-11:evening:enriched',
       started_at: '2026-04-11T18:00:00.000Z',
       sla_pass: 1,
+      sla_policy_version: 'tri_site_composite_v2',
       artifact_retrieval_enabled: 1,
     });
     for (let index = 0; index < 20; index += 1) {
@@ -228,6 +229,50 @@ describe('site-aware scheduler', () => {
     expect(state.maricopa_recorder.rolling_sla_pass_count).toBe(1);
     expect(state.maricopa_recorder.rolling_sla_status).toBe('insufficient_data');
     expect(state.maricopa_recorder.site_compliant).toBe(false);
+  });
+
+  it('recomputes legacy SLA policy rows before compliance counting', async () => {
+    runs.set('nyc_acris:2026-04-10:evening:legacy-zero', {
+      id: 'legacy-zero',
+      site: 'nyc_acris',
+      idempotency_key: 'nyc_acris:2026-04-10:evening:legacy-zero',
+      slot_time: 'nyc_acris:2026-04-10:evening:legacy-zero',
+      trigger_source: 'external',
+      started_at: '2026-04-10T18:00:00.000Z',
+      finished_at: '2026-04-10T18:05:00.000Z',
+      status: 'success',
+      records_scraped: 0,
+      records_skipped: 0,
+      rows_uploaded: 0,
+      amount_found_count: 0,
+      amount_missing_count: 0,
+      amount_coverage_pct: 0,
+      ocr_success_pct: 0,
+      row_fail_pct: 0,
+      deadline_hit: 1,
+      effective_max_records: 75,
+      partial: 1,
+      retry_exhausted: 0,
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      master_fallback_used: 0,
+      sla_score_pct: 100,
+      sla_pass: 1,
+      sla_policy_version: 'tri_site_composite_v1',
+      sla_components_json: JSON.stringify({
+        delivery_pct: 100,
+        integrity_pct: 100,
+        completeness_pct: 100,
+        extraction_pct: 100,
+      }),
+    });
+
+    const { getSiteComplianceState } = await import('../../src/scheduler');
+    const state = await getSiteComplianceState(new Date('2026-04-11T18:30:00.000Z'));
+
+    expect(state.nyc_acris.observed_run_count).toBe(1);
+    expect(state.nyc_acris.rolling_sla_pass_count).toBe(0);
+    expect(state.nyc_acris.previous_business_day_slot_success_count).toBe(0);
   });
 
   it('includes latest anomaly state when present', async () => {

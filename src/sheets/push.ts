@@ -279,6 +279,15 @@ function isSheetsQuotaError(error: unknown): boolean {
   return /quota exceeded|rate limit|too many requests|429/i.test(message);
 }
 
+function isSheetsBatchReadFallbackError(error: unknown): boolean {
+  if (isSheetsQuotaError(error)) return false;
+
+  const value = error as { code?: number; status?: number; response?: { status?: number }; message?: string };
+  const status = value?.code ?? value?.status ?? value?.response?.status;
+  const message = String(value?.message ?? error ?? '').toLowerCase();
+  return status === 400 || /google\s+400|400\s+bad request|bad request|unable to parse range|invalid range|invalid value/.test(message);
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -322,11 +331,43 @@ async function batchGetSheetValueRanges(
   const valueRanges: any[] = [];
 
   for (const rangeChunk of chunkArray(ranges, SHEETS_BATCH_GET_MAX_RANGES)) {
-    const response = await withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
-      spreadsheetId,
-      ranges: rangeChunk,
-    }));
-    valueRanges.push(...(response.data.valueRanges ?? []));
+    try {
+      const response = await withSheetsRetry(() => sheets.spreadsheets.values.batchGet({
+        spreadsheetId,
+        ranges: rangeChunk,
+      }));
+      valueRanges.push(...(response.data.valueRanges ?? []));
+    } catch (error) {
+      if (!isSheetsBatchReadFallbackError(error)) throw error;
+
+      log({
+        stage: 'sheets_batch_get_fallback',
+        spreadsheet_id_suffix: spreadsheetId.slice(-6),
+        range_count: rangeChunk.length,
+        error: String((error as { message?: string })?.message ?? error),
+      });
+
+      for (const range of rangeChunk) {
+        try {
+          const response = await withSheetsRetry(() => sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range,
+          }));
+          valueRanges.push({
+            range: response.data.range ?? range,
+            values: response.data.values ?? [],
+          });
+        } catch (rangeError) {
+          log({
+            stage: 'sheets_batch_get_fallback_range_failed',
+            spreadsheet_id_suffix: spreadsheetId.slice(-6),
+            range,
+            error: String((rangeError as { message?: string })?.message ?? rangeError),
+          });
+          throw rangeError;
+        }
+      }
+    }
   }
 
   return valueRanges;

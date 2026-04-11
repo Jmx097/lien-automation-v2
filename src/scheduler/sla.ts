@@ -1,6 +1,6 @@
 import type { ScheduledRunRecord } from './store';
 
-export const RUN_SLA_POLICY_VERSION = 'tri_site_composite_v1';
+export const RUN_SLA_POLICY_VERSION = 'tri_site_composite_v2';
 
 export interface RunSlaEvidence {
   source_publish_confirmed: boolean;
@@ -36,6 +36,8 @@ type RunSlaInput = Pick<
   | 'amount_coverage_pct'
   | 'ocr_success_pct'
   | 'row_fail_pct'
+  | 'deadline_hit'
+  | 'partial'
   | 'retry_exhausted'
   | 'failure_class'
   | 'source_tab_title'
@@ -60,8 +62,16 @@ function isZeroVolumeSuccess(run: RunSlaInput): boolean {
   return run.status === 'success' && run.records_scraped === 0 && run.rows_uploaded === 0;
 }
 
+function isVerifiedZeroVolumeSuccess(run: RunSlaInput): boolean {
+  return isZeroVolumeSuccess(run)
+    && (run.partial ?? 0) === 0
+    && (run.deadline_hit ?? 0) === 0
+    && (run.retry_exhausted ?? 0) === 0
+    && !run.failure_class;
+}
+
 export function buildRunSlaEvidence(run: RunSlaInput): RunSlaEvidence {
-  const zeroVolumeSuccess = isZeroVolumeSuccess(run);
+  const zeroVolumeSuccess = isVerifiedZeroVolumeSuccess(run);
   const uploadedRowsMatchScrapedRows = run.rows_uploaded === run.records_scraped;
   const sourcePublishConfirmed = Boolean(
     zeroVolumeSuccess ||
@@ -94,6 +104,7 @@ export function buildRunSlaEvidence(run: RunSlaInput): RunSlaEvidence {
 
 function getHardFailReason(run: RunSlaInput, evidence: RunSlaEvidence): string | undefined {
   if (run.status !== 'success') return 'run_not_successful';
+  if (isZeroVolumeSuccess(run) && !isVerifiedZeroVolumeSuccess(run)) return 'zero_volume_unverified';
   if (!evidence.uploaded_rows_match_scraped_rows) return 'row_upload_mismatch';
   if ((run.retry_exhausted ?? 0) > 0) return 'retry_budget_exhausted';
   if (run.failure_class === 'range_result_integrity') return 'range_result_integrity';
@@ -109,7 +120,7 @@ function getHardFailReason(run: RunSlaInput, evidence: RunSlaEvidence): string |
 }
 
 function buildRunSlaComponents(run: RunSlaInput): RunSlaComponents {
-  if (isZeroVolumeSuccess(run)) {
+  if (isVerifiedZeroVolumeSuccess(run)) {
     return {
       delivery_pct: 100,
       integrity_pct: 100,

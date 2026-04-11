@@ -15,7 +15,65 @@ describe('maricopa artifact helpers', () => {
   afterEach(() => {
     vi.resetModules();
     vi.unmock('../../src/scheduler/store');
+    vi.unmock('../../src/browser/transport');
+    delete process.env.MARICOPA_ARTIFACT_FETCH_ATTEMPTS;
   });
+
+  function artifactResponse(options: {
+    ok?: boolean;
+    status?: number;
+    contentType?: string;
+    body?: Buffer;
+    url?: string;
+  }) {
+    return {
+      ok: () => options.ok ?? true,
+      status: () => options.status ?? ((options.ok ?? true) ? 200 : 500),
+      headers: () => ({ 'content-type': options.contentType ?? 'application/pdf' }),
+      body: async () => options.body ?? Buffer.from(''),
+      url: () => options.url ?? 'https://publicapi.recorder.maricopa.gov/preview/pdf?recordingNumber=20260017884&suffix=',
+    };
+  }
+
+  function pdfBody(): Buffer {
+    return Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\nxref\ntrailer\n%%EOF\n' + ' '.repeat(48), 'latin1');
+  }
+
+  function mockArtifactFetchDependencies(requestGet: ReturnType<typeof vi.fn>) {
+    const pageGoto = vi.fn().mockResolvedValue(null);
+    const close = vi.fn().mockResolvedValue(null);
+
+    vi.doMock('../../src/scheduler/store', () => ({
+      ScheduledRunStore: class {
+        async getSiteStateArtifact() {
+          return null;
+        }
+        async close() {
+          return null;
+        }
+      },
+    }));
+
+    vi.doMock('../../src/browser/transport', () => ({
+      createIsolatedBrowserContext: vi.fn(async () => ({
+        context: {
+          request: { get: requestGet },
+          newPage: async () => ({
+            goto: pageGoto,
+            locator: () => ({
+              first: () => ({
+                getAttribute: async () => null,
+              }),
+            }),
+            url: () => 'https://recorder.maricopa.gov/recording/document-preview.html?recordingNumber=20260017884',
+          }),
+        },
+        close,
+      })),
+    }));
+
+    return { pageGoto, close };
+  }
 
   it('discovers at least one recording-specific artifact endpoint from captured network requests', () => {
     const requests = JSON.parse(fs.readFileSync(path.join(fixtureDir, 'artifact-requests.json'), 'utf8'));
@@ -185,6 +243,7 @@ describe('maricopa artifact helpers', () => {
   it('accepts freshly discovered DB candidates when updated_at uses sqlite timestamp formatting', async () => {
     process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL = '1';
     delete process.env.DATABASE_URL;
+    const sqliteNow = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     vi.doMock('../../src/scheduler/store', () => ({
       ScheduledRunStore: class {
@@ -208,7 +267,7 @@ describe('maricopa artifact helpers', () => {
                   origins: [],
                 },
               }),
-              updated_at: '2026-03-30 16:04:38',
+              updated_at: sqliteNow,
             };
           }
 
@@ -223,7 +282,7 @@ describe('maricopa artifact helpers', () => {
                   kind: 'pdf',
                 },
               ]),
-              updated_at: '2026-03-30 16:05:08',
+              updated_at: sqliteNow,
             };
           }
 
@@ -260,5 +319,49 @@ describe('maricopa artifact helpers', () => {
     expect(isUsableMaricopaArtifactPayload(htmlBody, 'text/html', 'https://example.test/doc.pdf')).toBe(false);
     expect(isUsableMaricopaArtifactPayload(Buffer.from('not a pdf', 'utf8'), 'application/pdf', 'https://example.test/doc.pdf')).toBe(false);
     expect(isUsableMaricopaArtifactPayload(pngBody, 'image/png', 'https://example.test/doc.png')).toBe(true);
+  });
+
+  it('continues artifact fetch attempts after soft unusable responses', async () => {
+    vi.resetModules();
+    process.env.MARICOPA_ARTIFACT_FETCH_ATTEMPTS = '2';
+    const requestGet = vi.fn()
+      .mockResolvedValueOnce(artifactResponse({
+        contentType: 'text/html',
+        body: Buffer.from('<html>blocked</html>', 'utf8'),
+      }))
+      .mockResolvedValueOnce(artifactResponse({
+        contentType: 'application/pdf',
+        body: pdfBody(),
+      }));
+    mockArtifactFetchDependencies(requestGet);
+
+    const { fetchMaricopaArtifactWithSession } = await import('../../src/scraper/maricopa_artifacts');
+    const { createIsolatedBrowserContext } = await import('../../src/browser/transport');
+
+    const result = await fetchMaricopaArtifactWithSession('https://publicapi.recorder.maricopa.gov/preview/pdf?recordingNumber=20260017884&suffix=');
+
+    expect(result?.contentType).toBe('application/pdf');
+    expect(requestGet).toHaveBeenCalledTimes(2);
+    expect(createIsolatedBrowserContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null after artifact fetch soft failures exhaust all attempts', async () => {
+    vi.resetModules();
+    process.env.MARICOPA_ARTIFACT_FETCH_ATTEMPTS = '2';
+    const requestGet = vi.fn().mockResolvedValue(artifactResponse({
+      contentType: 'text/html',
+      body: Buffer.from('<html>blocked</html>', 'utf8'),
+    }));
+    const { pageGoto } = mockArtifactFetchDependencies(requestGet);
+
+    const { fetchMaricopaArtifactWithSession } = await import('../../src/scraper/maricopa_artifacts');
+    const { createIsolatedBrowserContext } = await import('../../src/browser/transport');
+
+    const result = await fetchMaricopaArtifactWithSession('https://publicapi.recorder.maricopa.gov/preview/pdf?recordingNumber=20260017884&suffix=');
+
+    expect(result).toBeNull();
+    expect(requestGet).toHaveBeenCalledTimes(2);
+    expect(pageGoto).toHaveBeenCalledTimes(2);
+    expect(createIsolatedBrowserContext).toHaveBeenCalledTimes(2);
   });
 });

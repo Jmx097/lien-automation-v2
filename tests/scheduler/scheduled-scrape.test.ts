@@ -836,6 +836,62 @@ describe('runScheduledScrape', () => {
     expect(mockPushToSheetsForTab).not.toHaveBeenCalled();
   });
 
+  it('does not count partial zero-record NYC runs as SLA passes', async () => {
+    const records: any[] = [];
+    Object.assign(records, {
+      quality_summary: {
+        requested_date_start: '03/06/2026',
+        requested_date_end: '03/13/2026',
+        discovered_count: 75,
+        returned_count: 0,
+        quarantined_count: 0,
+        partial_run: true,
+        partial_reason: 'deadline_hit',
+      },
+    });
+    mockScraper.mockResolvedValueOnce(records);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 0, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 0,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 0,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 0,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {},
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape, getRunHistory } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:partial-zero',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.records_scraped).toBe(0);
+    expect(result.sla_pass).toBe(0);
+
+    const history = await getRunHistory(1);
+    expect(history[0].confidence?.sla.hard_fail_reason).toBe('zero_volume_unverified');
+    expect(history[0].confidence?.reasons).toContain('zero_volume_unverified');
+  });
+
   it('falls back to a conservative CA scheduled cap when the probe fails', async () => {
     controlState = { site: 'ca_sos', effective_max_records: 55 };
     mockProbeCASOSResultCount.mockRejectedValueOnce(new Error('probe failed'));
@@ -1215,6 +1271,54 @@ describe('runScheduledScrape', () => {
     expect(result.attempt_count).toBe(2);
     expect(mockScraper).toHaveBeenCalledTimes(1);
     expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries NYC master sync Google 400 failures from cached rows without re-scraping', async () => {
+    mockScraper.mockResolvedValueOnce([{ filing_number: '1', amount: '100', amount_reason: 'ok' }]);
+    mockPushToSheetsForTab
+      .mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' })
+      .mockResolvedValueOnce({ uploaded: 1, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab
+      .mockRejectedValueOnce(new Error('GaxiosError: Google 400 Bad Request at Gaxios._request in google-auth-library from collectRowsFromSourceTabs syncMasterSheetTab'))
+      .mockResolvedValueOnce({
+        tab_title: 'Master',
+        row_count: 1,
+        source_tabs: 1,
+        target_spreadsheet_id: 'target-sheet',
+        fallback_used: false,
+        quarantined_row_count: 0,
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+        review_tab_title: 'Review_Queue',
+        new_master_row_count: 1,
+        purged_review_row_count: 0,
+        review_summary: {
+          accepted_row_count: 1,
+          quarantined_row_count: 0,
+          purged_review_row_count: 0,
+          review_reason_counts: {},
+          current_run_quarantined_row_count: 0,
+          current_run_conflict_row_count: 0,
+          retained_prior_review_row_count: 0,
+        },
+      });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+
+    const result = await runScheduledScrape({
+      site: 'nyc_acris',
+      idempotencyKey: 'nyc_acris:2026-03-11:master-sync-sheet-retry',
+      slot: 'afternoon',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.retried).toBe(1);
+    expect(result.attempt_count).toBe(2);
+    expect(mockScraper).toHaveBeenCalledTimes(1);
+    expect(mockPushToSheetsForTab).toHaveBeenCalledTimes(2);
+    expect(mockSyncMasterSheetTab).toHaveBeenCalledTimes(2);
   });
 
   it('does not retry non-retryable selector failures', async () => {
