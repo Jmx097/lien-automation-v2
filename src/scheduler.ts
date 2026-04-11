@@ -2353,11 +2353,18 @@ export async function runScheduledScrape(options: RunScheduledScrapeOptions = {}
 
 export async function getRunHistory(limit = 50): Promise<ScheduledRun[]> {
   const runs = await getStore().getRunHistory(limit);
-  return runs.map((run) => ({
-    ...run,
-    debug_artifact: parseDebugArtifact(run.debug_artifact_json),
-    confidence: buildRunConfidence(run),
-  }));
+  return runs.map((run) => {
+    const sla = buildPersistedOrComputedRunSla(run);
+    return {
+      ...run,
+      sla_score_pct: sla.score_pct,
+      sla_pass: sla.pass ? 1 : 0,
+      sla_policy_version: sla.policy_version,
+      sla_components_json: JSON.stringify(sla.components),
+      debug_artifact: parseDebugArtifact(run.debug_artifact_json),
+      confidence: buildRunConfidence(run),
+    };
+  });
 }
 
 export async function getSiteComplianceState(now = new Date()): Promise<Record<SupportedSite, SiteComplianceSummary>> {
@@ -2410,18 +2417,21 @@ export async function getScheduleState(): Promise<ScheduleState> {
           last_failure_reason: connectivity.last_failure_reason,
           last_success_at: connectivity.last_success_at,
         },
-        recent_quality: recent.map((run) => ({
-          id: run.id,
-          started_at: run.started_at,
-          amount_coverage_pct: run.amount_coverage_pct,
-          ocr_success_pct: run.ocr_success_pct,
-          row_fail_pct: run.row_fail_pct,
-          partial: run.partial,
-          deadline_hit: run.deadline_hit,
-          effective_max_records: run.effective_max_records,
-          sla_score_pct: run.sla_score_pct ?? buildPersistedOrComputedRunSla(run).score_pct,
-          sla_pass: typeof run.sla_pass === 'number' ? run.sla_pass : (buildPersistedOrComputedRunSla(run).pass ? 1 : 0),
-        })),
+        recent_quality: recent.map((run) => {
+          const sla = buildPersistedOrComputedRunSla(run);
+          return {
+            id: run.id,
+            started_at: run.started_at,
+            amount_coverage_pct: run.amount_coverage_pct,
+            ocr_success_pct: run.ocr_success_pct,
+            row_fail_pct: run.row_fail_pct,
+            partial: run.partial,
+            deadline_hit: run.deadline_hit,
+            effective_max_records: run.effective_max_records,
+            sla_score_pct: sla.score_pct,
+            sla_pass: sla.pass ? 1 : 0,
+          };
+        }),
         latest_anomaly: latestAnomaly
           ? {
             run_id: latestAnomaly.run_id,
