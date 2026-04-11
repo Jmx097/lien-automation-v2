@@ -34,7 +34,7 @@ import {
 } from './scheduler/sla';
 import { debugNYCAcrisBootstrap, probeNYCAcrisConnectivity } from './scraper/nyc_acris';
 import { probeMaricopaRecorderConnectivity } from './scraper/maricopa_recorder';
-import { getMaricopaPersistedStateReadiness } from './scraper/maricopa_artifacts';
+import { getMaricopaPersistedStateReadiness, isMaricopaArtifactRetrievalEnabled } from './scraper/maricopa_artifacts';
 import { healMaricopaScheduledRunReadiness } from './maintenance/maricopa';
 import { formatRunTabName, pushToSheetsForTab, syncMasterSheetTab } from './sheets/push';
 import { sendNewLeadsNotification } from './notifications/email';
@@ -671,6 +671,14 @@ function isComplianceEligibleRun(run: ScheduledRunRecord): boolean {
   return parseScheduledSlot(run) !== null && run.partial_reason !== 'debug_bootstrap_only';
 }
 
+function isComplianceEligibleRunForSite(site: SupportedSite, run: ScheduledRunRecord): boolean {
+  if (!isComplianceEligibleRun(run)) return false;
+  if (site === 'maricopa_recorder' && isMaricopaArtifactRetrievalEnabled()) {
+    return (run.artifact_retrieval_enabled ?? 0) === 1;
+  }
+  return true;
+}
+
 function roundPercent(value: number): number {
   return Number(value.toFixed(2));
 }
@@ -685,7 +693,7 @@ function buildSiteComplianceSummaryFromRuns(
   const minimumSuccessfulRuns = rollingWindowSize;
   const siteTimeZone = getSiteSchedule(site).timezone;
   const previousBusinessDay = getPreviousBusinessDayKey(siteTimeZone, now);
-  const observedRuns = runs.filter(isComplianceEligibleRun);
+  const observedRuns = runs.filter((run) => isComplianceEligibleRunForSite(site, run));
   const successfulRuns = observedRuns.filter((run) => run.status === 'success');
   const rollingSuccessfulRuns = successfulRuns.slice(0, rollingWindowSize);
   const rollingSlaPassCount = rollingSuccessfulRuns.filter((run) => (run.sla_pass ?? 0) === 1).length;

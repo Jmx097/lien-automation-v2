@@ -45,6 +45,7 @@ vi.mock('../../src/scraper/nyc_acris', () => ({
 
 vi.mock('../../src/scraper/maricopa_artifacts', () => ({
   getMaricopaPersistedStateReadiness: mockGetMaricopaPersistedStateReadiness,
+  isMaricopaArtifactRetrievalEnabled: () => false,
 }));
 
 vi.mock('../../src/maintenance/maricopa', () => ({

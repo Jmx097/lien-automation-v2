@@ -94,6 +94,7 @@ describe('site-aware scheduler', () => {
     delete process.env.SCHEDULE_RUN_MINUTE;
     delete process.env.SCHEDULE_DEADLINE_HOUR;
     delete process.env.SCHEDULE_DEADLINE_MINUTE;
+    delete process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL;
   });
 
   it('returns independent next-run config for CA and NYC', async () => {
@@ -195,6 +196,38 @@ describe('site-aware scheduler', () => {
     expect(Array.from(runs.keys())).toEqual(
       expect.arrayContaining(['ca_sos:2026-03-03:morning', 'nyc_acris:2026-03-03:afternoon'])
     );
+  });
+
+  it('warms up Maricopa compliance from enriched runs after artifact retrieval is enabled', async () => {
+    process.env.MARICOPA_ENABLE_ARTIFACT_RETRIEVAL = '1';
+    runs.set('maricopa_recorder:2026-04-11:evening:enriched', {
+      site: 'maricopa_recorder',
+      status: 'success',
+      idempotency_key: 'maricopa_recorder:2026-04-11:evening:enriched',
+      slot_time: 'maricopa_recorder:2026-04-11:evening:enriched',
+      started_at: '2026-04-11T18:00:00.000Z',
+      sla_pass: 1,
+      artifact_retrieval_enabled: 1,
+    });
+    for (let index = 0; index < 20; index += 1) {
+      runs.set(`maricopa_recorder:2026-04-${String(index + 1).padStart(2, '0')}:afternoon:api-only`, {
+        site: 'maricopa_recorder',
+        status: 'success',
+        idempotency_key: `maricopa_recorder:2026-04-${String(index + 1).padStart(2, '0')}:afternoon:api-only`,
+        slot_time: `maricopa_recorder:2026-04-${String(index + 1).padStart(2, '0')}:afternoon:api-only`,
+        started_at: `2026-04-${String(index + 1).padStart(2, '0')}T18:00:00.000Z`,
+        sla_pass: 0,
+        artifact_retrieval_enabled: 0,
+      });
+    }
+
+    const { getSiteComplianceState } = await import('../../src/scheduler');
+    const state = await getSiteComplianceState(new Date('2026-04-11T18:30:00.000Z'));
+
+    expect(state.maricopa_recorder.observed_run_count).toBe(1);
+    expect(state.maricopa_recorder.rolling_sla_pass_count).toBe(1);
+    expect(state.maricopa_recorder.rolling_sla_status).toBe('insufficient_data');
+    expect(state.maricopa_recorder.site_compliant).toBe(false);
   });
 
   it('includes latest anomaly state when present', async () => {
