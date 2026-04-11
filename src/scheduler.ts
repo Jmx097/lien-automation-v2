@@ -1146,84 +1146,114 @@ function buildSlaMetricsTriggered(summary: RunSlaSummary): string[] {
 
 async function maybeAlertOnSlaBreach(run: ScheduledRunRecord, slot: Slot, summary: RunSlaSummary): Promise<void> {
   if (summary.pass) return;
-  const existing = await getStore().getAlertByKey(run.idempotency_key, 'sla_breach');
-  if (existing) return;
+  try {
+    const existing = await getStore().getAlertByKey(run.idempotency_key, 'sla_breach');
+    if (existing) return;
 
-  const alert: SchedulerAlertRecord = {
-    site: run.site,
-    idempotency_key: run.idempotency_key,
-    slot,
-    alert_type: 'sla_breach',
-    expected_by: run.finished_at ?? run.started_at,
-    run_id: run.id,
-    metrics_triggered: buildSlaMetricsTriggered(summary),
-    summary: `SLA breach for ${run.site} ${slot}: score=${summary.score_pct.toFixed(2)} hard_fail=${summary.hard_fail_reason ?? 'none'}`,
-    records_scraped: run.records_scraped,
-    amount_coverage_pct: run.amount_coverage_pct,
-    ocr_success_pct: run.ocr_success_pct,
-    row_fail_pct: run.row_fail_pct,
-    detected_at: run.finished_at ?? run.started_at,
-  };
+    const alert: SchedulerAlertRecord = {
+      site: run.site,
+      idempotency_key: run.idempotency_key,
+      slot,
+      alert_type: 'sla_breach',
+      expected_by: run.finished_at ?? run.started_at,
+      run_id: run.id,
+      metrics_triggered: buildSlaMetricsTriggered(summary),
+      summary: `SLA breach for ${run.site} ${slot}: score=${summary.score_pct.toFixed(2)} hard_fail=${summary.hard_fail_reason ?? 'none'}`,
+      records_scraped: run.records_scraped,
+      amount_coverage_pct: run.amount_coverage_pct,
+      ocr_success_pct: run.ocr_success_pct,
+      row_fail_pct: run.row_fail_pct,
+      detected_at: run.finished_at ?? run.started_at,
+    };
 
-  await getStore().insertSchedulerAlert(alert);
-  const delivery = await sendSchedulerStatusAlert(alert);
-  log({
-    stage: 'scheduled_run_sla_breach_alerted',
-    site: run.site,
-    run_id: run.id,
-    idempotency_key: run.idempotency_key,
-    slot,
-    sla_score_pct: summary.score_pct,
-    sla_hard_fail_reason: summary.hard_fail_reason,
-    webhook_attempted: delivery.attempted,
-    webhook_delivered: delivery.delivered,
-  });
+    await getStore().insertSchedulerAlert(alert);
+    const delivery = await sendSchedulerStatusAlert(alert);
+    log({
+      stage: 'scheduled_run_sla_breach_alerted',
+      site: run.site,
+      run_id: run.id,
+      idempotency_key: run.idempotency_key,
+      slot,
+      sla_score_pct: summary.score_pct,
+      sla_hard_fail_reason: summary.hard_fail_reason,
+      webhook_attempted: delivery.attempted,
+      webhook_delivered: delivery.delivered,
+    });
+  } catch (err: any) {
+    log({
+      stage: 'scheduled_run_sla_breach_alert_error',
+      site: run.site,
+      run_id: run.id,
+      idempotency_key: run.idempotency_key,
+      slot,
+      error: String(err?.message ?? err),
+    });
+  }
 }
 
 async function maybeAlertOnCadenceBreach(site: SupportedSite, summary: SiteComplianceSummary): Promise<void> {
   if (summary.observed_run_count === 0 || summary.previous_business_day_slots_ok) return;
-  const idempotencyKey = `${site}:${summary.previous_business_day}:cadence`;
-  const existing = await getStore().getAlertByKey(idempotencyKey, 'cadence_breach');
-  if (existing) return;
+  try {
+    const idempotencyKey = `${site}:${summary.previous_business_day}:cadence`;
+    const existing = await getStore().getAlertByKey(idempotencyKey, 'cadence_breach');
+    if (existing) return;
 
-  const alert: SchedulerAlertRecord = {
-    site,
-    idempotency_key: idempotencyKey,
-    slot: 'evening',
-    alert_type: 'cadence_breach',
-    expected_by: `${summary.previous_business_day}T23:59:59`,
-    summary: `Cadence breach for ${site} on ${summary.previous_business_day}: ${summary.previous_business_day_slot_success_count}/3 SLA-passing slots`,
-    detected_at: new Date().toISOString(),
-    metrics_triggered: ['previous_business_day_slot_success_count'],
-  };
+    const alert: SchedulerAlertRecord = {
+      site,
+      idempotency_key: idempotencyKey,
+      slot: 'evening',
+      alert_type: 'cadence_breach',
+      expected_by: `${summary.previous_business_day}T23:59:59`,
+      summary: `Cadence breach for ${site} on ${summary.previous_business_day}: ${summary.previous_business_day_slot_success_count}/3 SLA-passing slots`,
+      detected_at: new Date().toISOString(),
+      metrics_triggered: ['previous_business_day_slot_success_count'],
+    };
 
-  await getStore().insertSchedulerAlert(alert);
-  const delivery = await sendSchedulerStatusAlert(alert);
-  log({
-    stage: 'scheduled_site_cadence_breach_alerted',
-    site,
-    previous_business_day: summary.previous_business_day,
-    previous_business_day_slot_success_count: summary.previous_business_day_slot_success_count,
-    webhook_attempted: delivery.attempted,
-    webhook_delivered: delivery.delivered,
-  });
+    await getStore().insertSchedulerAlert(alert);
+    const delivery = await sendSchedulerStatusAlert(alert);
+    log({
+      stage: 'scheduled_site_cadence_breach_alerted',
+      site,
+      previous_business_day: summary.previous_business_day,
+      previous_business_day_slot_success_count: summary.previous_business_day_slot_success_count,
+      webhook_attempted: delivery.attempted,
+      webhook_delivered: delivery.delivered,
+    });
+  } catch (err: any) {
+    log({
+      stage: 'scheduled_site_cadence_breach_alert_error',
+      site,
+      previous_business_day: summary.previous_business_day,
+      error: String(err?.message ?? err),
+    });
+  }
 }
 
 async function maybeInsertOperationalWarningAlert(alert: SchedulerAlertRecord): Promise<void> {
-  const existing = await getStore().getAlertByKey(alert.idempotency_key, 'operational_warning');
-  if (existing) return;
+  try {
+    const existing = await getStore().getAlertByKey(alert.idempotency_key, 'operational_warning');
+    if (existing) return;
 
-  await getStore().insertSchedulerAlert(alert);
-  const delivery = await sendSchedulerStatusAlert(alert);
-  log({
-    stage: 'scheduled_operational_warning_alerted',
-    site: alert.site,
-    idempotency_key: alert.idempotency_key,
-    slot: alert.slot,
-    summary: alert.summary,
-    webhook_attempted: delivery.attempted,
-    webhook_delivered: delivery.delivered,
-  });
+    await getStore().insertSchedulerAlert(alert);
+    const delivery = await sendSchedulerStatusAlert(alert);
+    log({
+      stage: 'scheduled_operational_warning_alerted',
+      site: alert.site,
+      idempotency_key: alert.idempotency_key,
+      slot: alert.slot,
+      summary: alert.summary,
+      webhook_attempted: delivery.attempted,
+      webhook_delivered: delivery.delivered,
+    });
+  } catch (err: any) {
+    log({
+      stage: 'scheduled_operational_warning_alert_error',
+      site: alert.site,
+      idempotency_key: alert.idempotency_key,
+      slot: alert.slot,
+      error: String(err?.message ?? err),
+    });
+  }
 }
 
 async function maybeAlertOnCAOperationalWarnings(

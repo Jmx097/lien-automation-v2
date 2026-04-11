@@ -19,6 +19,7 @@ let controlState: any = null;
 const connectivityState = new Map<string, any>();
 const anomalyAlerts = new Map<string, any>();
 const schedulerAlerts = new Map<string, any>();
+let failSchedulerAlertInsert = false;
 const scheduledCacheDir = path.join(process.cwd(), 'out', 'acris', 'scheduled-cache');
 
 vi.mock('../../src/scraper/index', () => ({
@@ -120,6 +121,7 @@ vi.mock('../../src/scheduler/store', () => {
     }
 
     insertSchedulerAlert(alert: any) {
+      if (failSchedulerAlertInsert) throw new Error('scheduler_alerts_slot_check');
       schedulerAlerts.set(`${alert.idempotency_key}:${alert.alert_type}`, { ...alert });
     }
 
@@ -150,6 +152,7 @@ describe('runScheduledScrape', () => {
     connectivityState.clear();
     anomalyAlerts.clear();
     schedulerAlerts.clear();
+    failSchedulerAlertInsert = false;
     vi.clearAllMocks();
     mockProbeCASOSResultCount.mockReset();
     mockProbeMaricopaRecorderConnectivity.mockReset();
@@ -529,6 +532,55 @@ describe('runScheduledScrape', () => {
     expect(schedulerAlerts.get('ca_sos:2026-03-24:morning:observe-sla:sla_breach')).toEqual(
       expect.objectContaining({ alert_type: 'sla_breach' }),
     );
+  });
+
+  it('keeps an otherwise successful run green when SLA alert persistence fails', async () => {
+    process.env.SCHEDULE_SLA_ENFORCEMENT_MODE = 'observe';
+    failSchedulerAlertInsert = true;
+    mockProbeCASOSResultCount.mockResolvedValueOnce(2);
+    mockScraper.mockResolvedValueOnce([
+      { filing_number: '1', amount: '100', amount_reason: 'ok' },
+      { filing_number: '2', amount: undefined, amount_reason: 'amount_not_found' },
+    ]);
+    mockPushToSheetsForTab.mockResolvedValueOnce({ uploaded: 2, tab_title: 'tab-name' });
+    mockSyncMasterSheetTab.mockResolvedValueOnce({
+      tab_title: 'Master',
+      row_count: 2,
+      source_tabs: 1,
+      target_spreadsheet_id: 'target-sheet',
+      fallback_used: false,
+      quarantined_row_count: 0,
+      current_run_quarantined_row_count: 0,
+      current_run_conflict_row_count: 0,
+      retained_prior_review_row_count: 0,
+      review_tab_title: 'Review_Queue',
+      new_master_row_count: 2,
+      purged_review_row_count: 0,
+      review_summary: {
+        accepted_row_count: 2,
+        quarantined_row_count: 0,
+        purged_review_row_count: 0,
+        review_reason_counts: {},
+        current_run_quarantined_row_count: 0,
+        current_run_conflict_row_count: 0,
+        retained_prior_review_row_count: 0,
+      },
+    });
+
+    const { runScheduledScrape } = await import('../../src/scheduler');
+    const result = await runScheduledScrape({
+      site: 'ca_sos',
+      idempotencyKey: 'ca_sos:2026-03-24:morning:alert-fail',
+      slot: 'morning',
+      triggerSource: 'manual',
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.sla_pass).toBe(0);
+    expect(mockLog).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'scheduled_run_sla_breach_alert_error',
+      error: 'scheduler_alerts_slot_check',
+    }));
   });
 
   it('forces current source rows into review when SLA enforcement is enabled', async () => {

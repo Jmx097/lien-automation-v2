@@ -1257,6 +1257,13 @@ class PostgresSchedulerStoreBackend implements SchedulerStoreBackend {
         const message = err instanceof Error ? err.message : String(err);
         if (!/already exists/i.test(message)) throw err;
       });
+      await client.query('ALTER TABLE scheduler_alerts DROP CONSTRAINT IF EXISTS scheduler_alerts_slot_check');
+      await client.query(
+        "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_slot_check CHECK(slot IN ('morning', 'afternoon', 'evening'))"
+      ).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/already exists/i.test(message)) throw err;
+      });
       await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS run_id TEXT');
       await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS metrics_triggered TEXT');
       await client.query('ALTER TABLE scheduler_alerts ADD COLUMN IF NOT EXISTS summary TEXT');

@@ -102,7 +102,7 @@ function recreateSchedulerAlertsTable() {
       site TEXT NOT NULL DEFAULT 'ca_sos',
       idempotency_key TEXT NOT NULL,
       slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning')),
       expected_by TEXT NOT NULL,
       run_id TEXT,
       metrics_triggered TEXT,
@@ -156,7 +156,15 @@ function recreateSchedulerAlertsTable() {
 function migrateSchedulerAlertsIfNeeded() {
   const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scheduler_alerts'").get();
   if (!table || !table.sql) return;
-  if (table.sql.includes("'quality_anomaly'") && table.sql.includes("'evening'") && table.sql.includes('run_id') && table.sql.includes('detected_at')) return;
+  if (
+    table.sql.includes("'quality_anomaly'") &&
+    table.sql.includes("'sla_breach'") &&
+    table.sql.includes("'cadence_breach'") &&
+    table.sql.includes("'operational_warning'") &&
+    table.sql.includes("'evening'") &&
+    table.sql.includes('run_id') &&
+    table.sql.includes('detected_at')
+  ) return;
   recreateSchedulerAlertsTable();
 }
 
@@ -211,7 +219,7 @@ db.exec(`
     site TEXT NOT NULL DEFAULT 'ca_sos',
     idempotency_key TEXT NOT NULL,
     slot TEXT NOT NULL CHECK(slot IN ('morning', 'afternoon', 'evening')),
-    alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly')),
+    alert_type TEXT NOT NULL CHECK(alert_type IN ('missed_run', 'quality_anomaly', 'sla_breach', 'cadence_breach', 'operational_warning')),
     expected_by TEXT NOT NULL,
     run_id TEXT,
     metrics_triggered TEXT,

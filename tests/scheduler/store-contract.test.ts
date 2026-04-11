@@ -12,12 +12,13 @@ const pgState = {
   control: new Map<string, { site: string; effective_max_records: number; updated_at: string }>(),
   connectivity: new Map<string, SiteConnectivityState>(),
   artifacts: new Map<string, { site: string; artifact_key: string; payload_json: string; updated_at: string }>(),
+  queries: [] as string[],
   alerts: new Map<string, {
     site: string;
     idempotency_key: string;
     slot: 'morning' | 'afternoon' | 'evening';
     expected_by: string;
-    alert_type: 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
+    alert_type: 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach' | 'operational_warning';
     run_id?: string;
     metrics_triggered?: string;
     summary?: string;
@@ -41,6 +42,7 @@ function resetPgState(): void {
   pgState.connectivity.clear();
   pgState.artifacts.clear();
   pgState.alerts.clear();
+  pgState.queries = [];
   pgState.failSelect1 = false;
 }
 
@@ -153,6 +155,7 @@ vi.mock('pg', () => {
 
     async query(sql: string, params: unknown[] = []) {
       const normalized = sql.replace(/\s+/g, ' ').trim();
+      pgState.queries.push(normalized);
 
       if (
         /^BEGIN$|^COMMIT$|^ROLLBACK$/.test(normalized) ||
@@ -325,7 +328,7 @@ vi.mock('pg', () => {
           normalized.includes("'missed_run'") ? 'missed_run'
             : normalized.includes("'quality_anomaly'") ? 'quality_anomaly'
               : String(params[4])
-        ) as 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach';
+        ) as 'missed_run' | 'quality_anomaly' | 'sla_breach' | 'cadence_breach' | 'operational_warning';
         const key = `${String(params[1])}:${alertType}`;
         if (!pgState.alerts.has(key)) {
           const usesLiteralAlertType = normalized.includes("'missed_run'") || normalized.includes("'quality_anomaly'");
@@ -540,5 +543,9 @@ describe('scheduler store contract', () => {
     process.env.DATABASE_URL = 'postgres://postgres:postgres@127.0.0.1:5432/lien';
     const { ScheduledRunStore } = await import('../../src/scheduler/store');
     await exerciseStore(new ScheduledRunStore());
+    expect(pgState.queries).toContain('ALTER TABLE scheduler_alerts DROP CONSTRAINT IF EXISTS scheduler_alerts_slot_check');
+    expect(pgState.queries).toContain(
+      "ALTER TABLE scheduler_alerts ADD CONSTRAINT scheduler_alerts_slot_check CHECK(slot IN ('morning', 'afternoon', 'evening'))",
+    );
   });
 });
