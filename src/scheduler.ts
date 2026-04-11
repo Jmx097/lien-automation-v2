@@ -875,15 +875,15 @@ function buildRunConfidence(run: ScheduledRunRecord): RunConfidenceSummary {
       partial_record_count: run.partial_record_count ?? 0,
       new_master_row_count: run.new_master_row_count ?? 0,
       purged_review_row_count: run.purged_review_row_count ?? 0,
-      sla_score_pct: run.sla_score_pct ?? sla.score_pct,
-      sla_pass: typeof run.sla_pass === 'number' ? run.sla_pass : (sla.pass ? 1 : 0),
+      sla_score_pct: sla.score_pct,
+      sla_pass: sla.pass ? 1 : 0,
     },
     sla: {
-      score_pct: run.sla_score_pct ?? sla.score_pct,
-      pass: typeof run.sla_pass === 'number' ? run.sla_pass === 1 : sla.pass,
-      policy_version: run.sla_policy_version ?? sla.policy_version,
+      score_pct: sla.score_pct,
+      pass: sla.pass,
+      policy_version: sla.policy_version,
       hard_fail_reason: sla.hard_fail_reason,
-      components: parseStoredRunSlaComponents(run.sla_components_json) ?? sla.components,
+      components: sla.components,
     },
   };
 }

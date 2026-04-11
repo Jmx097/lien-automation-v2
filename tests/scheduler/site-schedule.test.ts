@@ -267,12 +267,19 @@ describe('site-aware scheduler', () => {
       }),
     });
 
-    const { getSiteComplianceState } = await import('../../src/scheduler');
+    const { getRunHistory, getSiteComplianceState } = await import('../../src/scheduler');
     const state = await getSiteComplianceState(new Date('2026-04-11T18:30:00.000Z'));
+    const history = await getRunHistory(1);
 
     expect(state.nyc_acris.observed_run_count).toBe(1);
     expect(state.nyc_acris.rolling_sla_pass_count).toBe(0);
     expect(state.nyc_acris.previous_business_day_slot_success_count).toBe(0);
+    expect(history[0].confidence?.sla).toEqual(expect.objectContaining({
+      score_pct: 0,
+      pass: false,
+      policy_version: 'tri_site_composite_v2',
+      hard_fail_reason: 'zero_volume_unverified',
+    }));
   });
 
   it('includes latest anomaly state when present', async () => {
