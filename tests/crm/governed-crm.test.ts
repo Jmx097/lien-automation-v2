@@ -38,6 +38,34 @@ class FakeCrmRepository implements CrmRepository {
     return [...this.accounts.values()];
   }
 
+  async getStationMetrics() {
+    const accounts = [...this.accounts.values()];
+    const count = (predicate: (account: Account) => boolean) => accounts.filter(predicate).length;
+    const accountRejected = count((account) => account.accountApproval === 'rejected');
+    const contactRejected = count((account) => account.contactApproval === 'rejected');
+    const draftRejected = count((account) => account.draftApproval === 'rejected');
+    const sendRejected = count((account) => account.sendApproval === 'rejected');
+    return {
+      totalAccounts: accounts.length,
+      station1: {
+        accountReviewPending: count((account) => account.accountApproval === 'pending'),
+        contactReviewPending: count((account) => account.accountApproval === 'approved' && account.contactApproval === 'pending'),
+      },
+      station2: {
+        draftReviewPending: count((account) => account.accountApproval === 'approved' && account.contactApproval === 'approved' && account.draftApproval === 'pending'),
+        sendReviewPending: count((account) => account.accountApproval === 'approved' && account.contactApproval === 'approved' && account.draftApproval === 'approved' && account.sendApproval === 'pending'),
+        outreachAuthorized: count((account) => account.sendApproval === 'approved'),
+      },
+      blocked: {
+        totalRejected: accountRejected + contactRejected + draftRejected + sendRejected,
+        accountRejected,
+        contactRejected,
+        draftRejected,
+        sendRejected,
+      },
+    };
+  }
+
   async getAccount(id: string): Promise<Account | null> {
     return this.accounts.get(id) ?? null;
   }
@@ -145,5 +173,71 @@ describe('Station 1 approval gates', () => {
     await expect(service.recordApproval({ accountId: account.id, gate: 'account', decision: 'approved', actor: 'operator@example.test' }))
       .rejects.toBeInstanceOf(CrmGateViolationError);
     expect(repository.approvals).toHaveLength(1);
+  });
+});
+
+describe('Station 1–2 command center', () => {
+  it('classifies the precise next gate without performing any transition', async () => {
+    const repository = new FakeCrmRepository();
+    const service = new GovernedCrmService(repository);
+    const pendingAccount = await service.createSourceIntakeAccount({ source: 'source-a' });
+    const contactReview = await service.createSourceIntakeAccount({ source: 'source-b' });
+    const draftReview = await service.createSourceIntakeAccount({ source: 'source-c' });
+    const sendReview = await service.createSourceIntakeAccount({ source: 'source-d' });
+    const authorized = await service.createSourceIntakeAccount({ source: 'source-e' });
+    const rejected = await service.createSourceIntakeAccount({ source: 'source-f' });
+
+    for (const account of [contactReview, draftReview, sendReview, authorized]) {
+      await service.recordApproval({ accountId: account.id, gate: 'account', decision: 'approved', actor: 'operator@example.test' });
+    }
+    for (const account of [draftReview, sendReview, authorized]) {
+      await service.recordApproval({ accountId: account.id, gate: 'contact', decision: 'approved', actor: 'operator@example.test' });
+    }
+    for (const account of [sendReview, authorized]) {
+      await service.recordApproval({ accountId: account.id, gate: 'draft', decision: 'approved', actor: 'operator@example.test' });
+    }
+    await service.recordApproval({ accountId: authorized.id, gate: 'send', decision: 'approved', actor: 'operator@example.test' });
+    await service.recordApproval({ accountId: rejected.id, gate: 'account', decision: 'rejected', actor: 'operator@example.test' });
+
+    const overview = await service.getStationOverview();
+    expect(overview.metrics).toMatchObject({
+      totalAccounts: 6,
+      station1: { accountReviewPending: 1, contactReviewPending: 1 },
+      station2: { draftReviewPending: 1, sendReviewPending: 1, outreachAuthorized: 1 },
+      blocked: { totalRejected: 1, accountRejected: 1 },
+    });
+    expect(overview.reviewQueue.map(({ account, queueState, nextGate }) => [account.id, queueState, nextGate])).toEqual([
+      [pendingAccount.id, 'station_1_account_review', 'account'],
+      [contactReview.id, 'station_1_contact_review', 'contact'],
+      [draftReview.id, 'station_2_draft_review', 'draft'],
+      [sendReview.id, 'station_2_send_review', 'send'],
+      [authorized.id, 'outreach_authorized', null],
+      [rejected.id, 'blocked_rejected', null],
+    ]);
+  });
+
+  it('protects the tracking endpoint and exposes only a read-only overview', async () => {
+    const app = express();
+    const repository = new FakeCrmRepository();
+    const service = new GovernedCrmService(repository);
+    await service.createSourceIntakeAccount({ source: 'county-records', displayName: 'Example LLC' });
+    app.use('/crm', createCrmRouter({ service, apiToken: 'expected', databaseConfigured: true }));
+    const server = app.listen(0);
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}/crm/stations/overview`;
+      expect((await fetch(baseUrl)).status).toBe(401);
+      const response = await fetch(baseUrl, { headers: { authorization: 'Bearer expected' } });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        stations: { metrics: { totalAccounts: 1 }, reviewQueue: [{ queueState: 'station_1_account_review', nextGate: 'account' }] },
+        governance: { mode: 'read_only' },
+        freshness: { checked_at: expect.any(String) },
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });

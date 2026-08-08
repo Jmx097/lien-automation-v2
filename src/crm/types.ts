@@ -28,6 +28,46 @@ export interface RecordApprovalInput {
   actor: string;
 }
 
+/** The actionable CRM position for a record; it never authorizes a transition. */
+export type StationQueueState =
+  | 'station_1_account_review'
+  | 'station_1_contact_review'
+  | 'station_2_draft_review'
+  | 'station_2_send_review'
+  | 'outreach_authorized'
+  | 'blocked_rejected';
+
+export interface StationMetrics {
+  totalAccounts: number;
+  station1: {
+    accountReviewPending: number;
+    contactReviewPending: number;
+  };
+  station2: {
+    draftReviewPending: number;
+    sendReviewPending: number;
+    outreachAuthorized: number;
+  };
+  blocked: {
+    totalRejected: number;
+    accountRejected: number;
+    contactRejected: number;
+    draftRejected: number;
+    sendRejected: number;
+  };
+}
+
+export interface StationQueueItem {
+  account: Account;
+  queueState: StationQueueState;
+  nextGate: ApprovalGate | null;
+}
+
+export interface StationOverview {
+  metrics: StationMetrics;
+  reviewQueue: StationQueueItem[];
+}
+
 export type ApprovalSnapshot = Pick<
   Account,
   'accountApproval' | 'contactApproval' | 'draftApproval' | 'sendApproval'
@@ -37,6 +77,8 @@ export interface CrmRepository {
   createSourceIntakeAccount(input: CreateSourceIntakeAccountInput): Promise<Account>;
   /** Latest source-intake accounts for the governed staff review queue. */
   listAccounts(limit: number): Promise<Account[]>;
+  /** Authoritative aggregate counts for the Station 1–2 command center. */
+  getStationMetrics(): Promise<StationMetrics>;
   getAccount(id: string): Promise<Account | null>;
   /**
    * Atomically verifies the approval snapshot, changes one pending gate, and

@@ -47,6 +47,19 @@ export function createCrmRouter(options: CrmRouterOptions): express.Router {
     return res.status(200).json({ accounts, freshness: { checked_at: new Date().toISOString() } });
   });
 
+  router.get('/stations/overview', async (req: Request, res: Response) => {
+    const requestedLimit = Number.parseInt(requestedText(req.query.limit) ?? '50', 10);
+    const overview = await options.service.getStationOverview(Number.isFinite(requestedLimit) ? requestedLimit : 50);
+    return res.status(200).json({
+      stations: overview,
+      governance: {
+        mode: 'read_only',
+        approvals: 'No transition is performed by this endpoint. Use POST /crm/approvals for a reviewed gate decision.',
+      },
+      freshness: { checked_at: new Date().toISOString() },
+    });
+  });
+
   router.post('/accounts', async (req: Request, res: Response) => {
     const source = requestedText(req.body?.source);
     if (!source?.trim()) return validationError(res, 'source is required');

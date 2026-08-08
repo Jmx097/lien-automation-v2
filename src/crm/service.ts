@@ -6,6 +6,8 @@ import type {
   CreateSourceIntakeAccountInput,
   CrmRepository,
   RecordApprovalInput,
+  StationOverview,
+  StationQueueItem,
 } from './types';
 
 const GATE_PREREQUISITES: Record<ApprovalGate, Array<keyof ApprovalSnapshot>> = {
@@ -55,6 +57,40 @@ export class GovernedCrmService {
 
   async listAccounts(limit = 100): Promise<Account[]> {
     return this.repository.listAccounts(Math.min(Math.max(limit, 1), 100));
+  }
+
+  /**
+   * Read-only tracking view for Stations 1 and 2. This derives the next review
+   * from persisted approvals; it never changes an approval or unlocks send.
+   */
+  async getStationOverview(queueLimit = 50): Promise<StationOverview> {
+    const [metrics, accounts] = await Promise.all([
+      this.repository.getStationMetrics(),
+      this.listAccounts(Math.min(Math.max(queueLimit, 1), 100)),
+    ]);
+    return {
+      metrics,
+      reviewQueue: accounts.map((account) => this.toStationQueueItem(account)),
+    };
+  }
+
+  private toStationQueueItem(account: Account): StationQueueItem {
+    if ([account.accountApproval, account.contactApproval, account.draftApproval, account.sendApproval].includes('rejected')) {
+      return { account, queueState: 'blocked_rejected', nextGate: null };
+    }
+    if (account.accountApproval === 'pending') {
+      return { account, queueState: 'station_1_account_review', nextGate: 'account' };
+    }
+    if (account.contactApproval === 'pending') {
+      return { account, queueState: 'station_1_contact_review', nextGate: 'contact' };
+    }
+    if (account.draftApproval === 'pending') {
+      return { account, queueState: 'station_2_draft_review', nextGate: 'draft' };
+    }
+    if (account.sendApproval === 'pending') {
+      return { account, queueState: 'station_2_send_review', nextGate: 'send' };
+    }
+    return { account, queueState: 'outreach_authorized', nextGate: null };
   }
 
   async recordApproval(input: RecordApprovalInput): Promise<void> {

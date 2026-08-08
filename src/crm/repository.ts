@@ -7,6 +7,7 @@ import type {
   CreateSourceIntakeAccountInput,
   CrmRepository,
   RecordApprovalInput,
+  StationMetrics,
 } from './types';
 
 const GATE_COLUMNS: Record<ApprovalGate, string> = {
@@ -54,6 +55,58 @@ export class PostgresCrmRepository implements CrmRepository {
       [limit],
     );
     return result.rows.map(accountFromRow);
+  }
+
+  async getStationMetrics(): Promise<StationMetrics> {
+    const result = await this.pool.query<{
+      total_accounts: string;
+      account_review_pending: string;
+      contact_review_pending: string;
+      draft_review_pending: string;
+      send_review_pending: string;
+      outreach_authorized: string;
+      account_rejected: string;
+      contact_rejected: string;
+      draft_rejected: string;
+      send_rejected: string;
+    }>(`
+      SELECT
+        COUNT(*) AS total_accounts,
+        COUNT(*) FILTER (WHERE account_approval = 'pending') AS account_review_pending,
+        COUNT(*) FILTER (WHERE account_approval = 'approved' AND contact_approval = 'pending') AS contact_review_pending,
+        COUNT(*) FILTER (WHERE account_approval = 'approved' AND contact_approval = 'approved' AND draft_approval = 'pending') AS draft_review_pending,
+        COUNT(*) FILTER (WHERE account_approval = 'approved' AND contact_approval = 'approved' AND draft_approval = 'approved' AND send_approval = 'pending') AS send_review_pending,
+        COUNT(*) FILTER (WHERE send_approval = 'approved') AS outreach_authorized,
+        COUNT(*) FILTER (WHERE account_approval = 'rejected') AS account_rejected,
+        COUNT(*) FILTER (WHERE contact_approval = 'rejected') AS contact_rejected,
+        COUNT(*) FILTER (WHERE draft_approval = 'rejected') AS draft_rejected,
+        COUNT(*) FILTER (WHERE send_approval = 'rejected') AS send_rejected
+      FROM crm_accounts
+    `);
+    const row = result.rows[0];
+    const count = (value: string | undefined) => Number.parseInt(value ?? '0', 10);
+    const blocked = {
+      accountRejected: count(row?.account_rejected),
+      contactRejected: count(row?.contact_rejected),
+      draftRejected: count(row?.draft_rejected),
+      sendRejected: count(row?.send_rejected),
+    };
+    return {
+      totalAccounts: count(row?.total_accounts),
+      station1: {
+        accountReviewPending: count(row?.account_review_pending),
+        contactReviewPending: count(row?.contact_review_pending),
+      },
+      station2: {
+        draftReviewPending: count(row?.draft_review_pending),
+        sendReviewPending: count(row?.send_review_pending),
+        outreachAuthorized: count(row?.outreach_authorized),
+      },
+      blocked: {
+        totalRejected: blocked.accountRejected + blocked.contactRejected + blocked.draftRejected + blocked.sendRejected,
+        ...blocked,
+      },
+    };
   }
 
   async getAccount(id: string): Promise<Account | null> {
