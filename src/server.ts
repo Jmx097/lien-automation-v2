@@ -28,6 +28,7 @@ import {
   type ValidationIssue,
 } from "./http/validation";
 import { isSchedulerRequestAuthorized } from "./http/scheduler-auth";
+import { createCrmRouterFromEnvironment } from "./crm/router";
 
 dotenv.config();
 
@@ -46,6 +47,8 @@ try {
 const queue = new SQLiteQueueStore();
 const app = express();
 app.use(express.json());
+// CRM is isolated from scraper persistence and is authenticated independently.
+app.use('/crm', createCrmRouterFromEnvironment());
 
 const runtimeVersion = {
   git_sha: process.env.GIT_SHA ?? "unknown",

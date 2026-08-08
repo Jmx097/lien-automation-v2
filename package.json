@@ -6,8 +6,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/server.js",
+    "start:crm": "node dist/src/crm-server.js",
+    "build:crm": "node scripts/build-crm-service.cjs",
     "dev": "ts-node src/server.ts",
-    "test": "npm run test:types && npm run test:selector-smoke",
+    "test": "npm run test:types && npm run test:selector-smoke && npm run test:crm",
     "worker": "ts-node src/worker/index.ts",
     "test:types": "tsc --noEmit",
     "test:smoke": "node scripts/smoke-health.js",
@@ -38,7 +40,9 @@
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",
     "start:job": "node dist/src/job-entrypoint.js",
-    "dev:job": "ts-node src/job-entrypoint.ts"
+    "dev:job": "ts-node src/job-entrypoint.ts",
+    "crm:migrate": "ts-node src/crm/migrate.ts",
+    "test:crm": "vitest --config vitest.config.mts run tests/crm/"
   },
   "keywords": [],
   "author": "",

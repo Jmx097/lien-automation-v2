@@ -1,0 +1,33 @@
+[Unit]
+Description=Plinko Governed CRM API (loopback only)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=plinko-crm
+Group=plinko-crm
+WorkingDirectory=/opt/plinko-crm/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/plinko-crm/crm.env
+ExecStart=/usr/bin/node /opt/plinko-crm/current/src/crm-server.js
+Restart=on-failure
+RestartSec=5s
+MemoryHigh=160M
+MemoryMax=256M
+TasksMax=64
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/plinko-crm
+
+[Install]
+WantedBy=multi-user.target
