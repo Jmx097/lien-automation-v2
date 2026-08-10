@@ -164,6 +164,26 @@ export function createCrmRouter(options: CrmRouterOptions): express.Router {
         .json({ error: "Campaign workbench is not configured" });
     return res.status(200).json(await options.campaignWorkbench.overview());
   });
+  router.get("/accounts/:accountId/workspace", async (req, res) => {
+    if (!options.campaignWorkbench)
+      return res.status(503).json({ error: "Campaign workbench is not configured" });
+    try {
+      return res.status(200).json(await options.campaignWorkbench.accountWorkspace(req.params.accountId));
+    } catch (error) {
+      return campaignError(res, error) ?? (() => { throw error; })();
+    }
+  });
+  router.post("/accounts/:accountId/notes", async (req, res) => {
+    if (!options.campaignWorkbench)
+      return res.status(503).json({ error: "Campaign workbench is not configured" });
+    const note = requestedText(req.body?.note);
+    if (!note?.trim()) return validationError(res, "note is required");
+    try {
+      return res.status(201).json({ note: await options.campaignWorkbench.addAccountNote(req.params.accountId, note, campaignActor(req)) });
+    } catch (error) {
+      return campaignError(res, error) ?? (() => { throw error; })();
+    }
+  });
   router.post("/contacts", async (req, res) => {
     if (!options.campaignWorkbench)
       return res

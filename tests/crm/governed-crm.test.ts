@@ -1,6 +1,6 @@
 import express from 'express';
 import { once } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { isCrmRequestAuthorized } from '../../src/crm/auth';
 import { createCrmRouter } from '../../src/crm/router';
 import {
@@ -236,6 +236,45 @@ describe('Station 1–2 command center', () => {
         governance: { mode: 'read_only' },
         freshness: { checked_at: expect.any(String) },
       });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
+
+describe('Account workspace contacts and notes', () => {
+  it('returns source-intake contacts and appends an attributed account note', async () => {
+    const accountWorkspace = vi.fn().mockResolvedValue({
+      account: { id: 'account-1', display_name: 'Example LLC' },
+      contacts: [{ id: 'contact-1', full_name: 'A. Person', contact_approval: 'pending' }],
+      notes: [],
+    });
+    const addAccountNote = vi.fn().mockResolvedValue({ recorded: true });
+    const app = express();
+    app.use(express.json());
+    app.use('/crm', createCrmRouter({
+      service: new GovernedCrmService(new FakeCrmRepository()),
+      campaignWorkbench: { accountWorkspace, addAccountNote } as never,
+      apiToken: 'expected',
+      databaseConfigured: true,
+    }));
+    const server = app.listen(0);
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+    const base = `http://127.0.0.1:${address.port}/crm/accounts/account-1`;
+    try {
+      const headers = { authorization: 'Bearer expected', 'x-crm-actor': 'staff:operator@example.test' };
+      const read = await fetch(`${base}/workspace`, { headers });
+      expect(read.status).toBe(200);
+      await expect(read.json()).resolves.toMatchObject({ contacts: [{ full_name: 'A. Person' }] });
+      const write = await fetch(`${base}/notes`, {
+        method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ note: 'Reviewed source evidence.' }),
+      });
+      expect(write.status).toBe(201);
+      expect(addAccountNote).toHaveBeenCalledWith('account-1', 'Reviewed source evidence.', 'staff:operator@example.test');
+      expect((await fetch(`${base}/notes`, { method: 'POST', headers: { authorization: 'Bearer expected', 'content-type': 'application/json' }, body: JSON.stringify({ note: '' }) })).status).toBe(400);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }

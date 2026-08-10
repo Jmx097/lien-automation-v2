@@ -346,6 +346,51 @@ export class CampaignWorkbench {
     };
   }
 
+  async accountWorkspace(accountId: string) {
+    const account = await this.pool.query(
+      `SELECT id, display_name, source, external_reference, account_approval, contact_approval, draft_approval, send_approval, created_at, updated_at
+       FROM crm_accounts WHERE id=$1`,
+      [accountId],
+    );
+    if (!account.rowCount)
+      throw new CampaignWorkbenchNotFoundError("Account was not found");
+    const [contacts, notes] = await Promise.all([
+      this.pool.query(
+        `SELECT id, full_name, title, source, external_reference, contact_approval, disposition, created_at, updated_at
+         FROM crm_contacts WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100`,
+        [accountId],
+      ),
+      this.pool.query(
+        `SELECT id, occurred_at, actor, metadata->>'body' AS body
+         FROM crm_activity_events
+         WHERE account_id=$1 AND event_type='account.note_added'
+         ORDER BY occurred_at DESC LIMIT 100`,
+        [accountId],
+      ),
+    ]);
+    return {
+      account: account.rows[0],
+      contacts: contacts.rows,
+      notes: notes.rows,
+      freshness: { checked_at: new Date().toISOString() },
+      governance: {
+        contacts: "Source-intake only. A listed person has no contact approval or execution authority.",
+        notes: "Append-only internal account notes. No provider action is available.",
+      },
+    };
+  }
+
+  async addAccountNote(accountId: string, noteInput: unknown, actor: string) {
+    const body = text(noteInput, "note")!;
+    if (body.length > 2_000)
+      throw new CampaignWorkbenchError("note must be 2,000 characters or fewer");
+    const account = await this.pool.query("SELECT id FROM crm_accounts WHERE id=$1", [accountId]);
+    if (!account.rowCount)
+      throw new CampaignWorkbenchNotFoundError("Account was not found");
+    await this.event(actor, "account.note_added", "account", accountId, { accountId }, { body });
+    return { account_id: accountId, recorded: true };
+  }
+
   private async contextForDraft(draftId: string) {
     const r = await this.pool.query(
       `SELECT c.account_id,c.id contact_id,m.campaign_id FROM crm_outreach_drafts d JOIN crm_campaign_memberships m ON m.id=d.membership_id JOIN crm_contacts c ON c.id=m.contact_id WHERE d.id=$1`,
